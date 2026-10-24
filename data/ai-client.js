@@ -23,6 +23,15 @@
       return e;
     }
 
+    // 为服务端故障保留状态及规范请求编号，便于查反代日志；不读取可能含凭据的错误正文。
+    function serverError(response, operation) {
+      const rawId = response.headers?.get('x-request-id') || '';
+      const requestId = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(rawId) ? rawId : '';
+      const error = aiError(`${operation}失败（HTTP ${response.status}）。请核对 sub2api/反代日志及该接口路由；此状态无法判断 Key 或模型是否有效。${requestId ? '请求编号：' + requestId : ''}`);
+      error.code = 'HTTP_' + response.status;
+      return error;
+    }
+
     const jobs = new Map();
     // 请求可显式取消，超时覆盖响应体读取，错误不回显服务商原文或个人资料。
     async function callGLM(req) {
@@ -52,6 +61,7 @@
         if (!response.ok) {
           if (response.status === 401) throw aiError('API Key 无效（401），请检查当前服务商密钥。');
           if (response.status === 429) throw aiError('调用频率/额度受限（429），请稍后重试。');
+          if (response.status >= 500) throw serverError(response, '调用模型');
           const error = aiError('AI 接口返回 HTTP ' + response.status); error.code = 'HTTP_' + response.status; throw error;
         }
         let data;
@@ -130,6 +140,7 @@
           if ([401, 403].includes(response.status)) throw aiError('无法获取模型列表（' + response.status + '），请检查 API Key 和模型列表访问权限。');
           if ([404, 405].includes(response.status)) throw aiError('此服务未提供兼容的模型列表接口，可勾选「手动填写模型 ID」。');
           if (response.status === 429) throw aiError('获取模型列表受频率或额度限制（429），请稍后重试。');
+          if (response.status >= 500) throw serverError(response, '获取模型列表');
           throw aiError('获取模型列表失败（HTTP ' + response.status + '），可稍后重试或手动填写。');
         }
         let data;

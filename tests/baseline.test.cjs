@@ -207,12 +207,19 @@ test('模型发现兼容无 Key 本地服务；云服务缺 Key 在联网前失�
   await assert.rejects(cloud.context.listAvailableModels('deepseek'), /先填写/);
 });
 
+// 鉴权、缺少接口和服务端故障分别提示，诊断请求编号不得携带任意服务端文本。
 test('模型发现处理认证、无接口、限流及服务器错误，不返回原始错误体', async () => {
   const { context } = modelListingFixture();
-  for (const [status, message] of [[401, /401/], [403, /403/], [404, /手动/], [405, /手动/], [429, /429/], [500, /500/]]) {
+  for (const [status, message] of [[401, /401/], [403, /403/], [404, /手动/], [405, /手动/], [429, /429/], [500, /500/], [502, /502.*反代日志/], [503, /503/], [504, /504/]]) {
     context.fetch = async () => ({ ok: false, status, json: async () => { throw new Error('禁止读取错误响应秘密'); } });
     await assert.rejects(context.listAvailableModels('custom.models'), message);
   }
+  const requestId = '1da5bd20-019a-4a0c-a4fe-9d9e6f404271';
+  context.fetch = async () => ({ ok: false, status: 502, headers: { get: () => requestId } });
+  await assert.rejects(context.listAvailableModels('custom.models'), (error) => error.code === 'HTTP_502' && error.message.includes(requestId));
+  context.fetch = async () => ({ ok: false, status: 502, headers: { get: () => 'private-server-secret' } });
+  await assert.rejects(context.listAvailableModels('custom.models'), (error) => !error.message.includes('private-server-secret'));
+  await assert.rejects(context.callGLM({ messages: [], model: 'synthetic-chat' }), (error) => error.code === 'HTTP_502' && !error.message.includes('private-server-secret'));
 });
 
 test('模型发现区分坏 JSON、网络失败和超时，超时覆盖响应体解析', async () => {
