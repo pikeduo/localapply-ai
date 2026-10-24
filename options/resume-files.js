@@ -1,4 +1,4 @@
-// PDF/DOCX 只在页面内存解析，限制文件、解压大小、页数及输出；不使用文件上传接口。
+// 只做文件安全检查、页面转图和哈希；简历语义解析完全交给模型。
 (function (global) {
   'use strict';
   const MAX_FILE = 10 * 1024 * 1024;
@@ -11,13 +11,14 @@
     }
     if (end < 0 || view.getUint16(end + 4, true) !== 0 || view.getUint16(end + 6, true) !== 0
       || view.getUint16(end + 10, true) > 2000 || view.getUint32(end + 12, true) + view.getUint32(end + 16, true) !== end) throw new Error('DOCX ZIP 目录损坏、多卷或 ZIP64 不受支持');
-    let total = 0; let count = 0; let completed = 0; const names = new Set(); const xml = {};
+    let total = 0; let count = 0; let completed = 0; const names = new Set(); const entries = {};
     const unzip = new fflate.Unzip((file) => {
       if (++count > 2000 || names.has(file.name)) throw new Error('DOCX 文件条目过多或重名');
+      if (file.name.includes('..') || /[\\\u0000]/.test(file.name) || file.name.startsWith('/')) throw new Error('DOCX 文件路径无效');
       names.add(file.name);
       if (file.originalSize > MAX_EXPANDED || file.size > MAX_FILE) throw new Error('DOCX 解压大小超限');
       const chunks = [];
-      const keep = /^(\[Content_Types\]\.xml|_rels\/\.rels|word\/(document|footnotes|endnotes)\.xml|word\/_rels\/document\.xml\.rels)$/.test(file.name);
+      const keep = !file.name.endsWith('/') && !/\.(?:bin|html?|js)$/i.test(file.name);
       file.ondata = (error, chunk, final) => {
         if (error) throw new Error('DOCX 压缩内容损坏');
         total += chunk.length;
@@ -28,7 +29,7 @@
           if (keep) {
             const bytes = new Uint8Array(chunks.reduce((n, value) => n + value.length, 0)); let offset = 0;
             for (const part of chunks) { bytes.set(part, offset); offset += part.length; }
-            xml[file.name] = bytes;
+            entries[file.name] = bytes;
           }
         }
       };
@@ -38,11 +39,19 @@
     for (let i = 0; i < bytes.length; i += 4096) unzip.push(bytes.subarray(i, i + 4096), i + 4096 >= bytes.length);
     if (!names.has('word/document.xml') || !names.has('[Content_Types].xml') || completed !== count
       || count !== view.getUint16(end + 10, true)) throw new Error('不是完整有效的 DOCX 文档');
-    // 仅把已验证的 XML 重建为内存 ZIP，Mammoth 不再信任原中央目录、嵌入媒体或外部关系。
-    return fflate.zipSync(xml, { level: 0 });
+    // 重建有界 ZIP 时保留图片、字体、版式。外部关系删除，禁止渲染器读取外网资源。
+    for (const name of Object.keys(entries).filter((name) => name.endsWith('.rels'))) {
+      const xml = new DOMParser().parseFromString(new TextDecoder().decode(entries[name]), 'application/xml');
+      if (xml.getElementsByTagName('parsererror').length) throw new Error('DOCX 关系 XML 损坏');
+      for (const relationship of Array.from(xml.getElementsByTagName('Relationship'))) {
+        if (relationship.getAttribute('TargetMode') === 'External' || /^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(relationship.getAttribute('Target') || '')) relationship.parentNode.removeChild(relationship);
+      }
+      entries[name] = new TextEncoder().encode(new XMLSerializer().serializeToString(xml));
+    }
+    return fflate.zipSync(entries, { level: 0 });
   }
   // 打开独立 PDF 任务并关闭其 worker/字体/页面资源，避免原字节长期驻留。
-  async function pdf(bytes, signal, render = false) {
+  async function pdf(bytes, signal, render = true) {
     const base = new URL('../libs/pdfjs/', location.href).href;
     const task = pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false, cMapUrl: base + 'cmaps/', cMapPacked: true,
       standardFontDataUrl: base + 'standard_fonts/', wasmUrl: base + 'wasm/', useWorkerFetch: false });
@@ -65,13 +74,11 @@
             await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
             const dataUrl = canvas.toDataURL('image/jpeg', 0.82); size += dataUrl.length;
             if (size > 16 * 1024 * 1024) throw new Error('扫描页总大小超限，请缩减简历页数');
-            pages.push({ dataUrl, hint: i });
+            pages.push({ dataUrl, width: canvas.width, height: canvas.height, hint: i });
           } finally { canvas.width = canvas.height = 0; }
         } else {
-          const content = await page.getTextContent();
-          pages.push(content.items.map((item) => item.str + (item.hasEOL ? '\n' : ' ')).join('').trim());
-          size += pages.at(-1).length;
-          if (size > 100000) throw new Error('简历文本超过 10 万字');
+          // 只读取页数元数据，禁止重新引入纯文本抽取或扫描件字数猜测。
+          pages.push({ hint: i });
         }
         page.cleanup();
       }
@@ -86,19 +93,15 @@
     const bytes = new Uint8Array(await file.arrayBuffer());
     const digest = await crypto.subtle.digest('SHA-256', bytes);
     const fingerprint = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
-    let pages;
-    if (type === 'pdf') pages = await pdf(bytes, signal);
-    else {
-      const checked = inspectDocx(bytes);
-      const result = await mammoth.extractRawText({ arrayBuffer: checked.buffer });
-      if (result.value.length > 100000) throw new Error('简历文本超过 10 万字');
-      pages = [result.value];
-    }
+    let renderBytes = null;
+    if (type === 'pdf' && !new TextDecoder().decode(bytes.subarray(0, 8)).startsWith('%PDF-')) throw new Error('不是有效的 PDF');
+    if (type === 'docx') renderBytes = inspectDocx(bytes);
     if (signal?.aborted) throw new Error('已取消解析');
-    const text = pages.join('\n');
-    // DOCX 无稳定物理页码；显示为文本块，不把推测页数当成真实分页。
-    const mode = type === 'pdf' && text.replace(/\s/g, '').length < 80 ? 'vision' : 'text';
-    return { type, fingerprint, pages, text, mode, bytes: mode === 'vision' ? bytes : null };
+    return { type, fingerprint, bytes, renderBytes, pages: [], mode: 'model' };
   }
-  global.LocalApplyFiles = { read, pdf, inspectDocx };
+  // 渲染完整页面供预览和模型识别，包括文本型 PDF/DOCX 内嵌的图片。
+  async function render(source, signal) {
+    return source.type === 'pdf' ? pdf(source.bytes, signal) : global.LocalApplyDocumentRenderer.render(source.renderBytes, signal);
+  }
+  global.LocalApplyFiles = { read, render, pdf, inspectDocx };
 })(globalThis);

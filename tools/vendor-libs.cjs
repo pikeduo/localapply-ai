@@ -11,6 +11,8 @@ async function main() {
     ['pdfjs-dist/legacy/build/pdf.worker.mjs', 'libs/pdfjs/pdf.worker.min.js', 'pdfjsWorker'],
     ['fflate/lib/browser.cjs', 'libs/docx/fflate.min.js', 'fflate'],
     ['mammoth/lib/index.js', 'libs/docx/mammoth.min.js', 'mammoth'],
+    ['docx-preview/dist/docx-preview.mjs', 'libs/docx/docx-preview.min.js', 'docx'],
+    ['html2canvas/dist/html2canvas.esm.js', 'libs/docx/html2canvas.min.js', 'html2canvas'],
   ]) {
     await esbuild.build({ entryPoints: [path.join(root, 'node_modules', entry)], outfile: path.join(root, output),
       bundle: true, format: 'iife', globalName: name, minify: true, legalComments: 'inline', platform: 'browser', target: 'chrome116' });
@@ -26,9 +28,18 @@ async function main() {
     });
   }
   const visited = new Set(); const notices = [];
-  // 包含 Mammoth 依赖链的许可全文，避免压缩后丢失版权声明。
+  // 收集渲染器及历史依赖的许可，兼容禁止导出 package.json 的包。
   function collect(pkg, from = root) {
-    const filename = require.resolve(pkg + '/package.json', { paths: [from] });
+    let filename;
+    try { filename = require.resolve(pkg + '/package.json', { paths: [from] }); }
+    catch {
+      let folder = path.dirname(require.resolve(pkg, { paths: [from] }));
+      while (!fs.existsSync(path.join(folder, 'package.json'))) {
+        const parent = path.dirname(folder); if (parent === folder) throw new Error('无法查找依赖许可：' + pkg);
+        folder = parent;
+      }
+      filename = path.join(folder, 'package.json');
+    }
     if (visited.has(filename)) return;
     visited.add(filename);
     const folder = path.dirname(filename); const metadata = JSON.parse(fs.readFileSync(filename, 'utf8'));
@@ -40,5 +51,7 @@ async function main() {
   }
   collect('mammoth');
   fs.writeFileSync(path.join(root, 'libs/docx/NOTICE.dependencies.txt'), notices.join('\n'));
+  notices.length = 0; visited.clear(); collect('docx-preview'); collect('html2canvas');
+  fs.writeFileSync(path.join(root, 'libs/docx/NOTICE.rendering.txt'), notices.join('\n'));
 }
 main().catch((error) => { console.error(error.message); process.exitCode = 1; });

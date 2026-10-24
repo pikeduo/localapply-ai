@@ -32,7 +32,18 @@ async function serve() {
     }
     if (pathname === '/v1/chat/completions' && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk;
-      calls.push({ authorization: req.headers.authorization, model: JSON.parse(body).model });
+      const request = JSON.parse(body);
+      const content = request.messages?.at(-1)?.content;
+      const probe = Array.isArray(content) && content.some((part) => part.type === 'text' && part.text.includes('读取附件图片中唯一的8位数字'));
+      const file = Array.isArray(content) && content.find((part) => part.type === 'file')?.file;
+      const inputType = file ? file.filename.split('.').at(-1) : 'image';
+      calls.push({ authorization: req.headers.authorization, model: request.model, probe, inputType,
+        imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'image_url').length : 0, fileData: file?.file_data });
+      if (probe) {
+        const support = modelApi.capabilities || { image: true, pdf: false, docx: false };
+        if (!support[inputType]) { res.writeHead(400); res.end('{}'); return; }
+        res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: modelApi.probeAnswer || '73185204' } }] })); return;
+      }
       // 可挂起聊天响应，验证取消时真正中止网络任务且不产生晚到写入。
       const respond = () => {
         if (res.destroyed) return;
@@ -82,6 +93,17 @@ async function setupVault(page) {
   await page.waitForFunction(async () => (await getState()).settings.vault.unlocked);
 }
 
+// 测试模型只识别已知合成挑战；文件和图片仍由生产代码真实生成，其他业务调用不伪造。
+async function detectModel(page) {
+  await page.evaluate(() => {
+    const original = LocalApplyProbes.createProbe;
+    LocalApplyProbes.createProbe = () => original('73185204');
+  });
+  await page.locator('#btnDetectCapabilities').click();
+  await page.waitForFunction(() => !document.getElementById('btnDetectCapabilities').disabled);
+  assert.match(await page.locator('#capabilityStatus').textContent(), /图片 识别通过/);
+}
+
 for (const withExtension of [true, false]) {
   test(`阶段二：${withExtension ? '扩展' : 'file://'} 简历审核、取消、密钥加密与重启`, async (t) => {
     const fixtures = require('./resume-fixtures.cjs');
@@ -109,6 +131,10 @@ for (const withExtension of [true, false]) {
       await page.waitForFunction(() => !document.getElementById('sendResume').disabled);
       assert.match(await page.locator('#pdfStatus').textContent(), /解析完成/);
       await page.locator('#pdfReview .review-cell').first().waitFor();
+      assert.equal(await page.locator('#pdfReview input[type=checkbox]:checked').count(), 0);
+      await page.locator('#selectAllResume').click();
+      const gpa = page.locator('.review-cell').filter({ hasText: 'GPA/排名' });
+      if (await gpa.count()) await gpa.locator('input[type=checkbox]').uncheck();
     };
     // 确认后必须观察到表单消失和持久化结果，不能只断言点击成功。
     const confirm = async () => {
@@ -128,6 +154,7 @@ for (const withExtension of [true, false]) {
       await page.locator('#provider').fill(api.base); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
       await page.locator('#apiKey').fill('synthetic-stage2-key'); await page.locator('#apiKey').press('Tab'); await page.evaluate(() => flushCredentials());
       await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-local'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+      await detectModel(page);
       await t.test('锁定只阻止密钥调用，错误口令不清除数据，正确口令可恢复调用', async () => {
         await page.locator('#vaultLock').click(); await page.waitForFunction(async () => !(await getState()).settings.vault.unlocked);
         const db = await call('localapply:read'); assert.equal(db.database.profiles.length, 1);
@@ -184,6 +211,48 @@ for (const withExtension of [true, false]) {
         assert.equal(await page.locator('#sourcePreview').textContent(), '');
         await prepare('retry.docx', fixtures.docx()); assert.equal(await page.locator('#sendResume').isEnabled(), true);
         await page.locator('#cancelResume').click();
+      });
+      await t.test('纯图片 PDF/DOCX 保留可见图片并交给视觉模型，不依赖文字层', async () => {
+        const probeFiles = await page.evaluate(() => LocalApplyProbes.createProbe('73185204'));
+        api.modelApi.chatContent = JSON.stringify({ basic: { phone: { value: '73185204', evidence: '73185204', page: 1 } } });
+        for (const type of ['pdf', 'docx']) {
+          const buffer = Buffer.from(probeFiles[type].file_data.split(',')[1], 'base64');
+          await prepare('image-only.' + type, buffer);
+          const dark = await page.locator('#sourcePreview img').first().evaluate(async (img) => {
+            await img.decode(); const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0); const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            let pixels = 0; for (let i = 0; i < data.length; i += 4) if (data[i] + data[i + 1] + data[i + 2] < 300) pixels++;
+            canvas.width = canvas.height = 0; return pixels;
+          });
+          assert.ok(dark > 500, type + ' 的嵌入图片未出现在实际页面预览中');
+          await analyze(); assert.equal(api.calls.at(-1).inputType, 'image'); assert.ok(api.calls.at(-1).imageCount > 0);
+          await confirm();
+        }
+        assert.ok((await call('localapply:read')).database.fieldValues.some((row) => row.value === '73185204'));
+      });
+      await t.test('原文件能力通过后按原字节提交，旧文本入口及不支持的新型号不能绕过检测', async () => {
+        api.modelApi.capabilities = { image: true, pdf: true, docx: true }; await detectModel(page);
+        for (const [type, buffer] of [['docx', fixtures.docx()], ['pdf', fixtures.pdf()]]) {
+          await prepare('original.' + type, buffer); await analyze();
+          assert.equal(api.calls.at(-1).inputType, type); assert.equal(api.calls.at(-1).imageCount, 0);
+          assert.ok(Buffer.from(api.calls.at(-1).fileData.split(',')[1], 'base64').equals(buffer)); await confirm();
+        }
+        const route = (await call('wsa:resumeRoute', { format: 'pdf' })).route; const count = api.calls.length;
+        const oldPath = await page.evaluate(async (route) => sendMessage('wsa:aiExtractResume', { payload: { requestId: crypto.randomUUID(), type: 'pdf', mode: route.mode, routeToken: route.token, text: '不能通过文字入口解析简历' } }), route);
+        assert.equal(oldPath.ok, false); assert.equal(api.calls.length, count);
+        await page.locator('#model').fill('unprobed-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+        await prepare('blocked.pdf', fixtures.pdf()); await page.locator('#sendResume').click();
+        await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('尚未通过'));
+        assert.equal(api.calls.length, count); await page.locator('#cancelResume').click();
+        await page.locator('#model').fill('synthetic-local'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+      });
+      await t.test('模型忽略附件但返回 HTTP 200 时也禁止发送真实简历', async () => {
+        api.modelApi.probeAnswer = '支持图片和文件';
+        await page.locator('#btnDetectCapabilities').click(); await page.waitForFunction(() => !document.getElementById('btnDetectCapabilities').disabled);
+        assert.match(await page.locator('#capabilityStatus').textContent(), /识别未通过/);
+        const count = api.calls.length; await prepare('unsupported.pdf', fixtures.pdf()); await page.locator('#sendResume').click();
+        await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('尚未通过'));
+        assert.equal(api.calls.length, count); await page.locator('#cancelResume').click();
       });
       const before = (await call('localapply:read')).database;
       await page.evaluate(() => { document.querySelector('#resumeCenter details').open = false; window.scrollTo(0, 0); });
@@ -457,6 +526,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       await page.waitForFunction(() => document.getElementById('testResult').textContent.includes('连接正常'));
     });
     await t.test('本地文件 PDF 通过读取、视觉假接口、校对确认入库，原文件不持久化', async () => {
+      await detectModel(page);
       modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成文件姓名', evidence: '合成文件姓名', page: 1 } } });
       await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
       await page.locator('#btnExtract').click();

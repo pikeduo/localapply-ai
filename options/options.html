@@ -63,7 +63,9 @@
       </div>
       <p class="muted">模型列表来自当前服务商；获取失败或接口未开放时可手动填写。列表本身不一定说明聊天或图片能力，视觉模型请按服务商说明选择。</p>
       <p class="muted" id="providerNote"></p>
-      <p class="muted">主模型处理普通 PDF（pdf.js 本地抽出文字，纯文本模型即可）和开放题起草；<b>视觉模型只在扫描件 PDF 时用到</b>，留空 = 用主模型。纯文本模型读不了扫描件是物理限制（页面本质是照片），不是插件限制。</p>
+      <div class="row"><button id="btnDetectCapabilities" class="btn plain">检测文件/图片识别能力</button><button id="cancelCapabilities" class="btn ghost">取消检测</button></div>
+      <p id="capabilityStatus" class="muted" role="status">尚未检测识别能力。</p>
+      <p class="muted">检测仅发送合成样例，每个所选模型最多 3 次调用，可能计费。分别检查图片、图片型 PDF 和图片型 DOCX 是否能读出随机数字；返回模型列表、连接成功或填写视觉型号都不能代替实测。结果仅表示当前接口识别测试通过，30 分钟或后台重启后失效。主模型和视觉模型均可用于简历识别，纯文本模型仅用于开放题起草。</p>
     </section>
 
     <section class="card">
@@ -89,20 +91,22 @@
       <div class="row">
         <input type="file" id="pdfFile" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
         <button id="btnExtract" class="btn plain">本地读取与预览</button>
+        <button id="btnDetectImport" class="btn plain">先检测模型能力</button>
         <button id="sendResume" class="btn" hidden>发送内容给当前模型解析</button>
         <button id="cancelResume" class="btn ghost">取消并清理草稿</button>
       </div>
       <div id="pdfStatus" class="muted" style="margin-top:8px"></div>
-      <details><summary>查看本地提取文本（仅本次内存）</summary><pre id="sourcePreview"></pre></details>
+      <details><summary>查看完整页面图片（仅本次内存，含文档内嵌图片）</summary><div id="sourcePreview"></div></details>
       <div id="pdfReview"></div>
       <div class="row" id="importRow" style="display:none">
         <label class="lbl">导入到档案</label>
         <select id="targetProfile"></select>
         <label><input id="overwriteResume" type="checkbox" /> 覆盖勾选项已有值</label>
         <button id="refreshReview" class="btn ghost">刷新差异</button>
+        <button id="selectAllResume" class="btn ghost">已逐项校对，全部勾选</button>
         <button id="btnImport" class="btn">确认导入勾选字段</button>
       </div>
-      <p class="muted">PDF/DOCX 文件不超过 10 MiB，PDF 最多 30 页。本地读取后由你决定是否发送文本；文字不足 80 字的 PDF 可使用视觉模型。结果按教育、实习、工作和项目分别保存，逐项核对来源后确认。同一文件在同一档案重复导入会复用经历；默认仅补空白。原文件、全文和页面图片不持久化。</p>
+      <p class="muted">PDF/DOCX 最多 10 MiB、30 页/图。代码只检查文件和转页面图片，不抽取正文或识别简历字段。检测通过后优先把原文件交给模型；该格式未通过时，使用已通过图片检测的模型识别完整页面。所有模型引用和字段值都须人工核对。原文件及页面图片不持久化，同一文件重复导入复用经历，默认仅补空白。</p>
     </section>
 
     <section class="card">
@@ -155,17 +159,22 @@
   <!-- 经典 worker 预载支持 file://；PDF.js 只在本地执行，不动态导入远程脚本。 -->
   <script src="../libs/pdfjs/pdf.worker.min.js"></script>
   <script src="../libs/docx/fflate.min.js"></script>
-  <script src="../libs/docx/mammoth.min.js"></script>
+  <script src="../libs/docx/docx-preview.min.js"></script>
+  <script src="../libs/docx/html2canvas.min.js"></script>
   <script src="../data/templates.js"></script>
   <script src="../data/providers.js"></script>
   <script src="../data/key-vault.js"></script>
   <script src="../data/resume.js"></script>
   <script src="../data/local-store.js"></script>
+  <script src="../data/model-capabilities.js"></script>
   <script src="../data/ai-client.js"></script>
   <script src="standalone.js"></script>
   <script src="../common.js"></script>
   <script src="data-management.js"></script>
   <script src="credentials.js"></script>
+  <script src="model-probes.js"></script>
+  <script src="model-capabilities.js"></script>
+  <script src="document-renderer.js"></script>
   <script src="resume-files.js"></script>
   <script src="resume-ui.js"></script>
   <script src="options.js"></script>

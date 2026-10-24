@@ -17,7 +17,7 @@ function clearResume(message = '', keepFile = false) {
   $('#sendResume').disabled = false;
   $('#pdfStatus').textContent = message; $('#btnExtract').disabled = false;
 }
-// 本地预览不联网，只有点击发送按钮才允许调用用户所选模型。
+// 本地仅生成页面预览，包含所有可渲染文字和图片；不做字段抽取和文字识别。
 async function prepareResume() {
   const file = $('#pdfFile').files[0];
   if (!file) { $('#pdfStatus').textContent = '请先选择 PDF 或 DOCX'; return; }
@@ -26,12 +26,14 @@ async function prepareResume() {
   $('#btnExtract').disabled = true; $('#pdfStatus').textContent = '正在本地读取与检查文件…';
   try {
     const source = await LocalApplyFiles.read(file, job.controller.signal);
+    source.pages = await LocalApplyFiles.render(source, job.controller.signal);
     if (resumeJob !== job) return;
     resumeSource = source;
-    $('#sourcePreview').textContent = source.text || '未读取到文字，可使用视觉模型逐页识别。';
-    $('#pdfStatus').textContent = source.mode === 'vision'
-      ? `扫描件，共 ${source.pages.length} 页。点击发送后会把页面图片发送给当前服务商，每页一次调用。请核对视觉模型能力和费用。`
-      : `本地读取完成，${source.text.length} 字。尚未联网；发送前可展开核对文本。DOCX 的页码按文本块展示。`;
+    for (const [index, page] of source.pages.entries()) {
+      const image = document.createElement('img'); image.src = page.dataUrl; image.alt = '简历第 ' + (index + 1) + ' 页/图';
+      $('#sourcePreview').append(image);
+    }
+    $('#pdfStatus').textContent = `已生成 ${source.pages.length} 张页面预览，文字和嵌入图片均交由模型识别。尚未发送文件，请先检测模型能力。`;
     $('#sendResume').hidden = false;
   } catch (error) { if (resumeJob === job) clearResume('读取失败：' + error.message); }
   finally { if (resumeJob === job) $('#btnExtract').disabled = false; }
@@ -45,15 +47,20 @@ async function analyzeResume() {
   try {
     await flushCredentials();
     if (resumeJob !== job) return;
-    const pages = source.mode === 'vision' ? await LocalApplyFiles.pdf(source.bytes, job.controller.signal, true) : undefined;
+    const { route } = await dataRequest('wsa:resumeRoute', { format: source.type });
     if (resumeJob !== job) return;
-    const response = await dataRequest('wsa:aiExtractResume', { payload: { requestId: job.id, text: source.text, pages } });
+    const file = route.mode === 'file' ? { filename: 'resume.' + source.type,
+      file_data: LocalApplyProbes.dataUrl(source.bytes, source.type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') } : undefined;
+    source.mode = route.mode;
+    $('#pdfStatus').textContent = `正在由 ${route.model} 识别${file ? '原文件（包括图片内容）' : source.pages.length + ' 张完整页面图片'}，可取消…`;
+    const response = await dataRequest('wsa:aiExtractResume', { payload: { requestId: job.id, type: source.type, routeToken: route.token,
+      mode: route.mode, file, pages: file ? undefined : source.pages } });
     if (resumeJob !== job) return;
     resumeRows = LocalApplyResume.normalize(response.data, source);
-    // 渲染完成后立即释放扫描原字节，校对区只保留有限来源片段。
-    source.bytes = null;
+    // 文件识别结束释放原字节，页面预览仅留在本次内存供人工核对。
+    source.bytes = source.renderBytes = null;
     $('#sendResume').hidden = true;
-    $('#pdfStatus').textContent = '解析完成。请核对来源和目标档案；无可验证来源的字段默认不选中。修改过的值标记为人工校对。';
+    $('#pdfStatus').textContent = '解析完成。所有字段均由模型识别，默认不勾选；请对照页面图片核对引用、字段值及目标档案后选择导入。';
     $('#importRow').style.display = '';
     await renderResumeReview();
   } catch (error) {
@@ -86,7 +93,7 @@ async function renderResumeReview() {
     const input = document.createElement(row.key === 'description' ? 'textarea' : 'input'); input.value = row.value;
     input.setAttribute('aria-label', label.textContent); input.addEventListener('input', () => { row.value = input.value; evidence.textContent = '已编辑：将按人工校对保存'; });
     const evidence = document.createElement('p'); evidence.className = row.evidence.verified ? 'muted' : 'warn';
-    evidence.textContent = `${row.evidence.verified ? '原文已核对' : '来源待人工核对'} · ${row.evidence.page ? '页/块 ' + row.evidence.page : '未标页码'}：${row.evidence.excerpt || '模型没有提供来源'}`;
+    evidence.textContent = `${row.evidence.verified ? '历史文本已核对' : '模型引用，待人工核对'} · ${row.evidence.page ? '页/图 ' + row.evidence.page : '未标页码'}：${row.evidence.excerpt || '模型没有提供来源'}`;
     const prior = document.createElement('p'); prior.className = 'muted';
     const previous = resumeExisting(row, database, profileId);
     prior.textContent = previous?.value ? `当前值：${fieldText(previous.value)}。${$('#overwriteResume').checked ? '确认后覆盖勾选项。' : '保留已有值，仅补空白。'}` : '当前为空，确认后写入。';
@@ -138,6 +145,10 @@ function initResume() {
   $('#btnExtract').addEventListener('click', prepareResume);
   $('#sendResume').addEventListener('click', analyzeResume);
   $('#btnImport').addEventListener('click', confirmResume);
+  $('#selectAllResume').addEventListener('click', () => {
+    resumeRows.forEach((row) => { row.checked = true; });
+    document.querySelectorAll('#pdfReview input[type="checkbox"]').forEach((control) => { control.checked = true; });
+  });
   $('#cancelResume').addEventListener('click', () => clearResume('已取消，本次草稿已清理，未写入资料。'));
   $('#pdfFile').addEventListener('change', () => clearResume('', true));
   $('#targetProfile').addEventListener('change', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));

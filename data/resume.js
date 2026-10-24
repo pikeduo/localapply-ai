@@ -10,11 +10,13 @@
       '{"basic":{"name":{"value":"原文值","evidence":"连续原文片段","page":1}},"education":[{}],"internship":[{}],"employment":[{}],"project":[{}]}。' +
       '每个字段都是 {value:字符串,evidence:连续原文片段,page:页码}。basic 可选字段：' + Object.keys(basic).join(',') +
       '；重复经历每项可选字段：' + Object.keys(repeated).join(',') + '。同类多段经历分别列出，保留原文日期。' +
+      '请直接阅读原文件或全部页面图片，识别正文及嵌入图片中的文字与版式，不遗漏图片型内容。跨页同一经历有明确依据时合并，避免重复。' +
+      '无法读取附件时返回 {"error":"无法读取附件"}，不要猜测。所有来源片段均须用户人工核对。' +
       '没有依据的字段省略。education 用 school/major/degree/start/end，实习与工作用 company/role/start/end/description，项目用 title/role/start/end/description。';
   }
   // 只忽略空白比较；改写、猜测、没有来源的值一律不能默认选中。
   function compact(text) { return String(text).replace(/\s+/g, ''); }
-  // 将抽取结果变成可逐项编辑的单元格，全文只存在本次页面内存。
+  // 文件/图片结果不伪称已本地核对原文，所有候选都需人工勾选；仅兼容历史文本夹具。
   function normalize(raw, source) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('简历解析结果不是对象');
     const rows = [];
@@ -29,7 +31,7 @@
         const excerpt = typeof cell.evidence === 'string' ? cell.evidence.trim().slice(0, 500) : '';
         const page = Number.isInteger(cell.page) && cell.page >= 1 && cell.page <= source.pages.length ? cell.page : 0;
         const pool = page ? source.pages[page - 1] : source.text;
-        const verified = source.mode !== 'vision' && !!excerpt && compact(pool).includes(compact(excerpt)) && compact(excerpt).includes(compact(value));
+        const verified = source.mode === 'text' && !!excerpt && compact(pool || '').includes(compact(excerpt)) && compact(excerpt).includes(compact(value));
         rows.push({ kind, index, key, label: labels[key], value, original: value, checked: verified,
           evidence: { kind: source.mode === 'vision' ? 'vision' : source.type, excerpt, page, verified } });
       }

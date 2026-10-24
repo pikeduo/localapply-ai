@@ -306,7 +306,7 @@ test('消息层 ping 和无 Key 错误可异步返回', async () => {
 test('内容脚本不能读取个人库、导出、命令写入或代理 AI', async () => {
   const { listeners } = sandbox('background.js');
   const sender = { id: 'test-extension', url: 'https://recruit.example.test/apply', tab: { id: 1 } };
-  for (const type of ['wsa:getState', 'localapply:read', 'localapply:command', 'localapply:vault', 'localapply:exportBackup', 'localapply:exportPublicFields', 'wsa:aiChat', 'wsa:listModels', 'wsa:aiExtractResume', 'wsa:cancelResume']) {
+  for (const type of ['wsa:getState', 'localapply:read', 'localapply:command', 'localapply:vault', 'localapply:exportBackup', 'localapply:exportPublicFields', 'wsa:aiChat', 'wsa:listModels', 'wsa:probeCapabilities', 'wsa:resumeRoute', 'wsa:aiExtractResume', 'wsa:cancelResume']) {
     const response = await new Promise((resolve) => listeners[0]({ type }, sender, resolve));
     assert.equal(response.ok, false, type);
     assert.match(response.error, /仅允许/);

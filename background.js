@@ -1,7 +1,7 @@
 // Service Worker：AI 请求代理（OpenAI 兼容，多服务商预设）、CSV 导出、初始数据、侧边栏开关。
 'use strict';
 
-importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/local-store.js', 'data/ai-client.js'); // 凭据仅在后台按需解密。
+importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/ai-client.js'); // 凭据仅在后台按需解密。
 
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local);
@@ -147,6 +147,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         case 'wsa:cancelResume':
           aiClient.cancel(msg.requestId); sendResponse({ ok: true }); return;
+        case 'wsa:probeCapabilities':
+          sendResponse({ ok: true, ...await aiClient.probeCapabilities(msg.payload || {}) }); return;
+        case 'wsa:resumeRoute':
+          sendResponse({ ok: true, route: await aiClient.resumeRoute(msg.format) }); return;
         case 'wsa:aiExtractResume':
           sendResponse({ ok: true, data: await aiClient.extractResume(msg.payload || {}) }); return;
         case 'wsa:exportCsv': {

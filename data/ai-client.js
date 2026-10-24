@@ -4,30 +4,14 @@
   // 为一种存储上下文创建独立客户端，不跨上下文读取或同步 Key。
   function createClient(readSettings) {
     const DEFAULT_TIMEOUT_MS = 30000;
+    const capabilities = global.LocalApplyCapabilities.create(readSettings, callGLM);
     // 兼容现有解析管线的数据形状。
     async function getState() { return { settings: await readSettings() }; }
     // 使用统一的服务商解析，避免端点与凭据错配。
     function getProvider(settings) { return global.LocalApplyProviders.resolve(settings); }
-    // 扫描件回退的视觉模型解析：主模型带视觉或用户显式配置了视觉模型才放行
+    // 视觉能力必须经当前接口实测，填写型号或选择自定义服务商不构成能力证明。
     async function resolveVisionModel() {
-      const state = await getState();
-      const settings = state.settings || {};
-      const provider = getProvider(settings);
-      const vm = settings.visionModel || settings.model || '';
-      if (!vm) throw aiError('请先在设置页获取模型列表并选择模型，或手动填写模型 ID。');
-      const ok =
-        provider.custom ||
-        provider.visionDefault ||
-        !!settings.visionModel ||
-        (provider.visionModels || []).includes(vm);
-      if (!ok) {
-        throw aiError(
-          `该 PDF 是扫描件，需要视觉模型。当前 ${provider.name} 的「${vm}」不支持图片输入。` +
-          `解决办法：设置页把"视觉模型"设为该家的视觉型号（如 ${(provider.visionModels || [])[0] || '对应型号'}），` +
-          `或换带视觉的服务商。不配置也行：对照 PDF 手动录入字段库即可。`
-        );
-      }
-      return vm;
+      return (await capabilities.route('pdf')).model;
     }
 
     // ============ AI 调用 ============
@@ -48,6 +32,7 @@
       if (!key && provider.requiresKey) throw aiError(`尚未配置 ${provider.name} 的 API Key，请先在设置页保存密钥。`);
       const model = req.model || settings.model || '';
       if (!model) throw aiError('请先获取模型列表并选择模型，或手动填写模型 ID。');
+      if (req.expectedContext && req.expectedContext !== await capabilities.context(settings, model)) throw aiError('服务商、模型或 Key 已变化，请重新检测能力并预览。');
       const baseUrl = (provider.baseUrl || '').replace(/\/+$/, '');
       if (!baseUrl) throw aiError('请先填写服务商接口地址。');
       const timeoutMs = req.timeoutMs || DEFAULT_TIMEOUT_MS;
@@ -59,12 +44,13 @@
       try {
         const response = await fetch(baseUrl + '/chat/completions', { method: 'POST', redirect: 'error',
           headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}) },
-          body: JSON.stringify({ model, messages: req.messages, temperature: req.temperature ?? 0.2, max_tokens: req.maxTokens, stream: false }),
+          body: JSON.stringify({ model, messages: req.messages, temperature: req.temperature ?? 0.2, max_tokens: req.maxTokens, stream: false,
+            ...(req.fileInput && new URL(baseUrl).hostname === 'openrouter.ai' ? { plugins: [{ id: 'file-parser', pdf: { engine: 'native' } }] } : {}) }),
           signal: controller.signal });
         if (!response.ok) {
           if (response.status === 401) throw aiError('API Key 无效（401），请检查当前服务商密钥。');
           if (response.status === 429) throw aiError('调用频率/额度受限（429），请稍后重试。');
-          throw aiError('AI 接口返回 HTTP ' + response.status);
+          const error = aiError('AI 接口返回 HTTP ' + response.status); error.code = 'HTTP_' + response.status; throw error;
         }
         let data;
         try { data = await response.json(); }
@@ -80,21 +66,39 @@
         clearTimeout(timer); req.signal?.removeEventListener('abort', cancel);
       }
     }
-    // 一个导入对应一个可取消任务；结束后释放图像/全文引用，不写任何资料。
+    // 能力检测与真实导入共用取消机制，探针和结果只在内存保留。
+    async function probeCapabilities(payload) {
+      if (typeof payload.requestId !== 'string' || jobs.has(payload.requestId)) throw aiError('能力检测任务标识无效或重复');
+      const controller = new AbortController(); jobs.set(payload.requestId, controller);
+      try { return await capabilities.probe(payload.probe, controller.signal); }
+      finally { jobs.delete(payload.requestId); }
+    }
+    // 只接受经能力检测的原文件或页面图片，拒绝旧的本地抽文字路径。
     async function extractResume(payload) {
       if (typeof payload.requestId !== 'string' || payload.requestId.length > 100) throw aiError('缺少解析任务标识');
       if (jobs.has(payload.requestId)) throw aiError('解析任务已存在');
       const controller = new AbortController(); jobs.set(payload.requestId, controller);
       try {
-        let content;
-        if (payload.pages?.length) content = await visionExtract(payload.pages, await resolveVisionModel(), controller.signal);
-        else {
-          if (typeof payload.text !== 'string' || payload.text.length > 100000) throw aiError('简历文本为空或超限');
-          content = (await callGLM({ messages: [{ role: 'system', content: global.LocalApplyResume.prompt() },
-            { role: 'user', content: payload.text }], signal: controller.signal, timeoutMs: 120000, maxTokens: 10000 })).content;
+        const route = await capabilities.route(payload.type);
+        if (payload.routeToken !== route.token || payload.mode !== route.mode) throw aiError('模型能力或发送方式已变化，请重新预览后发送');
+        let attachments;
+        if (route.mode === 'file') {
+          const file = payload.file; const mime = payload.type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+          if (!file || file.filename !== 'resume.' + payload.type || typeof file.file_data !== 'string'
+            || !file.file_data.startsWith('data:' + mime + ';base64,') || file.file_data.length > 14 * 1024 * 1024) throw aiError('简历原文件格式或大小无效');
+          attachments = [{ type: 'file', file }];
+        } else {
+          if (!Array.isArray(payload.pages) || !payload.pages.length || payload.pages.length > 30
+            || payload.pages.some((p) => typeof p.dataUrl !== 'string' || !/^data:image\/(jpeg|png);base64,/.test(p.dataUrl))
+            || payload.pages.reduce((n, p) => n + p.dataUrl.length, 0) > 16 * 1024 * 1024) throw aiError('简历页面图片格式或大小无效');
+          attachments = payload.pages.flatMap((p, i) => [{ type: 'text', text: '第 ' + (i + 1) + ' 页/图' }, { type: 'image_url', image_url: { url: p.dataUrl } }]);
         }
+        const { content } = await callGLM({ model: route.model, expectedContext: route.scope, signal: controller.signal,
+          fileInput: route.mode === 'file', timeoutMs: 120000, maxTokens: 10000,
+          messages: [{ role: 'system', content: global.LocalApplyResume.prompt() }, { role: 'user', content: attachments }] });
         const data = extractJson(content);
         if (!data) throw aiError('AI 返回的内容无法解析为 JSON，请重试。');
+        if (data.error) throw aiError('模型未能读取简历，请检查识别能力、文件格式或更换模型后重试。');
         return data;
       } finally { jobs.delete(payload.requestId); }
     }
@@ -196,7 +200,7 @@
       }
     }
 
-    return { callGLM, extractResume, cancel, listAvailableModels, extractJson, resolveVisionModel, visionExtract, mergeResumePart, aiError };
+    return { callGLM, extractResume, probeCapabilities, resumeRoute: capabilities.route, cancel, listAvailableModels, extractJson, resolveVisionModel, visionExtract, mergeResumePart, aiError };
   }
   global.LocalApplyAI = { createClient };
 })(globalThis);

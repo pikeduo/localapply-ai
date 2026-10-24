@@ -12,7 +12,8 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript，运行�
 - **框架兼容**：绕过 React 受控组件的 value tracker，Vue/select/radio/checkbox/contenteditable 都能填
 - **平台增强**：Moka（mokahr.com）、国聘（iguopin.com）定制识别；其余网站走通用启发式；手机号 +86 区号框、家庭成员表格、验证码控件自动避让
 - **下拉框智能匹配**：`CET-4` ↔ `四级`、`共青团员` ↔ `团员`、`硕士` ↔ `研究生` 等同义写法自动对上
-- **PDF/DOCX 简历导入**：本地读取预览后，由你主动发送给模型。基本资料及多段教育/实习/工作/项目逐项校对保存，来源无法核实的项默认不选。同一文件重复导入复用经历，默认仅补空白；原文件和全文不保存。
+- **PDF/DOCX 简历导入**：检测模型的文件/图片识别能力后，优先直接提交原文件；不接受该格式时交由已验证的视觉模型读取完整页面图片。代码不抽取正文或识别简历字段，DOCX 嵌入图片保留。所有候选逐项人工校对、勾选后保存，同一文件重复导入复用经历；原文件和页面图片不保存。
+- **能力实测**：主动检测图片、图片型 PDF、图片型 DOCX 是否能读出随机数字，每个所选模型最多 3 次请求，可能计费。仅使用合成样例，不发送简历；连接成功、模型名称或自述不能当作识别通过。
 - **开放题 AI 起草**：用档案里的自我介绍/项目/动机素材生成 ≤350 字草稿，保留最近 3 版历史，确认后才落表
 - **多 AI 服务商**：智谱 / DeepSeek / Qwen（通义千问）/ Kimi / OpenAI / 硅基流动 / OpenRouter / Ollama 任选；服务商框支持直接输入 IP 或 API 地址创建自定义 OpenAI 兼容服务。Key、主模型和视觉模型按服务商分别保存
 - **多档案**：全字段模板 51 项（基本信息/教育/意向/政治面貌/家庭成员/四六级/奖惩…），有值就填、没值跳过；支持 JSON 备份导出/恢复
@@ -28,7 +29,7 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript，运行�
 2. Edge 地址栏打开 `edge://extensions` → 打开「开发人员模式」→「加载解压缩的扩展」→ 选择本目录（`manifest.json` 所在层）
 3. 固定工具栏图标。**到这里就能用了**——在「字段库」手动填好信息，去网申页一键填充，全程不需要任何 API Key
 
-> **AI 是可选加速器**：想用 PDF 自动提取 / 开放题起草时，再点侧边栏 ⚙ 配置任一家 AI 服务商（智谱 / DeepSeek / Kimi / 通义 / OpenAI / 硅基流动 / OpenRouter / 自定义 OpenAI 兼容接口）。普通 PDF 用纯文本模型即可，只有扫描件 PDF 才需要配一个视觉模型。
+> **AI 是可选的**：手动录入和规则填表无需 AI。解析 PDF/DOCX 时，模型必须通过当前接口的原文件或图片识别测试；纯文本模型仍可用于开放题起草。可以为解析单独配置视觉模型。
 
 > Chrome 同理：`chrome://extensions` → 开发人员模式 → 加载已解压的扩展程序。
 
@@ -38,7 +39,7 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript，运行�
 
 AI 服务商可以从输入框的建议列表选择，也可以输入 `192.168.1.10:8000` 后按回车或移开焦点，自动保存为 `http://192.168.1.10:8000/v1`。域名默认使用 HTTPS；完整地址保留自定义路径，粘贴 `/chat/completions` 地址时自动提取 Base URL。相同地址不重复创建，新地址不继承其他服务商的 Key 或模型。
 
-配置顺序：选择服务商 → 首次设置口令或解锁 → 填写所需 API Key → 点击“获取可用模型” → 从主模型下拉列表选择 → “测试连接”。本地服务无认证要求时 Key 可留空。模型列表通过当前 Base URL 的 `GET /models` 获取，只发送所需认证，不发送简历内容；不会自动选中第一个模型。列表只在当前页面使用，选中的模型按服务商保存在本地；切换服务商或修改 Key 后需重新获取。未开放列表接口、获取失败或列表为空时，可勾选“手动填写模型 ID”。视觉模型也可从获取后的输入建议中选择，但是否支持图片须按服务商说明确认。只保存配置不会自动联网或下载模型。
+配置顺序：选择服务商 → 首次设置口令或解锁 → 填写所需 API Key → 点击“获取可用模型” → 从主模型下拉列表选择 → “测试连接” → “检测文件/图片识别能力” → “检测文件/图片识别能力”。本地服务无认证要求时 Key 可留空。模型列表通过当前 Base URL 的 `GET /models` 获取，只发送所需认证，不发送简历内容；不会自动选中第一个模型。列表只在当前页面使用，选中的模型按服务商保存在本地；切换服务商或修改 Key 后需重新获取。未开放列表接口、获取失败或列表为空时，可勾选“手动填写模型 ID”。视觉模型也可从获取后的输入建议中选择，但是否支持图片须按服务商说明确认。只保存配置不会自动联网或下载模型。
 
 服务端需支持 OpenAI Chat Completions 兼容协议。接口参考：[DeepSeek](https://api-docs.deepseek.com/)、[DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/)、[Qwen/阿里云百炼](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)、[Ollama 本地接口](https://docs.ollama.com/api/openai-compatibility)。
 
@@ -52,7 +53,7 @@ AI 服务商可以从输入框的建议列表选择，也可以输入 `192.168.1
 ## 数据与隐私
 
 - 简历字段、档案、台账、草稿**全部只存在本机** `chrome.storage.local`，卸载扩展即彻底删除；插件没有服务器、没有统计埋点
-- 唯一的对外请求是你**主动触发**的 AI 调用（PDF 提取发简历文本、开放题起草发题目+素材），发往你在设置页选择的服务商（智谱 / DeepSeek / Kimi / 通义 / OpenAI / 硅基流动 / OpenRouter，或自定义 OpenAI 兼容地址）；不用 AI 功能则零联网请求
+- 对外请求仅由你主动触发：能力检测发送合成图片/文件，简历识别发送原文件或完整页面图片，开放题起草发送题目及素材；均发往所选服务商。保存配置和本地预览不会调用 AI。
 - 附件清单只登记文件名和备注，不读取文件本体
 - 升级迁移原 `wangshenAutofill` 和 Schema v2 资料至 v3。API Key 使用 PBKDF2-SHA256（600,000 次）与 AES-256-GCM 加密；首次设置口令并验证密文后，清理现用配置及旧源中的明文 Key，其他旧资料保留。口令与派生密钥不落盘，文件页关闭/后台回收/浏览器重启后须重新解锁。个人简历库本身不加密；口令无法找回，请自行保管。
 - 备份包含档案、动态字段、重复经历、确认的来源片段、本地映射和记录，不含 API 配置/Key、口令、保险库或原文件。导入前预览差异；合并冲突保留当前内容，覆盖导入可恢复到导入前。
@@ -103,11 +104,13 @@ options/standalone.js    file:// 运行时和独立 IndexedDB 适配
 options/data-management.js 备份预览、公共字段包和重复经历编辑
 tests/                   基础、数据层与 Playwright 浏览器测试
 data/key-vault.js        口令派生与 AES-GCM 保险库
-data/resume.js           简历抽取与来源验证契约
-options/resume-files.js  有界 PDF/DOCX 本地解析
+data/resume.js           模型输出契约与人工校对候选
+data/model-capabilities.js 原文件/图片能力实测及安全路由
+options/resume-files.js  文件校验与 PDF 转图，不抽取正文
+options/document-renderer.js DOCX 图文渲染
 options/resume-ui.js     简历中心、预览、取消与确认导入
 libs/pdfjs/              PDF.js 6.4.299，本地字体/CMap/WASM 与许可
-libs/docx/               Mammoth 1.13.0、fflate 0.8.3 及依赖许可
+libs/docx/               docx-preview、html2canvas、fflate 及许可；历史 Mammoth 不再加载
 test-pages/              mock 表单（generic / react / moka / iguopin / fake-scan.pdf）
 store/                   Edge 商店上架材料（步骤文案 + 隐私政策）
 tools/                   图标生成 / 打包 / 自动化验收
@@ -121,7 +124,8 @@ tools/dev-https-server.py + dev-proxy.js + test-cert.pem
 - **所有自动化验收基于自写 mock 页**，真实招聘站点的兼容率未经系统验证（mock 尽量仿了 Moka/国聘的 DOM 风格，但真实站点更复杂）。遇到不兼容的站点欢迎提 issue 附页面结构。
 - **iframe 里的表单检测不到**：内容脚本只注入顶层文档；如果目标站点把申请表放在 iframe 里（部分 ATS 这么做），需要手动复制粘贴。支持 iframe 在路线图上。
 - **表单若在多步向导中**：每翻一步需要点一次「↻重新检测」（自动检测有约 1 秒延迟兜底）。
-- **扫描件 PDF 需要视觉模型**：来源无法用本地文本核实，所有提取项默认不选。跨页同一经历可能被拆开，须人工取消重复项。
+- **文件/图片识别**：能力实测基于当前接口的 Chat Completions 内容块协议，不代表服务商的全部专用文件 API。检测结果按端点/型号/凭据隔离，30 分钟或后台重启后过期。样例通过也不保证所有版式都能准确识别，所有候选默认不勾选。
+- **DOCX 预览**：网页转图可能与 Word 分页不同。请检查图片是否完整；图片无法渲染时会阻止发送并提示转 PDF，避免静默遗漏。
 - **文件页复杂 PDF**：浏览器可能限制 file:// 字体/CMap/WASM 读取，复杂中文字体或扫描件请优先用插件设置页。普通 PDF/DOCX 及扫描夹具已实测，复杂版式仍须核对。
 - **台账最多保留 500 条**（最新），更早的自动淘汰。
 - **不模拟登录、不处理验证码、不自动提交**——这些是刻意的安全边界，不是缺陷。
@@ -139,6 +143,7 @@ tools/dev-https-server.py + dev-proxy.js + test-cert.pem
 - [23aaaa/jobfill](https://github.com/23aaaa/jobfill)：仅参考交互设计（无 License，未复制任何代码）
 - [pdf.js](https://github.com/mozilla/pdf.js)（Apache-2.0）：已 vendor 至 `libs/pdfjs/`
 - [Mammoth](https://github.com/mwilliamson/mammoth.js)（BSD-2-Clause）和 [fflate](https://github.com/101arrowz/fflate)（MIT）：本地 DOCX 读取，依赖许可见 `libs/docx/NOTICE.dependencies.txt`。
+- [docx-preview](https://github.com/VolodymyrBaydalka/docxjs)（Apache-2.0）与 [html2canvas](https://github.com/niklasvh/html2canvas)（MIT）：仅本地页面转图；许可见 `libs/docx/NOTICE.rendering.txt`。历史 Mammoth 资源/许可保留，已从运行页面移除。
 
 本项目以 [MIT](LICENSE) 发布。欢迎使用、修改与二次发布；请勿将本工具用于任何需要代他人填写真实身份信息的场景。
 

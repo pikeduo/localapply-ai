@@ -1,4 +1,4 @@
-// 设置页：API 设置 / 填充设置 / 简历 PDF 导入（文本→视觉双路 + 人工校对）/ 模板管理
+// 设置页：模型能力与密钥、简历文件/页面图识别、人工校对和本地资料管理。
 'use strict';
 
 let state = null;
@@ -28,6 +28,7 @@ async function init() {
   });
   $('#customBase').addEventListener('change', () => applyProviderInput($('#customBase').value));
   initCredentials();
+  initCapabilities();
   $('#btnFetchModels').addEventListener('click', fetchAvailableModels);
   $('#manualModel').addEventListener('change', () => {
     $('#model').hidden = !$('#manualModel').checked;
@@ -37,6 +38,7 @@ async function init() {
     state.settings.model = $('#modelSelect').value;
     $('#model').value = state.settings.model;
     rememberProviderModels();
+    resetCapabilities();
     save();
   });
   $('#model').value = state.settings.model || '';
@@ -44,12 +46,14 @@ async function init() {
     state.settings.model = $('#model').value.trim();
     renderModelChoices();
     rememberProviderModels();
+    resetCapabilities();
     save();
   });
   $('#visionModel').value = state.settings.visionModel || '';
   $('#visionModel').addEventListener('change', () => {
     state.settings.visionModel = $('#visionModel').value.trim();
     rememberProviderModels();
+    resetCapabilities();
     save();
   });
 
@@ -117,6 +121,7 @@ function refreshProviderUI() {
 
 // 服务商或 Key 改变后清空旧列表，已保存的模型保留，但不能冒充实时可用列表。
 function resetModelCatalog() {
+  resetCapabilities();
   modelsRequestId++;
   availableModels = null;
   renderModelChoices();

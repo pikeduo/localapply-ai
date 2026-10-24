@@ -71,6 +71,8 @@
       case 'wsa:listModels': return ai.listAvailableModels(payload.providerId);
       case 'wsa:aiChat': return ai.callGLM(payload.payload || {});
       case 'wsa:cancelResume': ai.cancel(payload.requestId); return {};
+      case 'wsa:probeCapabilities': return ai.probeCapabilities(payload.payload || {});
+      case 'wsa:resumeRoute': return { route: await ai.resumeRoute(payload.format) };
       case 'wsa:aiExtractResume': return { data: await ai.extractResume(payload.payload || {}) };
       default: throw new Error('文件管理模式不支持此操作；网页自动填充请从浏览器插件入口使用。');
     }
@@ -80,7 +82,7 @@
   async function request(type, payload = {}) {
     try {
       // 网络请求不持有存储锁，让用户能在请求期间切换服务商/修改配置。
-      const network = ['wsa:listModels', 'wsa:aiChat', 'wsa:aiExtractResume'].includes(type);
+      const network = ['wsa:listModels', 'wsa:aiChat', 'wsa:aiExtractResume', 'wsa:probeCapabilities'].includes(type);
       const execute = () => dispatch(type, payload);
       const result = !network && navigator.locks
         ? await navigator.locks.request(databaseName, execute) : await execute();
