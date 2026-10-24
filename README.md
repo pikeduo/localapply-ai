@@ -43,6 +43,10 @@ AI 服务商可以从输入框的建议列表选择，也可以输入 `192.168.1
 
 服务端需支持 OpenAI Chat Completions 兼容协议。接口参考：[DeepSeek](https://api-docs.deepseek.com/)、[DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/)、[Qwen/阿里云百炼](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)、[Ollama 本地接口](https://docs.ollama.com/api/openai-compatibility)。
 
+主模型和视觉模型下拉均显示当前端点已获取的完整列表，已选值不会过滤其他型号；手动输入时也可直接从下拉切回。近期列表仅在当前标签页临时缓存 30 分钟，刷新可复用，不会自动联网；更换端点/Key 后重新获取，不自动改动已保存型号。
+
+DeepSeek 官方 `deepseek-flash` 支持图片，`deepseek-v4-pro` 不支持图片。其 Files API 当前列出的格式为图片；本插件可把 PDF/DOCX 的完整页面图交给 Flash 识别。主模型选 Flash 时，视觉模型可留为“使用主模型”，然后主动检测识别能力。检测失败/超时/截断不等于不支持；官方 DeepSeek 的短检测与结构化抽取使用非思考模式，避免短预算被默认思考消耗。参考：[图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/)、[模型说明](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、[Files API](https://api-docs.deepseek.com/zh-cn/guides/files_api/)。
+
 ## 快速上手
 
 1. **录入简历**：将 PDF/DOCX 拖入简历区域，或点击选择文件 → 自动展开页面预览 → 主动发送模型解析 → 校对来源、选择字段及目标档案 → 确认导入。拖入和预览不会自动调用模型，也可在简历中心或侧边栏手填。

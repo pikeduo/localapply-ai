@@ -13,7 +13,8 @@
 - 用户后续授权 file:// 设置页独立操作：options/standalone.js 复用同一 repository，将存储适配到按文件目录隔离的 IndexedDB，多页写入由 Web Lock 串行。它不访问/同步扩展私有数据，仅允许文件协议启用；不得将此回退推广到任意 HTTP 页面。
 - data/ai-client.js 为后台和文件页共用的 AI 管线，配置通过读取函数注入。文件 API 请求遵守 CORS，不能使用关闭浏览器安全策略的方式绕过；页面必须说明独立存储边界。
 - API 设置中的 customProviders 保存按地址建立的服务商，providerModels 按服务商保存模型；data/providers.js 统一解析和规范化地址。新增端点不得继承上一家的 Key/模型，默认备份也不得夹带这些 API 配置。
-- 模型列表只在设置页主动获取，wsa:listModels 仅接受可信扩展页面调用。列表不持久化，切换服务商/Key 后使旧响应失效；没有明确选择时不可回退预设第一个模型发请求。
+- 模型列表只在设置页主动获取，wsa:listModels 仅接受可信扩展页面调用。主模型/视觉模型必须使用完整原生下拉，已选值及手动输入不得过滤列表。近期列表只在当前标签页 sessionStorage 缓存 30 分钟，按页面目录/服务商/端点/密钥存储版本隔离，不进数据库/备份，刷新不得自动联网。没有明确选择时不可回退预设第一个模型。
+- DeepSeek 官方 deepseek-flash 支持图片，不能笼统标为纯文本；当前 Files API 列出图片格式，PDF/DOCX 可通过已有完整页面图路径处理。能力仍须实测。针对官方 api.deepseek.com，短探针/连接测试/结构化抽取显式关闭默认思考；探针至少 512 token，截断输出应为 unknown，禁止判成 unsupported。
 - 公共 FieldDefinition 只允许 fieldId/label/type/group/aliases/options/description/version。个人值位于 fieldValues，重复经历由 entries.entryId 关联。
 - 私有字段元数据默认不进入公共导出；publishDefinition 必须接收独立审核后的定义，不能自动复制经历标题。禁止新增 GitHub 上传功能，除非后续用户明确授权。
 - 现有 UI 通过 readLegacy/saveLegacy 兼容投影接入；三方合并只改用户编辑的路径，同字段冲突拒绝。不要重新引入整份旧状态直接覆盖存储。

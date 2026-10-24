@@ -67,7 +67,7 @@ select {
   font-size: 13px; background: #fff; color: var(--ink);
 }
 /* 模型优先从服务端列表选择，手动输入仅作兼容入口。 */
-#modelSelect { flex: 1; min-width: 180px; max-width: 100%; }
+#modelSelect, #visionModelSelect { flex: 1; min-width: 180px; max-width: 100%; }
 .manual-model { font-size: 12px; color: var(--sub); white-space: nowrap; }
 #modelsStatus { flex: 1; min-width: 180px; overflow-wrap: anywhere; }
 .btn {

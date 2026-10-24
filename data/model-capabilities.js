@@ -37,11 +37,12 @@
           if (signal?.aborted) throw new Error('已取消能力检测');
           try {
             const attachment = type === 'image' ? { type: 'image_url', image_url: { url: input.image } } : { type: 'file', file: input[type] };
-            const out = await call({ model, expectedContext: scope, signal, fileInput: type !== 'image', timeoutMs: 30000, maxTokens: 40,
+            const out = await call({ model, expectedContext: scope, signal, fileInput: type !== 'image', disableThinking: true, timeoutMs: 30000, maxTokens: 512,
               messages: [{ role: 'user', content: [attachment, { type: 'text', text: '读取附件图片中唯一的8位数字，只回复数字。不要猜测，无法看到图片则回复 UNKNOWN。' }] }] });
             // 预期数字从未放入提示词，接口忽略附件或只回复“支持”也不能通过。
-            report[type] = out.content.trim() === input.nonce ? 'supported' : 'unverified';
-            if (report[type] !== 'supported') report.reasons[type] = '未正确读出测试图片，识别能力未验证';
+            report[type] = out.finishReason === 'length' ? 'unknown' : out.content.trim() === input.nonce ? 'supported' : 'unverified';
+            if (report[type] !== 'supported') report.reasons[type] = out.finishReason === 'length'
+              ? '检测输出被截断，可能是推理/输出预算不足，不能据此判定不支持识别' : '未正确读出测试图片，识别能力未验证';
           } catch (error) {
             if (signal?.aborted) throw new Error('已取消能力检测');
             report[type] = ['HTTP_400', 'HTTP_404', 'HTTP_415', 'HTTP_422'].includes(error.code) ? 'unsupported' : 'unknown';
@@ -68,7 +69,10 @@
       const visual = candidates.find((item) => item.model === settings.visionModel && item.report.image === 'supported')
         || candidates.find((item) => item.report.image === 'supported');
       const chosen = native || visual;
-      if (!chosen) throw new Error('当前模型尚未通过此格式或图片识别检测，请先检测能力或更换支持文件/图片的模型。纯文本模型不能解析简历文件。');
+      if (!chosen) {
+        if (!candidates.length) throw new Error('当前模型尚未通过识别检测（尚未检测或已过期）。请先点击“检测文件/图片识别能力”；尚未检测不代表模型不支持。');
+        throw new Error('当前模型尚未通过此格式或图片识别检测，请查看检测结果。检测失败或未知不代表模型不支持；可重试检测或改选已通过检测的模型。');
+      }
       return { mode: native ? 'file' : 'vision', model: chosen.model, token: chosen.report.token,
         scope: chosen.scope, providerId: provider.providerId, baseUrl: provider.baseUrl, type };
     }

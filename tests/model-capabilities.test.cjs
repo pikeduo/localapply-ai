@@ -32,6 +32,14 @@ test('普通 HTTP 成功、模型自述或忽略附件均不能获得识别能�
   assert.equal(env.calls.length, 3);
   assert.ok(env.calls.every((req) => !JSON.stringify(req.messages).includes('73185204')));
 });
+
+test('探针关闭思考并给足短回答预算，截断输出不能误判为不支持', async () => {
+  const env = fixture(); env.setReply(async () => ({ content: '', finishReason: 'length' }));
+  const report = await env.client.probe(probe());
+  assert.ok(env.calls.every((req) => req.disableThinking === true && req.maxTokens >= 512));
+  assert.equal(report.results[0].image, 'unknown'); assert.match(report.results[0].reasons.image, /截断/);
+  await assert.rejects(env.client.route('pdf'), /未知不代表模型不支持/);
+});
 test('图片、PDF、DOCX 分开实测；原文件优先，不支持文件时才使用已验证图片路径', async () => {
   const env = fixture(); await env.client.probe(probe());
   assert.equal((await env.client.route('docx')).mode, 'file');

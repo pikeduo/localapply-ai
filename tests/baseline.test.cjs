@@ -154,6 +154,19 @@ test('后台只向所选自定义端点发送其 Key，无 Key 本地服务不�
   assert.ok(!Object.hasOwn(calls[1].request.headers, 'Authorization'));
 });
 
+test('官方 DeepSeek 短探针显式关闭默认思考，不把该参数发给其他服务商', async () => {
+  const initial = sandbox().context.WangshenTemplates.defaultState();
+  initial.settings.provider = 'deepseek'; initial.settings.model = 'deepseek-flash'; initial.settings.apiKeys.deepseek = 'fake-only-test-key';
+  const { context, storage } = sandbox('background.js', { wangshenAutofill: initial }); const requests = [];
+  context.fetch = async (url, req) => { requests.push(JSON.parse(req.body)); return { ok: true, json: async () => ({ choices: [{ finish_reason: 'stop', message: { content: '73185204' } }] }) }; };
+  const out = await context.callGLM({ messages: [], disableThinking: true, maxTokens: 512 });
+  assert.equal(requests[0].thinking.type, 'disabled'); assert.equal(out.finishReason, 'stop');
+  storage['localapply.apiSettings'].provider = 'qwen'; storage['localapply.apiSettings'].apiKeys.qwen = 'fake-qwen-only-key';
+  await context.callGLM({ messages: [], disableThinking: true }); assert.ok(!Object.hasOwn(requests[1], 'thinking'));
+  context.fetch = async () => ({ ok: true, json: async () => ({ choices: [{ finish_reason: 'length', message: { content: null, reasoning_content: '不作为最终回答' } }] }) });
+  await assert.rejects(context.callGLM({ messages: [] }), /输出被截断/);
+});
+
 // 使用独立合成端点测试模型发现，所有网络响应都由内存桩提供。
 function modelListingFixture(provider = 'custom.models') {
   const initial = sandbox().context.WangshenTemplates.defaultState();

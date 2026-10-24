@@ -57,18 +57,18 @@
       <div class="row">
         <label class="lbl" for="modelSelect">主模型</label>
         <select id="modelSelect" disabled><option value="">请先获取模型列表</option></select>
-        <label class="manual-model"><input type="checkbox" id="manualModel" /> 手动填写模型 ID</label>
-        <input type="text" id="model" list="modelList" aria-label="手动模型 ID" hidden />
-        <datalist id="modelList"></datalist>
+        <label class="manual-model"><input type="checkbox" id="manualModel" aria-label="手动填写主模型 ID" /> 手动填写模型 ID</label>
+        <input type="text" id="model" aria-label="手动模型 ID" placeholder="输入完整模型 ID" hidden />
         <button id="btnTestKey" class="btn plain">测试连接</button>
         <span id="testResult" class="muted"></span>
       </div>
       <div class="row">
-        <label class="lbl">视觉模型</label>
-        <input type="text" id="visionModel" list="visionList" />
-        <datalist id="visionList"></datalist>
+        <label class="lbl" for="visionModelSelect">视觉模型</label>
+        <select id="visionModelSelect"><option value="">使用主模型</option></select>
+        <label class="manual-model"><input type="checkbox" id="manualVisionModel" aria-label="手动填写视觉模型 ID" /> 手动填写模型 ID</label>
+        <input type="text" id="visionModel" aria-label="手动视觉模型 ID" placeholder="输入完整视觉模型 ID" hidden />
       </div>
-      <p class="muted">模型列表来自当前服务商；获取失败或接口未开放时可手动填写。列表本身不一定说明聊天或图片能力，视觉模型请按服务商说明选择。</p>
+      <p class="muted">主模型和视觉模型展开时均显示完整已获取列表，不按已选值过滤；本标签页刷新可复用近期列表。获取失败时可手动填写 ID。列表不代表识别能力，仍需实测。</p>
       <p class="muted" id="providerNote"></p>
       <div class="row"><button id="btnDetectCapabilities" class="btn plain">检测文件/图片识别能力</button><button id="cancelCapabilities" class="btn ghost">取消检测</button></div>
       <p id="capabilityStatus" class="muted" role="status">尚未检测识别能力。</p>

@@ -340,8 +340,8 @@
     },
     deepseek: {
       name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', visionDefault: false,
-      models: ['deepseek-flash', 'deepseek-v4-pro'], visionModels: [],
-      note: 'OpenAI 兼容接口；模型 ID 可手动填写，以服务商账户实际支持为准。扫描件请配置支持图片的视觉模型。',
+      models: ['deepseek-flash', 'deepseek-v4-pro'], visionModels: ['deepseek-flash'],
+      note: '官方 deepseek-flash 支持图片，deepseek-v4-pro 不支持图片。PDF/DOCX 可转完整页面图片交给 Flash 识别；不把文件上传接口等同于支持原始 PDF。以当前账户实测结果为准。',
     },
     moonshot: {
       name: '月之暗面 Kimi', baseUrl: 'https://api.moonshot.cn/v1', visionDefault: false,

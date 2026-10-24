@@ -2,7 +2,7 @@
 'use strict';
 
 let state = null;
-let availableModels = null; // 当前页面、当前服务商获取的模型 ID，不跨服务商缓存。
+let availableModels = null; // 当前端点近期获取的完整列表；临时标签页缓存不进入数据库或备份。
 let modelsRequestId = 0; // 使切换服务商/Key 后迟到的响应失效。
 
 const $ = (s) => document.querySelector(s);
@@ -31,12 +31,13 @@ async function init() {
   initCapabilities();
   $('#btnFetchModels').addEventListener('click', fetchAvailableModels);
   $('#manualModel').addEventListener('change', () => {
-    $('#model').hidden = !$('#manualModel').checked;
-    $('#modelSelect').disabled = $('#manualModel').checked || !availableModels?.length;
+    renderModelChoices();
   });
   $('#modelSelect').addEventListener('change', () => {
     state.settings.model = $('#modelSelect').value;
     $('#model').value = state.settings.model;
+    $('#manualModel').checked = false;
+    renderModelChoices();
     rememberProviderModels();
     resetCapabilities();
     save();
@@ -50,8 +51,16 @@ async function init() {
     save();
   });
   $('#visionModel').value = state.settings.visionModel || '';
+  $('#manualVisionModel').addEventListener('change', renderModelChoices);
+  $('#visionModelSelect').addEventListener('change', () => {
+    state.settings.visionModel = $('#visionModelSelect').value;
+    $('#visionModel').value = state.settings.visionModel;
+    $('#manualVisionModel').checked = false;
+    renderModelChoices(); rememberProviderModels(); resetCapabilities(); save();
+  });
   $('#visionModel').addEventListener('change', () => {
     state.settings.visionModel = $('#visionModel').value.trim();
+    renderModelChoices();
     rememberProviderModels();
     resetCapabilities();
     save();
@@ -106,12 +115,6 @@ function refreshProviderUI() {
   const vmInput = $('#visionModel');
   vmInput.value = state.settings.visionModel || '';
   vmInput.placeholder = p.visionModels[0] ? '如 ' + p.visionModels[0] + '（留空=用主模型）' : '留空 = 用主模型';
-  const ml = $('#modelList');
-  ml.innerHTML = '';
-  (p.models || []).forEach((m) => ml.appendChild(new Option(m, m)));
-  const vl = $('#visionList');
-  vl.innerHTML = '';
-  (p.visionModels || []).forEach((m) => vl.appendChild(new Option(m, m)));
   $('#providerNote').textContent = p.note || '';
   $('#customBaseRow').style.display = '';
   $('#customBase').readOnly = !p.custom && providerId !== 'ollama';
@@ -119,20 +122,42 @@ function refreshProviderUI() {
   resetModelCatalog();
 }
 
-// 服务商或 Key 改变后清空旧列表，已保存的模型保留，但不能冒充实时可用列表。
-function resetModelCatalog() {
+// 临时缓存按端点及密钥存储版本隔离，不缓存 Key 本身，也不跨账户套用模型列表。
+function modelCatalogKey() {
+  const p = LocalApplyProviders.resolve(state.settings);
+  const vault = state.settings.vault || {};
+  return 'localapply.models:' + JSON.stringify([new URL('.', location.href).href, p.providerId, p.baseUrl, vault.revision || 0, vault.localRevision || 0]);
+}
+// 缓存只活在当前标签页会话中，读取异常或过期时回到主动获取入口。
+function readModelCatalog() {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(modelCatalogKey()));
+    if (!cached || !Number.isFinite(cached.savedAt) || Date.now() - cached.savedAt > 1800000 || cached.savedAt > Date.now()
+      || !Array.isArray(cached.models) || cached.models.length > 10000 || cached.models.some((id) => typeof id !== 'string' || !id || id.length > 2000)) return null;
+    return cached.models;
+  } catch { return null; }
+}
+// 写入失败不影响当页下拉，禁止缓存失败导致配置页面不可用。
+function saveModelCatalog(models) {
+  try { sessionStorage.setItem(modelCatalogKey(), JSON.stringify({ models, savedAt: Date.now() })); } catch { /* 使用内存列表即可。 */ }
+}
+// 服务商/Key 变化后按新作用域读取列表，已保存的 ID 仍保留并清楚标注。
+function resetModelCatalog({ clearCache = false } = {}) {
   resetCapabilities();
   modelsRequestId++;
-  availableModels = null;
+  if (clearCache) { try { sessionStorage.removeItem(modelCatalogKey()); } catch { /* 不依赖浏览器必须允许会话存储。 */ } }
+  availableModels = clearCache ? null : readModelCatalog();
   renderModelChoices();
-  $('#modelsStatus').textContent = '填写接口和所需 Key 后，先获取模型列表，再选择主模型。';
+  $('#modelsStatus').textContent = availableModels
+    ? `已恢复本标签页近期的 ${availableModels.length} 个模型；展开可选全部型号，也可重新获取。`
+    : '填写接口和所需 Key 后，先获取模型列表，再选择主模型。';
   $('#modelsStatus').className = 'muted';
   $('#btnFetchModels').disabled = false;
   $('#btnFetchModels').textContent = '获取可用模型';
   $('#testResult').textContent = '';
 }
 
-// 仅把服务器返回的模型加入选择列表；缺失的旧模型标注清楚，不自动替用户换模型。
+// 两个原生下拉始终放入完整列表，已选值和手动输入不会成为过滤条件。
 function renderModelChoices() {
   const current = state.settings.model || '';
   const select = $('#modelSelect');
@@ -141,12 +166,13 @@ function renderModelChoices() {
   if (current && !availableModels?.includes(current)) options.push(new Option('已保存：' + current + '（尚未在本次列表确认）', current));
   select.replaceChildren(...options);
   select.value = current;
-  select.disabled = $('#manualModel').checked || !availableModels?.length;
+  select.disabled = !availableModels?.length;
   $('#model').hidden = !$('#manualModel').checked;
-  if (availableModels) {
-    $('#modelList').replaceChildren(...availableModels.map((model) => new Option(model, model)));
-    $('#visionList').replaceChildren(...availableModels.map((model) => new Option(model, model)));
-  }
+  const vision = state.settings.visionModel || '';
+  const visionOptions = [new Option('使用主模型', ''), ...(availableModels || []).map((model) => new Option(model, model))];
+  if (vision && !availableModels?.includes(vision)) visionOptions.push(new Option('已保存：' + vision + '（尚未在本次列表确认）', vision));
+  $('#visionModelSelect').replaceChildren(...visionOptions); $('#visionModelSelect').value = vision;
+  $('#visionModel').hidden = !$('#manualVisionModel').checked;
 }
 
 // 用户主动获取模型列表；保存配置后由可信后台携带当前端点的 Key 发起 GET。
@@ -157,7 +183,7 @@ async function fetchAvailableModels() {
   try { await flushCredentials(); }
   catch (error) { $('#btnFetchModels').disabled = false; $('#modelsStatus').textContent = '获取失败：' + error.message; return; }
   if (clickedProvider !== state.settings.provider) { $('#btnFetchModels').disabled = false; return; }
-  resetModelCatalog();
+  resetModelCatalog({ clearCache: true });
   const requestId = modelsRequestId;
   const providerId = state.settings.provider;
   const status = $('#modelsStatus');
@@ -171,6 +197,7 @@ async function fetchAvailableModels() {
     if (!response.ok) throw new Error(response.error);
     if (response.providerId !== providerId) throw new Error('服务商已变化，请重新获取模型列表。');
     availableModels = response.models;
+    saveModelCatalog(availableModels);
     if (availableModels.length) $('#manualModel').checked = false;
     renderModelChoices();
     const missing = state.settings.model && !availableModels.includes(state.settings.model);
@@ -256,7 +283,7 @@ async function testConnection() {
   el.className = 'muted';
   try { await flushCredentials(); } catch (error) { el.textContent = '✗ ' + error.message; el.className = 'err'; return; }
   const res = await sendMessage('wsa:aiChat', {
-    payload: { messages: [{ role: 'user', content: '请只回复两个字：正常' }], maxTokens: 16, temperature: 0.1 },
+    payload: { messages: [{ role: 'user', content: '请只回复两个字：正常' }], maxTokens: 128, disableThinking: true, temperature: 0.1 },
   });
   if (res.ok) {
     el.textContent = '✓ 连接正常（' + res.model + '）';

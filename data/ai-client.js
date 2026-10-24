@@ -45,6 +45,8 @@
         const response = await fetch(baseUrl + '/chat/completions', { method: 'POST', redirect: 'error',
           headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}) },
           body: JSON.stringify({ model, messages: req.messages, temperature: req.temperature ?? 0.2, max_tokens: req.maxTokens, stream: false,
+            // DeepSeek 默认开启思考，短识别探针/连通测试需关闭，避免预算耗尽而没有最终答案。
+            ...(req.disableThinking && new URL(baseUrl).hostname === 'api.deepseek.com' ? { thinking: { type: 'disabled' } } : {}),
             ...(req.fileInput && new URL(baseUrl).hostname === 'openrouter.ai' ? { plugins: [{ id: 'file-parser', pdf: { engine: 'native' } }] } : {}) }),
           signal: controller.signal });
         if (!response.ok) {
@@ -56,8 +58,11 @@
         try { data = await response.json(); }
         catch (error) { if (error.name === 'AbortError') throw error; throw aiError('AI 回复不是有效 JSON'); }
         const content = data?.choices?.[0]?.message?.content;
+        if (data?.choices?.[0]?.finish_reason === 'length' && !content) {
+          const error = aiError('模型输出被截断，可能是思考/输出预算不足，请增加预算或关闭思考模式'); error.code = 'OUTPUT_LIMIT'; throw error;
+        }
         if (typeof content !== 'string' || content.length > 300000) throw aiError('AI 返回格式异常或内容超限。');
-        return { content, usage: data.usage || null, model };
+        return { content, usage: data.usage || null, model, finishReason: data.choices[0].finish_reason || null };
       } catch (error) {
         if (controller.signal.aborted) throw aiError(req.signal?.aborted ? '已取消解析' : 'AI 请求超时，请重试或检查网络。');
         if (error instanceof TypeError) throw aiError('网络请求失败，请检查服务地址和访问权限。');
@@ -93,7 +98,7 @@
             || payload.pages.reduce((n, p) => n + p.dataUrl.length, 0) > 16 * 1024 * 1024) throw aiError('简历页面图片格式或大小无效');
           attachments = payload.pages.flatMap((p, i) => [{ type: 'text', text: '第 ' + (i + 1) + ' 页/图' }, { type: 'image_url', image_url: { url: p.dataUrl } }]);
         }
-        const { content } = await callGLM({ model: route.model, expectedContext: route.scope, signal: controller.signal,
+        const { content } = await callGLM({ model: route.model, expectedContext: route.scope, signal: controller.signal, disableThinking: true,
           fileInput: route.mode === 'file', timeoutMs: 120000, maxTokens: 10000,
           messages: [{ role: 'system', content: global.LocalApplyResume.prompt() }, { role: 'user', content: attachments }] });
         const data = extractJson(content);

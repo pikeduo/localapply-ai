@@ -447,11 +447,27 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       assert.equal(await options.locator('#modelSelect').inputValue(), '');
       assert.equal((await rpc(options, 'wsa:getState')).state.settings.model, '');
       await options.locator('#modelSelect').selectOption('synthetic-other');
+      // 已选值不能成为下一次展开的过滤条件；视觉模型也使用完整的原生下拉。
+      assert.deepEqual(await options.locator('#modelSelect option').evaluateAll((items) => items.map((item) => item.value)), ['', 'synthetic-local', 'synthetic-other']);
+      assert.deepEqual(await options.locator('#visionModelSelect option').evaluateAll((items) => items.map((item) => item.value)), ['', 'synthetic-local', 'synthetic-other']);
+      await options.locator('#visionModelSelect').selectOption('synthetic-local'); await options.evaluate(() => flushSaves());
+      assert.equal((await rpc(options, 'wsa:getState')).state.settings.visionModel, 'synthetic-local');
+      assert.equal(await options.locator('#visionModelSelect option[value="synthetic-other"]').count(), 1);
+      await options.locator('#manualVisionModel').check(); await options.locator('#visionModel').fill('manual-vision-id'); await options.locator('#visionModel').press('Tab');
+      assert.equal(await options.locator('#visionModelSelect option[value="synthetic-other"]').count(), 1);
+      await options.locator('#visionModelSelect').selectOption('synthetic-local'); assert.equal(await options.locator('#manualVisionModel').isChecked(), false);
+      await options.locator('#manualModel').check(); assert.equal(await options.locator('#modelSelect').isDisabled(), false);
+      await options.locator('#modelSelect').selectOption('synthetic-other'); assert.equal(await options.locator('#manualModel').isChecked(), false);
       await options.locator('#btnTestKey').click();
       await options.waitForFunction(() => document.getElementById('testResult').textContent.includes('连接正常'));
       assert.equal(calls.at(-1).model, 'synthetic-other');
       await options.reload(); await options.locator('#entryProfile option').first().waitFor({ state: 'attached' });
       assert.equal(await options.locator('#modelSelect').inputValue(), 'synthetic-other');
+      assert.equal(await options.locator('#modelSelect').isDisabled(), false);
+      assert.equal(await options.locator('#modelSelect option[value="synthetic-local"]').count(), 1);
+      assert.equal(await options.locator('#visionModelSelect').inputValue(), 'synthetic-local');
+      await options.locator('#apiKey').fill('fake-catalog-key'); await options.locator('#saveKey').click(); await options.evaluate(() => flushCredentials());
+      assert.equal(await options.locator('#modelSelect option[value="synthetic-local"]').count(), 0);
       assert.equal(await options.locator('#modelSelect').isDisabled(), true);
       modelApi.status = 401;
       await options.locator('#btnFetchModels').click();
@@ -580,6 +596,18 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       await page.locator('#modelSelect').selectOption('synthetic-local');
       await page.locator('#btnTestKey').click();
       await page.waitForFunction(() => document.getElementById('testResult').textContent.includes('连接正常'));
+      await page.locator('#visionModelSelect').selectOption('synthetic-other'); await page.evaluate(() => flushSaves());
+      const requests = modelRequests.length;
+      await page.reload(); await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      assert.equal(await page.locator('#modelSelect').inputValue(), 'synthetic-local');
+      assert.deepEqual(await page.locator('#visionModelSelect option').evaluateAll((items) => items.map((item) => item.value)), ['', 'synthetic-local', 'synthetic-other']);
+      assert.equal(await page.locator('#visionModelSelect').inputValue(), 'synthetic-other');
+      assert.equal(modelRequests.length, requests); // 刷新只恢复临时列表，不静默联网。
+      // 文件页刷新会结束可选口令会话；列表可保留，使用受保护 Key 仍须解锁。
+      await page.locator('#keyProtection').evaluate((details) => { details.open = true; });
+      await page.locator('#vaultPassword').fill('synthetic-password'); await page.locator('#vaultUnlock').click();
+      await page.evaluate(() => flushCredentials());
+      await page.locator('#visionModelSelect').selectOption(''); await page.evaluate(() => flushSaves());
     });
     await t.test('本地文件 PDF 通过读取、视觉假接口、校对确认入库，原文件不持久化', async () => {
       await detectModel(page);
