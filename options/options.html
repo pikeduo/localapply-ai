@@ -7,14 +7,15 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>网申自动填写助手 · 设置</h1>
+    <h1>LocalApply <span class="muted">本地智能网申助手</span></h1>
+    <nav class="page-nav" aria-label="页面导航"><a href="#resumeCenter">简历中心</a><a href="#pdfCard">导入简历</a><a href="#aiSettings">模型与密钥</a><a href="#privacySettings">数据与备份</a></nav>
     <p id="initializationError" class="init-error" role="alert" hidden></p>
     <p id="standaloneNotice" class="standalone-notice" role="status" hidden>当前为本地文件管理模式：配置和资料保存在此浏览器的独立 IndexedDB，与插件数据互不自动同步。可通过 JSON 备份交换资料（备份不含 API 配置/Key）。获取模型、测试连接和 AI 解析需要服务端允许文件页的跨域请求；网页自动填充需从插件入口使用。</p>
     <div id="toast" class="toast"></div>
 
-    <section class="card">
-      <h2>① AI 服务（可选，不用 AI 可整节跳过）</h2>
-      <p class="muted" style="margin-top:-4px">不配置 AI 完全不影响使用：直接在侧边栏「字段库」手动录入，核心的一键填充零配置可用。AI 只用来加速两件事：简历 PDF 自动提取、开放题起草。</p>
+    <section class="card" id="aiSettings">
+      <h2>模型与密钥 <span class="badge">可选</span></h2>
+      <p class="muted" style="margin-top:-4px">不配置 AI 完全不影响使用：直接在侧边栏「字段库」手动录入，核心的一键填充零配置可用。AI 只用来加速两件事：PDF/DOCX 简历解析、开放题起草。</p>
       <div class="row">
         <label class="lbl" for="provider">服务商</label>
         <input id="provider" type="text" list="providerList" autocomplete="off" placeholder="选择服务商，或输入 IP:端口 / API 地址" />
@@ -26,9 +27,20 @@
         <input type="text" id="customBase" placeholder="https://xx.com/v1（OpenAI 兼容，不含 /chat/completions）" />
       </div>
       <div class="row">
+        <label class="lbl" for="vaultPassword">安全口令</label>
+        <input type="password" id="vaultPassword" autocomplete="off" placeholder="至少 8 位，口令不保存" />
+        <input type="password" id="vaultConfirm" autocomplete="off" placeholder="再次输入口令" aria-label="确认安全口令" />
+        <button id="vaultSetup" class="btn plain">设置口令并加密</button>
+        <button id="vaultUnlock" class="btn plain" hidden>解锁密钥</button>
+        <button id="vaultLock" class="btn ghost" hidden>锁定</button>
+      </div>
+      <p id="vaultStatus" class="muted" role="status"></p>
+      <p class="muted">API Key 使用口令派生密钥加密，仅在本地解锁。请自行保管口令：无法找回；备份不包含 Key、口令或保险库。个人简历资料本身仍按本地数据库保存。</p>
+      <div class="row">
         <label class="lbl">API Key</label>
         <input type="password" id="apiKey" placeholder="在所选服务商官网创建" autocomplete="off" />
         <button id="btnRevealKey" class="btn ghost">显示</button>
+        <button id="deleteKey" class="btn ghost">删除当前 Key</button>
       </div>
       <div class="row">
         <span class="lbl"></span>
@@ -55,7 +67,7 @@
     </section>
 
     <section class="card">
-      <h2>② 填充设置</h2>
+      <h2>填写偏好</h2>
       <div class="row">
         <label class="lbl">自动填充阈值</label>
         <input type="range" id="autoThreshold" min="0.5" max="1" step="0.05" />
@@ -73,29 +85,34 @@
     </section>
 
     <section class="card" id="pdfCard">
-      <h2>③ 简历 PDF 导入</h2>
+      <h2>导入简历 <span class="badge">PDF / DOCX</span></h2>
       <div class="row">
-        <input type="file" id="pdfFile" accept="application/pdf,.pdf" />
-        <button id="btnExtract" class="btn">开始提取</button>
+        <input type="file" id="pdfFile" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+        <button id="btnExtract" class="btn plain">本地读取与预览</button>
+        <button id="sendResume" class="btn" hidden>发送内容给当前模型解析</button>
+        <button id="cancelResume" class="btn ghost">取消并清理草稿</button>
       </div>
       <div id="pdfStatus" class="muted" style="margin-top:8px"></div>
+      <details><summary>查看本地提取文本（仅本次内存）</summary><pre id="sourcePreview"></pre></details>
       <div id="pdfReview"></div>
       <div class="row" id="importRow" style="display:none">
         <label class="lbl">导入到档案</label>
         <select id="targetProfile"></select>
+        <label><input id="overwriteResume" type="checkbox" /> 覆盖勾选项已有值</label>
+        <button id="refreshReview" class="btn ghost">刷新差异</button>
         <button id="btnImport" class="btn">确认导入勾选字段</button>
       </div>
-      <p class="muted">流程：PDF → pdf.js 抽文本 → 不足 200 字或乱码率超 30% 自动改走 GLM 视觉模式（逐页）→ 提取结果先进入上方校对区，人工确认后才写入档案。禁止跳过校对直接入库。</p>
+      <p class="muted">PDF/DOCX 文件不超过 10 MiB，PDF 最多 30 页。本地读取后由你决定是否发送文本；文字不足 80 字的 PDF 可使用视觉模型。结果按教育、实习、工作和项目分别保存，逐项核对来源后确认。同一文件在同一档案重复导入会复用经历；默认仅补空白。原文件、全文和页面图片不持久化。</p>
     </section>
 
     <section class="card">
-      <h2>④ 模板管理</h2>
+      <h2>字段模板</h2>
       <div id="tplList"></div>
       <p class="muted">全字段模板（互联网 + 央国企合并，51 字段）：新建档案（侧边栏顶部「＋」）默认带全部字段，有值就填、没值自动跳过；字段可在档案里随意增删改。</p>
     </section>
 
-    <section class="card">
-      <h2>⑤ 数据与隐私</h2>
+    <section class="card" id="privacySettings">
+      <h2>数据与隐私</h2>
       <div class="row">
         <button id="btnBackup" class="btn plain">导出档案备份（JSON）</button>
         <button id="btnRestore" class="btn ghost">从备份恢复</button>
@@ -117,8 +134,9 @@
         插件永不自动点击任何「提交/投递」类按钮，最后一步永远由你本人操作。
       </p>
     </section>
-    <section class="card">
-      <h2>⑥ 重复经历（本地数据管理）</h2>
+    <section class="card" id="resumeCenter">
+      <h2>简历中心</h2>
+      <div class="row"><input id="newProfileName" type="text" placeholder="新档案名称" aria-label="新档案名称" /><button id="createResumeProfile" class="btn plain">新建档案</button></div>
       <p class="muted">教育、实习、工作、项目分别保存多条经历。此处数据已纳入备份；当前填表引擎仍使用侧边栏平面字段，重复区块自动匹配将在后续阶段接入。</p>
       <div class="row">
         <select id="entryProfile" aria-label="经历所属档案"></select>
@@ -126,19 +144,30 @@
         <input id="entryTitle" type="text" placeholder="经历标题（仅本地）" aria-label="经历标题" />
         <button id="btnAddEntry" class="btn">新增经历</button>
       </div>
+      <details><summary>编辑基本资料与动态字段</summary><div id="basicFields" class="basic-grid"></div></details>
+      <p id="centerStatus" class="muted" role="status"></p>
       <div id="entriesList"></div>
       <div id="entryStatus" class="muted" role="status"></div>
     </section>
   </div>
 
   <script src="../libs/pdfjs/pdf.min.js"></script>
+  <!-- 经典 worker 预载支持 file://；PDF.js 只在本地执行，不动态导入远程脚本。 -->
+  <script src="../libs/pdfjs/pdf.worker.min.js"></script>
+  <script src="../libs/docx/fflate.min.js"></script>
+  <script src="../libs/docx/mammoth.min.js"></script>
   <script src="../data/templates.js"></script>
   <script src="../data/providers.js"></script>
+  <script src="../data/key-vault.js"></script>
+  <script src="../data/resume.js"></script>
   <script src="../data/local-store.js"></script>
   <script src="../data/ai-client.js"></script>
   <script src="standalone.js"></script>
   <script src="../common.js"></script>
   <script src="data-management.js"></script>
+  <script src="credentials.js"></script>
+  <script src="resume-files.js"></script>
+  <script src="resume-ui.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

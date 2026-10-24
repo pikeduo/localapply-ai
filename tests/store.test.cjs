@@ -10,8 +10,8 @@ const { webcrypto } = require('node:crypto');
 // 创建独立 JS 上下文与持久内存介质，可模拟后台重启和存储异常。
 function fixture(initial = {}) {
   const disk = structuredClone(initial);
-  const context = vm.createContext({ crypto: webcrypto, console, URL });
-  for (const name of ['data/templates.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
+  const context = vm.createContext({ crypto: webcrypto, console, URL, TextEncoder, TextDecoder, btoa, atob });
+  for (const name of ['data/templates.js', 'data/key-vault.js', 'data/resume.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
   let failCountdown = null;
   const storage = {
     get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))),
@@ -23,7 +23,7 @@ function fixture(initial = {}) {
     setAccessLevel: async (input) => { assert.equal(input.accessLevel, 'TRUSTED_CONTEXTS'); },
   };
   const store = context.LocalApplyStore;
-  return { disk, store, templates: context.WangshenTemplates, repo: store.createRepository(storage),
+  return { disk, store, resume: context.LocalApplyResume, templates: context.WangshenTemplates, repo: store.createRepository(storage),
     restart: () => store.createRepository(storage), fail: (after = 0) => { failCountdown = after; } };
 }
 
@@ -103,7 +103,7 @@ test('迁移写失败保留原数据，重新初始化可恢复', async () => {
   const before = JSON.stringify(env.disk.wangshenAutofill); env.fail();
   await assert.rejects(env.repo.initialize(), /模拟磁盘/);
   assert.equal(JSON.stringify(env.disk.wangshenAutofill), before);
-  assert.equal((await env.restart().initialize()).schemaVersion, 2);
+  assert.equal((await env.restart().initialize()).schemaVersion, 3);
 });
 
 test('完整备份往返恢复重复经历、自定义字段和映射；默认排除 Key', async () => {
@@ -271,4 +271,90 @@ test('自定义服务商、每家模型与 Key 独立保存，重启可读，备
   assert.equal(after.settings.providerModels.deepseek.model, 'synthetic-deepseek');
   assert.equal(after.settings.apiKeys['custom.unit'], 'fake-custom-unit-key');
   const exported = JSON.stringify(await repo.exportBackup()); assert.ok(!exported.includes('customProviders')); assert.ok(!exported.includes('fake-custom-unit-key'));
+});
+
+test('口令保险库认证后清理旧明文，错误口令/锁定/后台重启均不能读取 Key', async () => {
+  const seed = fixture().templates.defaultState(); seed.settings.apiKeys = { zhipu: 'synthetic-private-secret' };
+  const env = fixture({ wangshenAutofill: seed }); await env.repo.initialize();
+  await env.repo.vaultCommand('setup', { password: 'test-passphrase' });
+  assert.ok(!JSON.stringify(env.disk).includes('synthetic-private-secret'));
+  assert.equal((await env.repo.readAiSettings()).apiKeys.zhipu, 'synthetic-private-secret');
+  assert.deepEqual(Object.keys((await env.repo.readLegacy()).settings.apiKeys), []);
+  assert.equal(env.disk.wangshenAutofill.profiles[0].id, seed.profiles[0].id);
+  const restarted = env.restart(); const before = JSON.stringify(env.disk);
+  await assert.rejects(restarted.readAiSettings(), /锁定/);
+  await assert.rejects(restarted.vaultCommand('unlock', { password: 'wrong-password' }), /口令错误/);
+  assert.equal(JSON.stringify(env.disk), before);
+  await restarted.vaultCommand('unlock', { password: 'test-passphrase' });
+  const settings = (await restarted.readLegacy()).settings;
+  await restarted.vaultCommand('setKey', { providerId: 'deepseek', key: 'synthetic-replacement', revision: settings.vault.revision });
+  assert.ok(!JSON.stringify(env.disk).includes('synthetic-replacement'));
+  await assert.rejects(restarted.vaultCommand('setKey', { providerId: 'deepseek', key: 'stale-value', revision: settings.vault.revision }), /已变化/);
+  await restarted.vaultCommand('lock');
+  assert.ok((await restarted.read()).profiles.length);
+  assert.ok(!JSON.stringify(await restarted.exportBackup()).includes('ciphertext'));
+  await restarted.vaultCommand('unlock', { password: 'test-passphrase' });
+  assert.equal((await restarted.readAiSettings()).apiKeys.deepseek, 'synthetic-replacement');
+  const record = env.disk['localapply.keyVault']; record.ciphertext = (record.ciphertext[0] === 'A' ? 'B' : 'A') + record.ciphertext.slice(1);
+  await assert.rejects(restarted.readAiSettings(), /保险库已损坏/);
+});
+
+test('保险库迁移清理中断后旧数据可恢复，解锁重试才完成清理', async () => {
+  const seed = fixture().templates.defaultState(); seed.settings.apiKeys = { zhipu: 'synthetic-migration-secret' };
+  const env = fixture({ wangshenAutofill: seed }); await env.repo.initialize();
+  env.fail(1); // 首次密文写成功，清理明文阶段失败。
+  await assert.rejects(env.repo.vaultCommand('setup', { password: 'test-passphrase' }), /模拟磁盘/);
+  assert.equal(env.disk['localapply.keyVault'].migrationPending, true);
+  assert.equal(env.disk.wangshenAutofill.settings.apiKeys.zhipu, 'synthetic-migration-secret');
+  const restarted = env.restart(); await restarted.vaultCommand('unlock', { password: 'test-passphrase' });
+  assert.equal(env.disk['localapply.keyVault'].migrationPending, false);
+  assert.ok(!JSON.stringify(env.disk).includes('synthetic-migration-secret'));
+});
+
+test('简历来源校验、确认导入、重复文件去重、档案隔离及备份来源往返', async () => {
+  const env = fixture(); const files = require('./resume-fixtures.cjs');
+  const source = { type: 'docx', mode: 'text', pages: [files.text], text: files.text };
+  const normalized = env.resume.normalize(files.parsed(), source);
+  assert.equal(normalized.find((row) => row.key === 'gpa').checked, false);
+  assert.equal(normalized.find((row) => row.key === 'name').checked, true);
+  const rows = normalized.filter((row) => row.checked).map(({ kind, index, key, value, evidence }) => ({ kind, index, key, value, evidence }));
+  const payload = { profileId: 'p1', fingerprint: 'a'.repeat(64), rows, overwrite: false };
+  const before = await env.repo.read();
+  await assert.rejects(command(env.repo, 'importResume', { ...payload, rows: [{ ...rows[0], hiddenFile: 'forbidden' }] }, before.revision), /契约/);
+  assert.equal((await env.repo.read()).revision, before.revision);
+  await command(env.repo, 'importResume', payload, before.revision);
+  let db = await env.repo.read(); assert.equal(db.entries.length, 5);
+  assert.equal(value(db, 'p1', 'builtin.name'), 'Test Person');
+  assert.ok(db.fieldValues.find((v) => v.fieldId === 'builtin.name').evidence.verified);
+  await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: 'User edit' });
+  assert.ok(!(await env.repo.read()).fieldValues.find((v) => v.fieldId === 'builtin.name').evidence);
+  await command(env.repo, 'importResume', payload, (await env.repo.read()).revision);
+  db = await env.repo.read(); assert.equal(db.entries.length, 5); assert.equal(value(db, 'p1', 'builtin.name'), 'User edit');
+  const second = (await command(env.repo, 'createProfile', { name: '第二份简历' })).result;
+  await command(env.repo, 'importResume', { ...payload, profileId: second }, (await env.repo.read()).revision);
+  db = await env.repo.read(); assert.equal(db.entries.length, 10); assert.equal(value(db, second, 'builtin.name'), 'Test Person');
+  assert.ok(!JSON.stringify(await env.repo.exportPublicFields()).includes('Test Person'));
+  const backup = await env.repo.exportBackup(); const target = fixture().repo;
+  await command(target, 'importBackup', { backup, mode: 'replace' }, (await target.previewImport(backup, 'replace')).revision);
+  assert.ok((await target.read()).fieldValues.some((row) => row.evidence?.fingerprint === payload.fingerprint));
+  const revision = (await env.repo.read()).revision; env.fail();
+  await assert.rejects(command(env.repo, 'importResume', { ...payload, overwrite: true }, revision), /模拟磁盘/);
+  assert.equal((await env.repo.read()).revision, revision);
+});
+
+test('Schema v2 数据/备份/恢复点升级到 v3，失败不改原版本，未知版本拒绝', async () => {
+  const seed = fixture(); await seed.repo.initialize();
+  const v2 = structuredClone(seed.disk); v2['localapply.database'].schemaVersion = 2;
+  const env = fixture(v2); env.fail();
+  await assert.rejects(env.repo.read(), /模拟磁盘/);
+  assert.equal(env.disk['localapply.database'].schemaVersion, 2);
+  const db = await env.repo.read(); assert.equal(db.schemaVersion, 3); assert.equal(db.revision, 1);
+  assert.equal((await env.restart().read()).revision, 1);
+  const backup = await seed.repo.exportBackup(); backup.schemaVersion = backup.database.schemaVersion = 2;
+  const preview = await env.repo.previewImport(backup, 'replace');
+  await command(env.repo, 'importBackup', { backup, mode: 'replace' }, preview.revision);
+  env.disk['localapply.recovery'].schemaVersion = 2;
+  await command(env.repo, 'restoreRecovery', {}); assert.equal((await env.repo.read()).schemaVersion, 3);
+  const future = fixture({ ...v2, 'localapply.database': { ...v2['localapply.database'], schemaVersion: 100 } });
+  await assert.rejects(future.repo.read(), /版本/); assert.equal(future.disk['localapply.database'].schemaVersion, 100);
 });

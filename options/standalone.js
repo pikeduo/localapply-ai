@@ -55,7 +55,7 @@
     },
   };
   const repository = global.LocalApplyStore.createRepository(storage);
-  const ai = global.LocalApplyAI.createClient(async () => (await repository.readLegacy()).settings);
+  const ai = global.LocalApplyAI.createClient(() => repository.readAiSettings());
 
   // 与扩展使用相同命令语义，文件页从不调用插件私有存储或网页填充权限。
   async function dispatch(type, payload) {
@@ -63,21 +63,15 @@
       case 'wsa:getState': return { state: await repository.readLegacy() };
       case 'localapply:saveLegacy': return { state: await repository.saveLegacy(payload.base, payload.state, payload.source) };
       case 'localapply:read': return { database: await repository.read() };
+      case 'localapply:vault': return { settings: await repository.vaultCommand(payload.action, payload.payload) };
       case 'localapply:command': return repository.command(payload.request || {});
       case 'localapply:exportBackup': return { backup: await repository.exportBackup() };
       case 'localapply:previewImport': return { preview: await repository.previewImport(payload.backup, payload.mode) };
       case 'localapply:exportPublicFields': return { fields: await repository.exportPublicFields() };
       case 'wsa:listModels': return ai.listAvailableModels(payload.providerId);
       case 'wsa:aiChat': return ai.callGLM(payload.payload || {});
-      case 'wsa:aiExtractResume': {
-        const request = payload.payload || {};
-        const content = request.pages?.length
-          ? await ai.visionExtract(request.pages, await ai.resolveVisionModel())
-          : (await ai.callGLM({ messages: request.messages, temperature: 0.2, timeoutMs: 120000, maxTokens: 4096 })).content;
-        const data = ai.extractJson(content);
-        if (!data) throw new Error('AI 返回的内容无法解析为 JSON，请检查服务商响应后重试。');
-        return { data };
-      }
+      case 'wsa:cancelResume': ai.cancel(payload.requestId); return {};
+      case 'wsa:aiExtractResume': return { data: await ai.extractResume(payload.payload || {}) };
       default: throw new Error('文件管理模式不支持此操作；网页自动填充请从浏览器插件入口使用。');
     }
   }

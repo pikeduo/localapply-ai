@@ -38,6 +38,7 @@ async function reloadDataState() {
   state = await getState();
   renderTargetProfiles();
   await renderEntries();
+  await renderResumeCenter();
 }
 
 // 渲染重复经历编辑器；所有标题和值用 textContent/value，避免注入 HTML。
@@ -50,10 +51,11 @@ async function renderEntries() {
   const root = document.getElementById('entriesList'); root.replaceChildren();
   for (const entry of database.entries.filter((row) => row.profileId === select.value)) {
     const box = document.createElement('div'); box.className = 'card';
-    const title = document.createElement('h3'); title.textContent = `${entry.kind} · ${entry.title || '未命名经历'}`;
+    const title = document.createElement('h3'); title.textContent = `${LocalApplyResume.kinds[entry.kind]} · ${entry.title || '未命名经历'}`;
     box.appendChild(title);
     const field = document.createElement('select'); field.setAttribute('aria-label', '经历字段');
     database.fieldDefinitions.forEach((def) => field.appendChild(new Option(`${def.group} · ${def.label}`, def.fieldId)));
+    field.value = database.fieldValues.find((row) => row.entryId === entry.entryId)?.fieldId || database.fieldDefinitions[0].fieldId;
     const input = document.createElement('input'); input.type = 'text'; input.setAttribute('aria-label', '经历字段值');
     const hint = document.createElement('div'); hint.className = 'muted';
     // 选择字段时显示已有值，类型化字段在保存时转换并由后台再次校验。
@@ -61,7 +63,8 @@ async function renderEntries() {
       const row = database.fieldValues.find((value) => value.entryId === entry.entryId && value.fieldId === field.value);
       input.value = row?.value === undefined || row.value === null ? '' : Array.isArray(row.value) ? JSON.stringify(row.value) : String(row.value);
       const def = database.fieldDefinitions.find((def) => def.fieldId === field.value);
-      hint.textContent = `类型：${def.type}；布尔值填 true/false，多选填 JSON 数组。`;
+      hint.textContent = def.type === 'boolean' ? '填写 true 或 false。' : def.type === 'multiSelect' ? '多选内容填写 JSON 数组。'
+        : row?.evidence ? `来源${row.evidence.page ? '（页/块 ' + row.evidence.page + '）' : ''}：${row.evidence.excerpt || '人工校对'}；编辑保存后改为手动资料。` : '修改后点击保存字段。';
     };
     field.addEventListener('change', update); update();
     const save = document.createElement('button'); save.className = 'btn'; save.textContent = '保存字段';
@@ -75,7 +78,7 @@ async function renderEntries() {
     remove.addEventListener('click', () => entryAction(() => dataCommand('deleteEntry', { entryId: entry.entryId }, database.revision)));
     box.append(field, input, save, remove, hint);
     const values = document.createElement('p'); values.className = 'muted';
-    values.textContent = database.fieldValues.filter((row) => row.entryId === entry.entryId).map((row) => `${database.fieldDefinitions.find((def) => def.fieldId === row.fieldId).label}：${JSON.stringify(row.value)}`).join('；');
+    values.textContent = database.fieldValues.filter((row) => row.entryId === entry.entryId).map((row) => `${database.fieldDefinitions.find((def) => def.fieldId === row.fieldId).label}：${fieldText(row.value)}`).join('；');
     box.appendChild(values); root.appendChild(box);
   }
 }

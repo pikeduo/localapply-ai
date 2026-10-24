@@ -5,11 +5,18 @@
   "description": "本地优先的网申填写扩展",
   "license": "MIT",
   "scripts": {
-    "test": "node --test --test-timeout=20000 tests/baseline.test.cjs tests/store.test.cjs",
+    "vendor:libs": "node tools/vendor-libs.cjs",
+    "test": "node --test --test-timeout=20000 tests/baseline.test.cjs tests/store.test.cjs tests/resume-files.test.cjs",
     "test:e2e": "node --test --test-timeout=120000 tests/browser.test.cjs"
   },
   "devDependencies": {
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
+    "mammoth": "1.13.0",
+    "pdfjs-dist": "6.4.299",
     "playwright": "1.62.1"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22.13"
+  }
 }

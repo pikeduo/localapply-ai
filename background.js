@@ -1,7 +1,7 @@
 // Service Worker：AI 请求代理（OpenAI 兼容，多服务商预设）、CSV 导出、初始数据、侧边栏开关。
 'use strict';
 
-importScripts('data/templates.js', 'data/providers.js', 'data/local-store.js', 'data/ai-client.js'); // 服务商解析和本地存储共用纯数据逻辑。
+importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/local-store.js', 'data/ai-client.js'); // 凭据仅在后台按需解密。
 
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local);
@@ -31,7 +31,7 @@ async function notifySettings() {
 }
 
 // 扩展和文件管理页共享 AI 管线，后台只注入本扩展的配置读取器。
-const aiClient = LocalApplyAI.createClient(async () => (await getState()).settings);
+const aiClient = LocalApplyAI.createClient(() => repository.readAiSettings());
 // 解析视觉模型，保留原后台接口供消息路由和回归测试使用。
 function resolveVisionModel() { return aiClient.resolveVisionModel(); }
 // 生成兼容的 AI 错误。
@@ -126,6 +126,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         case 'localapply:read':
           sendResponse({ ok: true, database: await repository.read() }); return;
+        case 'localapply:vault':
+          sendResponse({ ok: true, settings: await repository.vaultCommand(msg.action, msg.payload) }); return;
         case 'localapply:command':
           sendResponse({ ok: true, ...await repository.command(msg.request || {}) }); return;
         case 'localapply:exportBackup':
@@ -143,23 +145,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true, ...await listAvailableModels(msg.providerId) });
           return;
         }
-        case 'wsa:aiExtractResume': {
-          // PDF 提取：文本模式传 messages；视觉模式传 pages[{dataUrl, hint}]
-          const payload = msg.payload || {};
-          let content;
-          if (Array.isArray(payload.pages) && payload.pages.length) {
-            content = await visionExtract(payload.pages, await resolveVisionModel());
-          } else {
-            const out = await callGLM({ messages: payload.messages, temperature: 0.2, timeoutMs: 120000, maxTokens: 4096 });
-            content = out.content;
-          }
-          const parsed = extractJson(content);
-          if (!parsed) {
-            throw aiError('AI 返回的内容无法解析为 JSON，请重试一次。原文开头：' + String(content).slice(0, 120));
-          }
-          sendResponse({ ok: true, data: parsed, raw: content });
-          return;
-        }
+        case 'wsa:cancelResume':
+          aiClient.cancel(msg.requestId); sendResponse({ ok: true }); return;
+        case 'wsa:aiExtractResume':
+          sendResponse({ ok: true, data: await aiClient.extractResume(msg.payload || {}) }); return;
         case 'wsa:exportCsv': {
           const csv = buildCsv(msg.rows || []);
           const d = new Date();

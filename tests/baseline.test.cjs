@@ -19,7 +19,7 @@ function sandbox(file = 'data/templates.js', initial = {}) {
   const storage = structuredClone(initial);
   const listeners = [];
   const context = vm.createContext({
-    console, setTimeout, clearTimeout, AbortController, URL, crypto: require('node:crypto').webcrypto,
+    console, setTimeout, clearTimeout, AbortController, URL, TextEncoder, TextDecoder, btoa, atob, crypto: require('node:crypto').webcrypto,
     fetch: async () => { throw new Error('基线测试禁止联网'); },
     chrome: {
       storage: { local: {
@@ -65,6 +65,7 @@ test('MV3 清单的脚本、页面及图标资源均存在', () => {
   for (const file of files) assert.ok(fs.existsSync(path.join(ROOT, file)), file);
   for (const html of [manifest.side_panel.default_path, manifest.options_page]) {
     for (const match of source(html).matchAll(/(?:src|href)="([^"]+)"/g)) {
+      if (match[1].startsWith('#')) continue; // 页内导航无需文件资源。
       assert.ok(fs.existsSync(path.resolve(ROOT, path.dirname(html), match[1])), `${html}: ${match[1]}`);
     }
   }
@@ -276,7 +277,7 @@ test('共享存储首次初始化和再次读取保持档案一致', async () =>
   const first = await context.getState();
   const second = await context.getState();
   assert.equal(first.profiles[0].id, second.profiles[0].id);
-  assert.equal(storage['localapply.database'].schemaVersion, 2);
+  assert.equal(storage['localapply.database'].schemaVersion, 3);
 });
 
 test('AI 回复 JSON 围栏可解析，异常文本返回空结果', () => {
@@ -305,7 +306,7 @@ test('消息层 ping 和无 Key 错误可异步返回', async () => {
 test('内容脚本不能读取个人库、导出、命令写入或代理 AI', async () => {
   const { listeners } = sandbox('background.js');
   const sender = { id: 'test-extension', url: 'https://recruit.example.test/apply', tab: { id: 1 } };
-  for (const type of ['wsa:getState', 'localapply:read', 'localapply:command', 'localapply:exportBackup', 'localapply:exportPublicFields', 'wsa:aiChat', 'wsa:listModels']) {
+  for (const type of ['wsa:getState', 'localapply:read', 'localapply:command', 'localapply:vault', 'localapply:exportBackup', 'localapply:exportPublicFields', 'wsa:aiChat', 'wsa:listModels', 'wsa:aiExtractResume', 'wsa:cancelResume']) {
     const response = await new Promise((resolve) => listeners[0]({ type }, sender, resolve));
     assert.equal(response.ok, false, type);
     assert.match(response.error, /仅允许/);
@@ -334,10 +335,15 @@ test('视觉页结果合并保留首个标量和去重技能', () => {
 });
 
 test('PDF.js 可本地解析扫描夹具（不渲染、不联网）', async () => {
-  const pdfjs = require('../libs/pdfjs/pdf.min.js');
-  assert.equal(pdfjs.version, '3.11.174');
-  // Node 默认寻找未压缩 worker；仓库仅携带压缩版，显式使用现有文件。
-  pdfjs.GlobalWorkerOptions.workerSrc = path.join(ROOT, 'libs/pdfjs/pdf.worker.min.js');
+  // 使用实际分发的浏览器脚本及预载 worker，不依赖旧版 CommonJS 包装。
+  const context = vm.createContext({ console, URL, URLSearchParams, Blob, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer, AbortController, AbortSignal,
+    setTimeout, clearTimeout, structuredClone, ReadableStream, Response, Request, Headers, DOMException, crypto: require('node:crypto').webcrypto,
+    DOMMatrix: class DOMMatrix {} });
+  vm.runInContext(source('libs/pdfjs/pdf.min.js'), context);
+  vm.runInContext(source('libs/pdfjs/pdf.worker.min.js'), context);
+  const pdfjs = context.pdfjsLib;
+  assert.equal(pdfjs.version, '6.4.299');
+  pdfjs.GlobalWorkerOptions.workerSrc = 'local-preloaded-worker.js';
   const task = pdfjs.getDocument({
     data: new Uint8Array(fs.readFileSync(path.join(ROOT, 'test-pages/fake-scan.pdf'))),
     isEvalSupported: false, useSystemFonts: false,

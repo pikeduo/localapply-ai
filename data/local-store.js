@@ -5,7 +5,8 @@
   const API_KEY = 'localapply.apiSettings';
   const RECOVERY_KEY = 'localapply.recovery';
   const LEGACY_KEY = 'wangshenAutofill';
-  const SCHEMA_VERSION = 2;
+  const VAULT_KEY = 'localapply.keyVault';
+  const SCHEMA_VERSION = 3;
   const TYPES = ['text', 'textarea', 'select', 'number', 'boolean', 'date', 'multiSelect'];
   const KINDS = ['education', 'internship', 'employment', 'project'];
   const API_FIELDS = ['provider', 'model', 'visionModel', 'customBase', 'apiKeys', 'customProviders', 'providerModels'];
@@ -34,6 +35,8 @@
     });
     return 'legacy.' + parts.join('');
   }
+  // 文件指纹、档案和经历序号共同决定 ID，重复导入不会跨档案串数据。
+  function resumeEntryId(profileId, fingerprint, kind, index) { return legacyFieldId(profileId, fingerprint + ':' + kind + ':' + index); }
   // 统一生成 UTC 时间。
   function now() { return new Date().toISOString(); }
   // 对不符合 Schema 的输入抛出可读错误，不输出原始个人数据。
@@ -110,7 +113,7 @@
     check(typeof value.autoThreshold === 'number' && value.autoThreshold >= 0.5 && value.autoThreshold <= 1, '阈值错误');
     check(typeof value.privacyMask === 'boolean' && typeof value.autoFloatbar === 'boolean', '设置格式错误');
   }
-  // API 配置独立校验与保存，当前阶段保留旧凭据格式，不承诺静态加密。
+  // API 配置独立保存；旧凭据只在用户首次设置口令时迁入保险库。
   function apiSettings(value) {
     keys(value, API_FIELDS, 'API 设置');
     for (const key of ['provider', 'model', 'visionModel', 'customBase']) string(value[key] || '', key, 2000, true);
@@ -157,7 +160,7 @@
     });
     const valueKeys = new Set();
     db.fieldValues.forEach((row) => {
-      keys(row, ['profileId', 'fieldId', 'entryId', 'value', 'updatedAt', 'source'], '个人字段值');
+      keys(row, ['profileId', 'fieldId', 'entryId', 'value', 'updatedAt', 'source', 'evidence'], '个人字段值');
       check(profiles.has(row.profileId) && defs.has(row.fieldId), '字段值引用错误');
       check(row.entryId === null || entries.get(row.entryId)?.profileId === row.profileId, '经历不属于当前档案');
       const key = JSON.stringify([row.profileId, row.fieldId, row.entryId]);
@@ -165,6 +168,13 @@
       string(row.updatedAt, '更新时间'); string(row.source, '数据来源');
       check(Number.isFinite(Date.parse(row.updatedAt)), '更新时间错误');
       validValue(row.value, defs.get(row.fieldId));
+      if (row.evidence !== undefined) {
+        keys(row.evidence, ['kind', 'excerpt', 'page', 'verified', 'fingerprint'], '简历来源');
+        check(['pdf', 'docx', 'vision', 'manual'].includes(row.evidence.kind), '来源类型错误');
+        string(row.evidence.excerpt, '来源片段', 500, true);
+        check(/^[a-f0-9]{64}$/.test(row.evidence.fingerprint) && Number.isInteger(row.evidence.page)
+          && row.evidence.page >= 0 && row.evidence.page <= 30 && typeof row.evidence.verified === 'boolean', '来源证据格式错误');
+      }
     });
     const bindingKeys = new Set();
     db.bindings.forEach((binding) => {
@@ -202,6 +212,16 @@
       }
     }
     return db;
+  }
+  // v2→v3 只增加可选来源证据；旧记录不伪造证据，未知版本拒绝升级。
+  function upgradeDatabase(input) {
+    check(input && [2, SCHEMA_VERSION].includes(input.schemaVersion), '不支持的数据库版本');
+    const db = clone(input);
+    if (db.schemaVersion === 2) {
+      check(Array.isArray(db.fieldValues) && db.fieldValues.every((row) => row.evidence === undefined), '旧版本不支持来源证据');
+      db.schemaVersion = SCHEMA_VERSION;
+    }
+    return validate(db);
   }
   // 分离旧 API 配置，不改动原始对象。
   function splitApi(legacy) {
@@ -257,7 +277,7 @@
         }
         if (!row) { row = { profileId: profile.id, fieldId: def.fieldId, entryId: null, value,
           updatedAt: source === 'legacy' ? new Date(profile.createdAt || 0).toISOString() : now(), source }; db.fieldValues.push(row); }
-        else if (!equal(row.value, value)) { row.value = value; row.updatedAt = now(); row.source = source; }
+        else if (!equal(row.value, value)) { row.value = value; row.updatedAt = now(); row.source = source; delete row.evidence; }
       }
       return { profileId: profile.id, name: profile.name, createdAt: new Date(profile.createdAt || 0).toISOString(),
         materials: (profile.materials || []).map((material) => ({ name: material.name || '', note: material.note || '' })) };
@@ -348,8 +368,9 @@
       return migrate({ schemaVersion: 1, profiles: data.profiles, activeProfileId: data.activeProfileId || data.profiles?.[0]?.id }).db;
     }
     keys(data, ['kind', 'formatVersion', 'schemaVersion', 'exportedAt', 'database'], '备份');
-    check(data.kind === 'localapply-ai-backup' && data.formatVersion === 1 && data.schemaVersion === SCHEMA_VERSION, '不支持的备份版本');
-    return validate(data.database);
+    check(data.kind === 'localapply-ai-backup' && data.formatVersion === 1 && [2, SCHEMA_VERSION].includes(data.schemaVersion)
+      && data.database?.schemaVersion === data.schemaVersion, '不支持的备份版本');
+    return upgradeDatabase(data.database);
   }
   // 合并备份保留现有冲突数据，差异预览会列出冲突数量；覆盖模式需显式选择。
   function importPlan(current, incoming, mode) {
@@ -382,11 +403,20 @@
   // 创建后台仓库；队列同时覆盖读取初始化与写入，避免 UI 并发丢更新。
   function createRepository(storage) {
     let queue = Promise.resolve();
+    let sessionKey = null; // 不落盘；后台回收或文件页关闭后须重新解锁。
     // 初始化访问限制和数据；失败不删除/修改旧源，下次启动可重试。
     async function load() {
       await storage.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
-      const data = await storage.get([DB_KEY, API_KEY]);
-      if (data[DB_KEY]) return { db: clone(validate(data[DB_KEY])), api: apiSettings(data[API_KEY]) };
+      const data = await storage.get([DB_KEY, API_KEY, VAULT_KEY]);
+      if (data[VAULT_KEY]) global.LocalApplyVault.validate(data[VAULT_KEY]);
+      if (data[DB_KEY]) {
+        const db = upgradeDatabase(data[DB_KEY]); const api = apiSettings(data[API_KEY]);
+        if (data[DB_KEY].schemaVersion !== SCHEMA_VERSION) {
+          db.revision++;
+          await storage.set({ [DB_KEY]: db }); // 校验完整副本后一次提交，失败保留旧版本。
+        }
+        return { db, api, vault: data[VAULT_KEY] || null };
+      }
       const legacy = await storage.get(LEGACY_KEY);
       const migrated = migrate(legacy[LEGACY_KEY] || global.WangshenTemplates.defaultState());
       // 先持久化独立配置，再以单 DB 键作为迁移生效点；中断时旧源仍可重试。
@@ -395,6 +425,17 @@
       const saved = await storage.get([DB_KEY, API_KEY]);
       check(equal(saved[DB_KEY], migrated.db) && equal(saved[API_KEY], migrated.api), '迁移写入校验失败；旧数据仍保留');
       return migrated;
+    }
+    // UI 只获得密钥存在状态；启用保险库后绝不通过兼容投影返回真实 Key。
+    function project(previous) {
+      const api = clone(previous.api);
+      const providers = previous.vault?.providers || Object.keys(api.apiKeys).filter((id) => api.apiKeys[id]);
+      if (previous.vault) api.apiKeys = {};
+      const state = legacyState(previous.db, api);
+      state.settings.keyStatus = Object.fromEntries(providers.map((id) => [id, true]));
+      state.settings.vault = { enabled: !!previous.vault, unlocked: !!sessionKey, revision: previous.vault?.revision || 0,
+        pendingMigration: !!previous.vault?.migrationPending };
+      return state;
     }
     // 按序运行操作，单次失败不阻塞后续请求。
     function run(work) {
@@ -410,6 +451,57 @@
       if (recovery) await storage.set({ [RECOVERY_KEY]: clone(previous.db) });
       await storage.set(write);
       return clone(db);
+    }
+    // 密文读回并认证成功后才清理旧明文，档案和其他旧源内容保持不变。
+    async function finishVaultMigration(previous, record, key) {
+      await global.LocalApplyVault.open(record, key);
+      const old = await storage.get(LEGACY_KEY);
+      const write = { [VAULT_KEY]: { ...record, migrationPending: false }, [API_KEY]: { ...previous.api, apiKeys: {} } };
+      if (old[LEGACY_KEY]?.settings) {
+        const legacy = clone(old[LEGACY_KEY]); delete legacy.settings.apiKey; legacy.settings.apiKeys = {};
+        write[LEGACY_KEY] = legacy;
+      }
+      await storage.set(write);
+    }
+    // 设置/解锁/锁定/修改单个 Key，口令与密钥只在调用期间及会话内使用。
+    function vaultCommand(action, input = {}) {
+      return run(async (previous) => {
+        const vault = global.LocalApplyVault;
+        if (action === 'setup') {
+          check(!previous.vault, '保险库已设置，请解锁');
+          const old = (await storage.get(LEGACY_KEY))[LEGACY_KEY];
+          const payload = { keys: clone(previous.api.apiKeys), legacy: old?.settings
+            ? { apiKey: old.settings.apiKey || '', apiKeys: old.settings.apiKeys || {} } : {} };
+          const created = await vault.create(input.password, payload);
+          await storage.set({ [VAULT_KEY]: created.record });
+          const saved = (await storage.get(VAULT_KEY))[VAULT_KEY];
+          await finishVaultMigration(previous, saved, created.key);
+          sessionKey = created.key;
+        } else if (action === 'unlock') {
+          check(previous.vault, '请先设置安全口令');
+          const key = await vault.unlock(input.password, previous.vault);
+          if (previous.vault.migrationPending) await finishVaultMigration(previous, previous.vault, key);
+          sessionKey = key;
+        } else if (action === 'lock') {
+          sessionKey = null;
+        } else if (action === 'setKey') {
+          check(previous.vault && sessionKey, '请先设置安全口令并解锁保险库');
+          check(input.revision === previous.vault.revision, '密钥已变化，请刷新状态后重试');
+          check(Object.hasOwn(global.WangshenTemplates.PROVIDERS, input.providerId)
+            || Object.hasOwn(previous.api.customProviders || {}, input.providerId), '服务商不存在');
+          string(input.key, 'API Key', 4096, true);
+          const payload = await vault.open(previous.vault, sessionKey);
+          if (input.key) payload.keys[input.providerId] = input.key;
+          else {
+            delete payload.keys[input.providerId];
+            if (payload.legacy?.apiKeys) delete payload.legacy.apiKeys[input.providerId];
+            if (input.providerId === 'zhipu' && payload.legacy) delete payload.legacy.apiKey;
+          }
+          const record = await vault.seal(payload, sessionKey, vault.decode(previous.vault.salt), previous.vault.revision + 1);
+          await storage.set({ [VAULT_KEY]: record });
+        } else if (action !== 'status') throw new Error('未知保险库操作');
+        return project(await load()).settings;
+      });
     }
     // 命令校验并操作独立副本，AI 未来也通过同一入口而不是直接写存储。
     function command(request) {
@@ -456,6 +548,43 @@
             const entry = { entryId: id('entry'), profileId: input.profileId, kind: input.kind, title: input.title || '',
               order: db.entries.filter((row) => row.profileId === input.profileId && row.kind === input.kind).length };
             db.entries.push(entry); result = entry.entryId; break;
+          }
+          case 'importResume': {
+            keys(input, ['profileId', 'fingerprint', 'rows', 'overwrite'], '简历导入');
+            check(request.expectedRevision !== undefined, '简历导入必须先校对并携带版本');
+            check(db.profiles.some((p) => p.profileId === input.profileId), '目标档案不存在');
+            check(/^[a-f0-9]{64}$/.test(input.fingerprint) && typeof input.overwrite === 'boolean', '简历导入参数错误');
+            global.LocalApplyResume.validateRows(input.rows);
+            result = { saved: 0, kept: 0 };
+            for (const cell of input.rows) {
+              const builtinId = 'builtin.' + cell.key;
+              const fieldId = db.fieldDefinitions.some((d) => d.fieldId === builtinId) ? builtinId : 'resume.' + cell.key;
+              const label = (cell.kind === 'basic' ? global.LocalApplyResume.basic : global.LocalApplyResume.repeated)[cell.key];
+              const expected = makeDefinition({ fieldId, label, type: cell.key === 'description' ? 'textarea' : 'text', group: '简历资料' });
+              const existingDef = db.fieldDefinitions.find((d) => d.fieldId === fieldId);
+              if (!existingDef) db.fieldDefinitions.push(expected);
+              else if (fieldId.startsWith('resume.')) check(equal(existingDef, expected), '简历字段定义冲突');
+              let entryId = null;
+              if (cell.kind !== 'basic') {
+                entryId = resumeEntryId(input.profileId, input.fingerprint, cell.kind, cell.index);
+                if (!db.entries.some((e) => e.entryId === entryId)) {
+                  const head = input.rows.find((r) => r.kind === cell.kind && r.index === cell.index && ['school', 'company', 'title'].includes(r.key));
+                  db.entries.push({ entryId, profileId: input.profileId, kind: cell.kind,
+                    title: (head?.value || global.LocalApplyResume.kinds[cell.kind]).slice(0, 500),
+                    order: db.entries.filter((e) => e.profileId === input.profileId && e.kind === cell.kind).length });
+                }
+              } else if (!db.bindings.some((b) => b.profileId === input.profileId && b.fieldId === fieldId)) {
+                db.bindings.push({ profileId: input.profileId, fieldId, fid: id('field'), key: cell.key,
+                  sensitive: ['phone', 'email'].includes(cell.key), autoFill: false, material: false, custom: true });
+              }
+              const index = db.fieldValues.findIndex((v) => v.profileId === input.profileId && v.fieldId === fieldId && v.entryId === entryId);
+              if (index >= 0 && db.fieldValues[index].value !== '' && db.fieldValues[index].value !== null && !input.overwrite) { result.kept++; continue; }
+              const row = { profileId: input.profileId, fieldId, entryId, value: cell.value, updatedAt: now(), source: 'ai-confirmed',
+                evidence: { ...clone(cell.evidence), fingerprint: input.fingerprint } };
+              if (index >= 0) db.fieldValues[index] = row; else db.fieldValues.push(row);
+              result.saved++;
+            }
+            break;
           }
           case 'deleteEntry': {
             keys(input, ['entryId'], '删除经历');
@@ -512,7 +641,7 @@
           }
           case 'restoreRecovery': {
             const data = await storage.get(RECOVERY_KEY);
-            const recovered = validate(data[RECOVERY_KEY]);
+            const recovered = upgradeDatabase(data[RECOVERY_KEY]);
             await commit(clone(recovered), null, previous);
             return { result: true, revision: db.revision + 1 };
           }
@@ -525,15 +654,28 @@
     return {
       initialize: () => run(({ db }) => clone(db)),
       read: () => run(({ db }) => clone(db)),
-      readLegacy: () => run(({ db, api }) => legacyState(db, api)),
+      readLegacy: () => run(project),
+      // 仅 AI 客户端可用：解密发生在后台/文件运行时，不向 UI 返回明文。
+      readAiSettings: () => run(async (previous) => {
+        if (!previous.vault) return clone(previous.api);
+        if (!sessionKey) {
+          check(!previous.vault.providers.includes(previous.api.provider), '密钥保险库已锁定，请在设置页输入口令解锁');
+          return { ...clone(previous.api), apiKeys: {} };
+        }
+        const payload = await global.LocalApplyVault.open(previous.vault, sessionKey);
+        return { ...clone(previous.api), apiKeys: payload.keys };
+      }),
+      vaultCommand,
       // 内容脚本只能收到明确的非敏感设置，不返回个人库/API。
       readContentSettings: () => run(({ db }) => clone(db.settings)),
       saveLegacy: (base, next, source = 'manual') => run(async (previous) => {
         check(['manual', 'pdf-confirmed', 'docx-confirmed', 'ai-confirmed'].includes(source), '未知数据来源');
-        const merged = mergeChanged(normalizeSnapshot(base), normalizeSnapshot(next), legacyState(previous.db, previous.api));
+        const merged = mergeChanged(normalizeSnapshot(base), normalizeSnapshot(next), project(previous));
         const db = syncLegacy(clone(previous.db), merged, source);
-        await commit(db, splitApi(merged), previous);
-        return legacyState(db, splitApi(merged));
+        const api = splitApi(merged);
+        if (previous.vault) check(!Object.values(api.apiKeys).some(Boolean), '启用保险库后请使用密钥保存入口');
+        await commit(db, api, previous);
+        return project({ db, api, vault: previous.vault });
       }),
       exportBackup: () => run(({ db }) => backup(db)),
       previewImport: (input, mode) => run(({ db }) => ({ ...importPlan(db, parseBackup(input), mode).summary, revision: db.revision })),
@@ -542,5 +684,5 @@
       command,
     };
   }
-  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition };
+  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId };
 })(globalThis);

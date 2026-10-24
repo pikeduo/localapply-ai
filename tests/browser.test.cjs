@@ -33,7 +33,13 @@ async function serve() {
     if (pathname === '/v1/chat/completions' && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk;
       calls.push({ authorization: req.headers.authorization, model: JSON.parse(body).model });
-      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: modelApi.chatContent || '正常' } }] })); return;
+      // 可挂起聊天响应，验证取消时真正中止网络任务且不产生晚到写入。
+      const respond = () => {
+        if (res.destroyed) return;
+        res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: modelApi.chatContent || '正常' } }] }));
+      };
+      if (modelApi.chatHold) { modelApi.releaseChat = respond; modelApi.onChat?.(); } else respond();
+      return;
     }
     if (!/^\/test-pages\/[a-z-]+\.html$/.test(pathname)) { res.writeHead(404); res.end(); return; }
     try { const body = await fs.readFile(path.join(ROOT, pathname)); res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(body); }
@@ -66,6 +72,139 @@ async function rpc(page, type, payload = {}) {
   const response = await page.evaluate(({ type, payload }) => chrome.runtime.sendMessage({ type, ...payload }), { type, payload });
   assert.equal(response.ok, true, response.error);
   return response;
+}
+
+// 通过真实控件建立保险库，测试口令及 Key 全为合成数据。
+async function setupVault(page) {
+  await page.locator('#vaultPassword').fill('synthetic-password');
+  await page.locator('#vaultConfirm').fill('synthetic-password');
+  await page.locator('#vaultSetup').click();
+  await page.waitForFunction(async () => (await getState()).settings.vault.unlocked);
+}
+
+for (const withExtension of [true, false]) {
+  test(`阶段二：${withExtension ? '扩展' : 'file://'} 简历审核、取消、密钥加密与重启`, async (t) => {
+    const fixtures = require('./resume-fixtures.cjs');
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'resume-'));
+    const api = await serve(); let context; let page; let url;
+    const errors = [];
+    // 两种运行环境均使用生产消息入口，不注入存储或解析器替身。
+    const call = async (type, payload = {}) => {
+      const response = await page.evaluate(({ type, payload }) => sendMessage(type, payload), { type, payload });
+      assert.equal(response.ok, true, response.error); return response;
+    };
+    // 真实上传并本地预览，证明明确发送前没有聊天请求。
+    const prepare = async (name, buffer) => {
+      const count = api.calls.length;
+      await page.locator('#pdfFile').setInputFiles({ name, mimeType: name.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer });
+      await page.locator('#btnExtract').click();
+      await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
+      assert.equal(await page.locator('#sendResume').isVisible(), true, await page.locator('#pdfStatus').textContent());
+      assert.equal(api.calls.length, count);
+    };
+    // 等待真实校对 DOM 完成后才操作确认，保留失败时的可读错误。
+    const analyze = async () => {
+      await page.locator('#sendResume').click();
+      await page.waitForFunction(() => !document.getElementById('sendResume').disabled);
+      assert.match(await page.locator('#pdfStatus').textContent(), /解析完成/);
+      await page.locator('#pdfReview .review-cell').first().waitFor();
+    };
+    // 确认后必须观察到表单消失和持久化结果，不能只断言点击成功。
+    const confirm = async () => {
+      await page.locator('#btnImport').click();
+      await page.waitForFunction(() => !document.getElementById('btnImport').disabled);
+      assert.equal(await page.locator('#importRow').isVisible(), false, await page.locator('#pdfStatus').textContent());
+    };
+    try {
+      context = await launch(profile, withExtension);
+      url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html`
+        : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url);
+      await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      await setupVault(page);
+      // PDF 图像解码使用随包 WASM；仅允许本地 WebAssembly，不开放 JavaScript eval。
+      assert.equal(await page.evaluate(async () => (await WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]))) instanceof WebAssembly.Module), true);
+      await page.locator('#provider').fill(api.base); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+      await page.locator('#apiKey').fill('synthetic-stage2-key'); await page.locator('#apiKey').press('Tab'); await page.evaluate(() => flushCredentials());
+      await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-local'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+      await t.test('锁定只阻止密钥调用，错误口令不清除数据，正确口令可恢复调用', async () => {
+        await page.locator('#vaultLock').click(); await page.waitForFunction(async () => !(await getState()).settings.vault.unlocked);
+        const db = await call('localapply:read'); assert.equal(db.database.profiles.length, 1);
+        await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('锁定'));
+        await page.locator('#vaultPassword').fill('wrong-password'); await page.locator('#vaultUnlock').click();
+        await page.waitForFunction(() => document.getElementById('vaultStatus').textContent.includes('口令错误'));
+        await page.locator('#vaultPassword').fill('synthetic-password'); await page.locator('#vaultUnlock').click();
+        await page.waitForFunction(async () => (await getState()).settings.vault.unlocked);
+        assert.deepEqual((await call('wsa:getState')).state.settings.apiKeys, {});
+      });
+      const primary = (await call('wsa:getState')).state.activeProfileId;
+      api.modelApi.chatContent = JSON.stringify(fixtures.parsed());
+      await t.test('真实 DOCX：来源、人工编辑、不选字段、重复经历及重复导入', async () => {
+        const before = (await call('localapply:read')).database;
+        await prepare('resume.docx', fixtures.docx()); await analyze();
+        assert.equal((await call('localapply:read')).database.revision, before.revision);
+        const gpa = page.locator('.review-cell').filter({ hasText: 'GPA/排名' }); assert.equal(await gpa.locator('input[type=checkbox]').isChecked(), false);
+        await page.getByRole('textbox', { name: '基本信息 · 姓名', exact: true }).fill('Confirmed Person');
+        await page.locator('.review-cell').filter({ hasText: '基本信息 · 邮箱' }).locator('input[type=checkbox]').uncheck();
+        await confirm();
+        let db = (await call('localapply:read')).database; assert.equal(db.entries.length, 5);
+        const name = db.fieldValues.find((r) => r.profileId === primary && r.entryId === null && r.fieldId === 'builtin.name');
+        assert.equal(name.value, 'Confirmed Person'); assert.equal(name.evidence.kind, 'manual');
+        assert.ok(!db.fieldValues.some((r) => r.value === '4.0' || r.value === 'test@example.test'));
+        await prepare('same-bytes-renamed.docx', fixtures.docx()); await analyze(); await confirm();
+        db = (await call('localapply:read')).database; assert.equal(db.entries.length, 5);
+        assert.equal(db.fieldValues.find((r) => r.fieldId === 'builtin.name' && r.entryId === null).value, 'Confirmed Person');
+      });
+      await t.test('真实文本 PDF 与第二档案隔离，基本信息可在中心编辑', async () => {
+        await page.locator('#newProfileName').fill('第二份简历'); await page.locator('#createResumeProfile').click();
+        await page.waitForFunction((id) => document.getElementById('targetProfile').value !== id, primary);
+        await prepare('resume.pdf', fixtures.pdf()); await analyze(); await confirm();
+        const db = (await call('localapply:read')).database; const second = db.activeProfileId;
+        assert.equal(db.entries.filter((e) => e.profileId === primary).length, 5); assert.equal(db.entries.filter((e) => e.profileId === second).length, 5);
+        assert.equal(db.fieldValues.find((v) => v.profileId === second && v.fieldId === 'builtin.name' && v.entryId === null).value, 'Test Person');
+        await page.locator('#resumeCenter details').evaluate((details) => { details.open = true; });
+        await page.getByRole('textbox', { name: '简历中心 · 姓名', exact: true }).fill('Center edit');
+        await page.getByRole('textbox', { name: '简历中心 · 姓名', exact: true }).press('Tab');
+        await page.waitForFunction(() => document.getElementById('centerStatus').textContent.includes('已保存'));
+        assert.equal((await call('localapply:read')).database.fieldValues.find((v) => v.profileId === second && v.fieldId === 'builtin.name' && v.entryId === null).evidence, undefined);
+      });
+      await t.test('畸形文档、无效 AI 和取消进行中的请求均不写入资料', async () => {
+        const before = (await call('localapply:read')).database;
+        await page.locator('#pdfFile').setInputFiles({ name: 'bad.docx', mimeType: 'application/octet-stream', buffer: Buffer.from('not a zip') });
+        await page.locator('#btnExtract').click(); await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('读取失败'));
+        await prepare('resume.docx', fixtures.docx()); api.modelApi.chatContent = '{"education":"wrong-type"}';
+        await page.locator('#sendResume').click(); await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('解析失败'));
+        api.modelApi.chatHold = true; const received = new Promise((resolve) => { api.modelApi.onChat = resolve; });
+        await page.locator('#sendResume').click(); await received;
+        await page.locator('#cancelResume').click(); api.modelApi.chatHold = false; api.modelApi.releaseChat();
+        assert.match(await page.locator('#pdfStatus').textContent(), /已取消/);
+        assert.equal(await page.locator('#importRow').isVisible(), false);
+        assert.deepEqual((await call('localapply:read')).database, before);
+        assert.equal(await page.locator('#sourcePreview').textContent(), '');
+        await prepare('retry.docx', fixtures.docx()); assert.equal(await page.locator('#sendResume').isEnabled(), true);
+        await page.locator('#cancelResume').click();
+      });
+      const before = (await call('localapply:read')).database;
+      await page.evaluate(() => { document.querySelector('#resumeCenter details').open = false; window.scrollTo(0, 0); });
+      await page.screenshot({ path: path.join(testRoot, `phase2-${withExtension ? 'extension' : 'file'}.png`), fullPage: false });
+      await context.close(); context = await launch(profile, withExtension);
+      page = await context.newPage(); await page.goto(url); await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      await t.test('整个浏览器重启后资料不变、保险库锁定且可再次解锁', async () => {
+        assert.deepEqual((await call('localapply:read')).database, before);
+        const s = (await call('wsa:getState')).state.settings; assert.equal(s.vault.unlocked, false); assert.equal(s.keyStatus[s.provider], true);
+        await page.locator('#vaultPassword').fill('synthetic-password'); await page.locator('#vaultUnlock').click();
+        await page.waitForFunction(async () => (await getState()).settings.vault.unlocked);
+        await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取'));
+        assert.equal(api.modelRequests.at(-1).authorization, 'Bearer synthetic-stage2-key');
+        assert.deepEqual(errors, []);
+      });
+    } finally {
+      if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve));
+      assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep));
+      await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
 }
 
 // 自动等待 DOM 和扩展检测完成，不依赖固定长延时。
@@ -145,12 +284,15 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
         await options.evaluate(() => flushSaves());
       };
       await choose('deepseek'); assert.equal(await options.locator('#provider').inputValue(), 'DeepSeek');
+      await setupVault(options);
       await options.locator('#apiKey').fill('fake-deepseek-ui-key'); await options.locator('#apiKey').press('Tab');
+      await options.evaluate(() => flushCredentials());
       await options.locator('#manualModel').check();
       await options.locator('#model').fill('synthetic-deepseek'); await options.locator('#model').press('Tab');
       await choose('qwen'); assert.equal(await options.locator('#apiKey').inputValue(), '');
       await choose('deepseek'); assert.equal(await options.locator('#model').inputValue(), 'synthetic-deepseek');
-      assert.equal(await options.locator('#apiKey').inputValue(), 'fake-deepseek-ui-key');
+      assert.equal(await options.locator('#apiKey').inputValue(), '');
+      assert.equal((await rpc(options, 'wsa:getState')).state.settings.keyStatus.deepseek, true);
       await choose(base.replace('http://', ''));
       assert.equal(await options.locator('#customBase').inputValue(), base + '/v1');
       assert.equal(await options.locator('#apiKey').inputValue(), ''); assert.equal(await options.locator('#model').inputValue(), '');
@@ -305,6 +447,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       assert.equal(await page.locator('#standaloneNotice').isVisible(), true);
       assert.equal(await page.locator('#provider').isDisabled(), false);
       await page.locator('#provider').fill(base); await page.locator('#provider').press('Enter');
+      await setupVault(page);
       await page.locator('#apiKey').fill('fake-file-only-key'); await page.locator('#apiKey').press('Tab');
       await page.locator('#btnFetchModels').click();
       await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取 2 个模型'));
@@ -314,15 +457,21 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       await page.waitForFunction(() => document.getElementById('testResult').textContent.includes('连接正常'));
     });
     await t.test('本地文件 PDF 通过读取、视觉假接口、校对确认入库，原文件不持久化', async () => {
-      modelApi.chatContent = JSON.stringify({ name: '合成文件姓名', school: '合成文件学院', graduation: '2029-06', skills: ['合成技能'] });
+      modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成文件姓名', evidence: '合成文件姓名', page: 1 } } });
       await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
       await page.locator('#btnExtract').click();
-      await page.waitForFunction(() => document.querySelector('#pdfStatus .ok, #pdfStatus .err'));
-      assert.equal(await page.locator('#pdfStatus .err').count(), 0, await page.locator('#pdfStatus').textContent());
+      await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
+      assert.ok(!await page.locator('#sendResume').isHidden(), await page.locator('#pdfStatus').textContent());
+      await page.locator('#sendResume').waitFor({ state: 'visible' }); await page.locator('#sendResume').click();
+      await page.locator('#importRow').waitFor({ state: 'visible' });
+      // 扫描件来源无法本地核对，必须由测试用户明确勾选。
+      await page.locator('#pdfReview input[type=checkbox]').first().check();
       await page.locator('#btnImport').click();
+      await page.waitForFunction(() => !document.getElementById('btnImport').disabled);
+      assert.equal(await page.locator('#importRow').isVisible(), false, await page.locator('#pdfStatus').textContent());
       await page.locator('#importRow').waitFor({ state: 'hidden' });
       const { database } = await call('localapply:read');
-      assert.ok(database.fieldValues.some((row) => row.value === '合成文件姓名' && row.source === 'pdf-confirmed'));
+      assert.ok(database.fieldValues.some((row) => row.value === '合成文件姓名' && row.source === 'ai-confirmed'));
       assert.ok(!JSON.stringify(database).includes('data:image'));
       modelApi.chatContent = '正常';
     });
@@ -371,9 +520,10 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
     page = await context.newPage(); await page.goto(fileUrl);
     await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
     await t.test('关闭浏览器后重开文件页，IndexedDB 资料和配置保持不变', async () => {
-      const after = await call('wsa:getState'); assert.deepEqual(after.state, before.state);
+      const after = await call('wsa:getState'); before.state.settings.vault.unlocked = false; assert.deepEqual(after.state, before.state);
       assert.equal(after.state.settings.model, 'synthetic-local');
-      assert.ok(Object.values(after.state.settings.apiKeys).includes('fake-file-only-key'));
+      assert.equal(Object.values(after.state.settings.apiKeys).length, 0);
+      assert.equal(after.state.settings.vault.unlocked, false);
     });
   } finally {
     if (context) await context.close();

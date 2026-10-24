@@ -39,66 +39,67 @@
       return e;
     }
 
-    // 按当前服务商调用兼容接口；自定义/本地服务可不发送认证头。
+    const jobs = new Map();
+    // 请求可显式取消，超时覆盖响应体读取，错误不回显服务商原文或个人资料。
     async function callGLM(req) {
-      const state = await getState();
-      const settings = state.settings || {};
+      const settings = (await getState()).settings;
       const provider = getProvider(settings);
-      const key = (settings.apiKeys || {})[settings.provider] || '';
-      if (!key && provider.requiresKey) {
-        throw aiError(`尚未配置 ${provider.name} 的 API Key。不配置 AI 也完全可以使用：在字段库手动录入后一键填充不受影响；如需 PDF 提取/开放题起草，请到设置页填写。`);
-      }
+      const key = settings.apiKeys?.[settings.provider] || '';
+      if (!key && provider.requiresKey) throw aiError(`尚未配置 ${provider.name} 的 API Key，请先在设置页保存密钥。`);
       const model = req.model || settings.model || '';
       if (!model) throw aiError('请先获取模型列表并选择模型，或手动填写模型 ID。');
       const baseUrl = (provider.baseUrl || '').replace(/\/+$/, '');
-      if (!baseUrl) throw aiError('自定义服务商缺少接口地址，请到设置页填写（OpenAI 兼容地址，如 https://xx.com/v1）。');
+      if (!baseUrl) throw aiError('请先填写服务商接口地址。');
       const timeoutMs = req.timeoutMs || DEFAULT_TIMEOUT_MS;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      let res;
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      req.signal?.addEventListener('abort', cancel, { once: true });
+      if (req.signal?.aborted) controller.abort();
+      const timer = setTimeout(cancel, timeoutMs);
       try {
-        res = await fetch(baseUrl + '/chat/completions', {
-          method: 'POST',
+        const response = await fetch(baseUrl + '/chat/completions', { method: 'POST', redirect: 'error',
           headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}) },
-          redirect: 'error', // 不把端点 A 的凭据经重定向转发到其他服务商。
-          body: JSON.stringify({
-            model,
-            messages: req.messages,
-            temperature: req.temperature != null ? req.temperature : 0.6,
-            max_tokens: req.maxTokens,
-            stream: false,
-          }),
-          signal: ctrl.signal,
-        });
-      } catch (err) {
-        if (err && err.name === 'AbortError') {
-          throw aiError(`AI 请求超时（${Math.round(timeoutMs / 1000)} 秒），请重试或检查网络。`);
+          body: JSON.stringify({ model, messages: req.messages, temperature: req.temperature ?? 0.2, max_tokens: req.maxTokens, stream: false }),
+          signal: controller.signal });
+        if (!response.ok) {
+          if (response.status === 401) throw aiError('API Key 无效（401），请检查当前服务商密钥。');
+          if (response.status === 429) throw aiError('调用频率/额度受限（429），请稍后重试。');
+          throw aiError('AI 接口返回 HTTP ' + response.status);
         }
-        throw aiError('网络请求失败：' + (err && err.message ? err.message : String(err)));
+        let data;
+        try { data = await response.json(); }
+        catch (error) { if (error.name === 'AbortError') throw error; throw aiError('AI 回复不是有效 JSON'); }
+        const content = data?.choices?.[0]?.message?.content;
+        if (typeof content !== 'string' || content.length > 300000) throw aiError('AI 返回格式异常或内容超限。');
+        return { content, usage: data.usage || null, model };
+      } catch (error) {
+        if (controller.signal.aborted) throw aiError(req.signal?.aborted ? '已取消解析' : 'AI 请求超时，请重试或检查网络。');
+        if (error instanceof TypeError) throw aiError('网络请求失败，请检查服务地址和访问权限。');
+        throw error;
       } finally {
-        clearTimeout(timer);
+        clearTimeout(timer); req.signal?.removeEventListener('abort', cancel);
       }
-      let data = null;
-      try {
-        data = await res.json();
-      } catch (e) {
-        /* 保留 data=null，走下面的状态码分支 */
-      }
-      if (!res.ok) {
-        const apiMsg = data && data.error && data.error.message ? data.error.message : '';
-        if (res.status === 401) throw aiError(`API Key 无效（401），请到设置页检查 ${provider.name} 的 Key 是否复制完整。`, apiMsg);
-        if (res.status === 429) throw aiError('调用频率/额度受限（429），请稍后再试或检查账户余额。', apiMsg);
-        throw aiError(`${provider.name} 接口返回 ${res.status}：${apiMsg || res.statusText}`, apiMsg);
-      }
-      if (data && data.error) {
-        throw aiError(provider.name + ' 接口报错：' + (data.error.message || JSON.stringify(data.error)));
-      }
-      const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-      if (typeof content !== 'string') {
-        throw aiError('AI 返回格式异常，未找到回复内容。原始返回：' + JSON.stringify(data).slice(0, 300));
-      }
-      return { content, usage: data.usage || null, model };
     }
+    // 一个导入对应一个可取消任务；结束后释放图像/全文引用，不写任何资料。
+    async function extractResume(payload) {
+      if (typeof payload.requestId !== 'string' || payload.requestId.length > 100) throw aiError('缺少解析任务标识');
+      if (jobs.has(payload.requestId)) throw aiError('解析任务已存在');
+      const controller = new AbortController(); jobs.set(payload.requestId, controller);
+      try {
+        let content;
+        if (payload.pages?.length) content = await visionExtract(payload.pages, await resolveVisionModel(), controller.signal);
+        else {
+          if (typeof payload.text !== 'string' || payload.text.length > 100000) throw aiError('简历文本为空或超限');
+          content = (await callGLM({ messages: [{ role: 'system', content: global.LocalApplyResume.prompt() },
+            { role: 'user', content: payload.text }], signal: controller.signal, timeoutMs: 120000, maxTokens: 10000 })).content;
+        }
+        const data = extractJson(content);
+        if (!data) throw aiError('AI 返回的内容无法解析为 JSON，请重试。');
+        return data;
+      } finally { jobs.delete(payload.requestId); }
+    }
+    // 仅取消指定任务，不影响其他页面正在执行的请求。
+    function cancel(requestId) { jobs.get(requestId)?.abort(); }
 
     // 只向当前服务商获取模型 ID；不发送简历/聊天内容，不跟随携带凭据的重定向。
     async function listAvailableModels(expectedProviderId) {
@@ -153,19 +154,13 @@
     }
 
     // 视觉模式：每页一条消息（含 PNG base64），顺序调用后合并
-    async function visionExtract(pages, visionModel) {
+    async function visionExtract(pages, visionModel, signal) {
+      if (pages.length > 30 || pages.reduce((n, page) => n + String(page.dataUrl).length, 0) > 16 * 1024 * 1024) throw aiError('扫描页数量或大小超限');
       const merged = {};
-      const schemaPrompt =
-        '你是简历信息抽取助手。请从这一页简历图片中提取信息，只输出一个 JSON 对象，不要输出任何其他文字。' +
-        'JSON 字段：name(姓名), phone(手机号), email(邮箱), school(毕业院校), major(专业), degree(学历), graduation(毕业时间), ' +
-        'gpa(绩点或排名), languages(数组,语言/证书), skills(数组,技能), ' +
-        'experiences(数组,每项{company,role,start,end,bullets:[字符串数组]}), ' +
-        'projects(数组,每项{name,role,start,end,bullets:[字符串数组]}), ' +
-        'customs(对象,其他所有能识别到的字段,如政治面貌/籍贯/四六级/获奖等,键用中文标签)。' +
-        '本页没有的字段省略或留空，不要编造。';
+      const schemaPrompt = global.LocalApplyResume.prompt();
       for (const page of pages) {
         const out = await callGLM({
-          model: visionModel,
+          model: visionModel, signal,
           messages: [
             { role: 'user', content: [
               { type: 'image_url', image_url: { url: page.dataUrl } },
@@ -174,7 +169,7 @@
           ],
           temperature: 0.2,
           timeoutMs: 120000,
-          maxTokens: 4096,
+          maxTokens: 10000,
         });
         const part = extractJson(out.content);
         if (part) mergeResumePart(merged, part);
@@ -201,7 +196,7 @@
       }
     }
 
-    return { callGLM, listAvailableModels, extractJson, resolveVisionModel, visionExtract, mergeResumePart, aiError };
+    return { callGLM, extractResume, cancel, listAvailableModels, extractJson, resolveVisionModel, visionExtract, mergeResumePart, aiError };
   }
   global.LocalApplyAI = { createClient };
 })(globalThis);
