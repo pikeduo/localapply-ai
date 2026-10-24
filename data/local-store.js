@@ -1,0 +1,534 @@
+// 本地数据层：公共元数据与个人值隔离；仅后台实例可写，旧 UI 使用兼容投影。
+(function (global) {
+  'use strict';
+  const DB_KEY = 'localapply.database';
+  const API_KEY = 'localapply.apiSettings';
+  const RECOVERY_KEY = 'localapply.recovery';
+  const LEGACY_KEY = 'wangshenAutofill';
+  const SCHEMA_VERSION = 2;
+  const TYPES = ['text', 'textarea', 'select', 'number', 'boolean', 'date', 'multiSelect'];
+  const KINDS = ['education', 'internship', 'employment', 'project'];
+  const API_FIELDS = ['provider', 'model', 'visionModel', 'customBase', 'apiKeys'];
+  const DEF_KEYS = ['fieldId', 'label', 'type', 'group', 'aliases', 'options', 'description', 'version'];
+  const TABLES = ['fieldDefinitions', 'profiles', 'fieldValues', 'entries', 'bindings', 'mappingRules'];
+
+  // 深拷贝仅接受 JSON 数据；拒绝文件对象、原型污染及未经声明的属性。
+  function clone(value) { return value === undefined ? undefined : JSON.parse(JSON.stringify(value)); }
+  // 比较 JSON 数据，undefined 仅用于差异计算中的缺失值。
+  function equal(a, b) {
+    if (a === b) return true;
+    if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((item, index) => equal(item, b[index]));
+    if (object(a) && object(b)) return Object.keys(a).length === Object.keys(b).length
+      && Object.keys(a).every((key) => Object.hasOwn(b, key) && equal(a[key], b[key]));
+    return false;
+  }
+  // 创建不包含档案标识的全局 ID。
+  function id(prefix) { return prefix + '.' + global.crypto.randomUUID(); }
+  // 旧备份需稳定 ID 才能重复合并；此散列仅作标识，不用于加密或安全认证。
+  function legacyFieldId(profileId, fid) {
+    const input = JSON.stringify([profileId, fid]);
+    const parts = [2166136261, 2246822519, 3266489917, 668265263].map((seed) => {
+      let hash = seed;
+      for (let index = 0; index < input.length; index++) hash = Math.imul(hash ^ input.charCodeAt(index), 16777619);
+      return (hash >>> 0).toString(16).padStart(8, '0');
+    });
+    return 'legacy.' + parts.join('');
+  }
+  // 统一生成 UTC 时间。
+  function now() { return new Date().toISOString(); }
+  // 对不符合 Schema 的输入抛出可读错误，不输出原始个人数据。
+  function check(ok, message) { if (!ok) throw new Error(message); }
+  // 校验普通 JSON 对象，避免 Blob/File 等隐式序列化。
+  function object(value) { return !!value && Object.prototype.toString.call(value) === '[object Object]'; }
+  // 只允许显式键名，阻止备份夹带简历原文件或秘密属性。
+  function keys(value, allowed, name) {
+    check(object(value), name + ' 必须是对象');
+    check(Object.keys(value).every((key) => allowed.includes(key)), name + ' 包含未声明属性');
+  }
+  // 限制字符串大小；元数据不承担任意二进制或原文存储职责。
+  function string(value, name, max = 500, empty = false) {
+    check(typeof value === 'string' && (empty || value.trim().length > 0) && value.length <= max, name + ' 格式错误');
+    check(!/^(data:|blob:)/i.test(value), name + ' 不允许文件数据 URL');
+  }
+  // 校验数组和规模，防止异常导入耗尽内存。
+  function list(value, name, max = 10000) { check(Array.isArray(value) && value.length <= max, name + ' 数量或格式错误'); }
+  // 校验字段定义白名单，不允许携带 value/profileId/source 等个人属性。
+  function definition(value) {
+    keys(value, DEF_KEYS, '字段定义');
+    for (const key of ['fieldId', 'label', 'group']) string(value[key], key);
+    check(TYPES.includes(value.type), '未知字段类型');
+    check(Number.isInteger(value.version) && value.version > 0, '字段版本错误');
+    string(value.description, 'description', 2000, true);
+    for (const key of ['aliases', 'options']) {
+      list(value[key], key, 200);
+      value[key].forEach((item) => string(item, key));
+    }
+    return clone(value);
+  }
+  // 构造字段定义，默认属性只来自元数据，不复制用户值。
+  function makeDefinition(input) {
+    keys(input, DEF_KEYS, '字段定义输入');
+    return definition({ fieldId: input.fieldId || id('custom'), label: input.label, type: input.type || 'text',
+      group: input.group || '其他', aliases: input.aliases || [], options: input.options || [],
+      description: input.description || '', version: input.version || 1 });
+  }
+  // 根据字段类型校验个人值，保留 false/0，不自动推断敏感信息。
+  function validValue(value, def) {
+    if (value === null || value === '') return;
+    if (def.type === 'number') check(typeof value === 'number' && Number.isFinite(value), '字段需要数字');
+    else if (def.type === 'boolean') check(typeof value === 'boolean', '字段需要布尔值');
+    else if (def.type === 'multiSelect') {
+      list(value, '多选值', 200);
+      value.forEach((item) => { string(item, '多选值'); check(def.options.includes(item), '多选值不在选项内'); });
+    } else {
+      string(value, '字段值', 100000, true);
+      if (def.type === 'date') {
+        check(/^\d{4}(-\d{2})?(-\d{2})?$/.test(value), '日期格式错误');
+        if (value.length >= 7) check(Number(value.slice(5, 7)) >= 1 && Number(value.slice(5, 7)) <= 12, '月份错误');
+        if (value.length === 10) check(Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value, '日期不存在');
+      }
+      // 原项目允许 select 保存自定义文字，保留这一兼容行为。
+    }
+  }
+  // 仅取标准模板公共元数据，旧词库继续作为识别引擎。
+  function builtins() {
+    return global.WangshenTemplates.SOE_LONG_TEMPLATE.map((field) => makeDefinition({
+      fieldId: 'builtin.' + field.key, label: field.label, type: field.inputType, group: field.group,
+      aliases: (field.patterns || []).filter((alias) => !alias.startsWith('re:')), options: field.options || [],
+    }));
+  }
+  // 建立空数据库，API 设置不进入此对象。
+  function emptyDatabase() {
+    const defs = builtins();
+    return { schemaVersion: SCHEMA_VERSION, revision: 0, fieldDefinitions: defs, publicFieldIds: defs.map((d) => d.fieldId),
+      profiles: [], fieldValues: [], entries: [], bindings: [], mappingRules: [], activeProfileId: '',
+      settings: { autoThreshold: 0.85, privacyMask: true, autoFloatbar: true }, ledger: [], drafts: {}, onboardingDone: false };
+  }
+  // 校验非敏感设置，不能夹带 API Key。
+  function settings(value) {
+    keys(value, ['autoThreshold', 'privacyMask', 'autoFloatbar'], '填充设置');
+    check(typeof value.autoThreshold === 'number' && value.autoThreshold >= 0.5 && value.autoThreshold <= 1, '阈值错误');
+    check(typeof value.privacyMask === 'boolean' && typeof value.autoFloatbar === 'boolean', '设置格式错误');
+  }
+  // API 配置独立校验与保存，当前阶段保留旧凭据格式，不承诺静态加密。
+  function apiSettings(value) {
+    keys(value, API_FIELDS, 'API 设置');
+    for (const key of API_FIELDS.filter((key) => key !== 'apiKeys')) string(value[key] || '', key, 2000, true);
+    check(object(value.apiKeys), 'apiKeys 格式错误');
+    for (const [provider, key] of Object.entries(value.apiKeys)) { string(provider, '服务商'); string(key, 'API Key', 4096, true); }
+    return clone(value);
+  }
+  // 校验数据库完整性和所有引用；输入错误时不进行任何写入。
+  function validate(db) {
+    keys(db, ['schemaVersion', 'revision', ...TABLES, 'publicFieldIds', 'activeProfileId', 'settings', 'ledger', 'drafts', 'onboardingDone'], '数据库');
+    check(db.schemaVersion === SCHEMA_VERSION, '不支持的数据库版本');
+    check(Number.isInteger(db.revision) && db.revision >= 0, '数据库 revision 错误');
+    for (const table of [...TABLES, 'publicFieldIds', 'ledger']) list(db[table], table);
+    const defs = new Map();
+    db.fieldDefinitions.forEach((def) => { definition(def); check(!defs.has(def.fieldId), '重复字段 ID'); defs.set(def.fieldId, def); });
+    const profiles = new Set();
+    db.profiles.forEach((profile) => {
+      keys(profile, ['profileId', 'name', 'createdAt', 'materials'], '档案');
+      string(profile.profileId, 'profileId'); string(profile.name, '档案名称'); string(profile.createdAt, '创建时间');
+      check(Number.isFinite(Date.parse(profile.createdAt)), '创建时间错误');
+      check(!profiles.has(profile.profileId), '重复档案 ID'); profiles.add(profile.profileId);
+      list(profile.materials, '材料', 500);
+      profile.materials.forEach((material) => { keys(material, ['name', 'note'], '材料'); string(material.name, '材料名称', 500, true); string(material.note, '备注', 2000, true); });
+    });
+    check(profiles.size > 0 && profiles.has(db.activeProfileId), '缺少有效活动档案');
+    const entries = new Map();
+    db.entries.forEach((entry) => {
+      keys(entry, ['entryId', 'profileId', 'kind', 'title', 'order'], '经历');
+      string(entry.entryId, 'entryId'); string(entry.title, '经历标题', 500, true);
+      check(profiles.has(entry.profileId) && KINDS.includes(entry.kind), '经历引用或类型错误');
+      check(Number.isInteger(entry.order) && entry.order >= 0 && !entries.has(entry.entryId), '经历顺序或 ID 错误');
+      entries.set(entry.entryId, entry);
+    });
+    const valueKeys = new Set();
+    db.fieldValues.forEach((row) => {
+      keys(row, ['profileId', 'fieldId', 'entryId', 'value', 'updatedAt', 'source'], '个人字段值');
+      check(profiles.has(row.profileId) && defs.has(row.fieldId), '字段值引用错误');
+      check(row.entryId === null || entries.get(row.entryId)?.profileId === row.profileId, '经历不属于当前档案');
+      const key = JSON.stringify([row.profileId, row.fieldId, row.entryId]);
+      check(!valueKeys.has(key), '重复个人字段值'); valueKeys.add(key);
+      string(row.updatedAt, '更新时间'); string(row.source, '数据来源');
+      check(Number.isFinite(Date.parse(row.updatedAt)), '更新时间错误');
+      validValue(row.value, defs.get(row.fieldId));
+    });
+    const bindingKeys = new Set();
+    db.bindings.forEach((binding) => {
+      keys(binding, ['profileId', 'fieldId', 'fid', 'key', 'sensitive', 'autoFill', 'material', 'custom'], '字段展示配置');
+      check(profiles.has(binding.profileId) && defs.has(binding.fieldId), '字段展示引用错误');
+      string(binding.fid, 'fid'); string(binding.key, '字段 key');
+      for (const key of ['sensitive', 'autoFill', 'material', 'custom']) check(typeof binding[key] === 'boolean', '展示配置错误');
+      const key = JSON.stringify([binding.profileId, binding.fid]);
+      check(!bindingKeys.has(key), '重复档案字段'); bindingKeys.add(key);
+    });
+    const mappings = new Set();
+    db.mappingRules.forEach((rule) => {
+      keys(rule, ['mappingId', 'origin', 'path', 'label', 'fieldId', 'profileId', 'entryId'], '映射规则');
+      string(rule.mappingId, 'mappingId'); string(rule.label, '映射标签'); string(rule.path, '映射路径');
+      check(/^https?:\/\/[^/?#]+$/.test(rule.origin) && defs.has(rule.fieldId), '映射 origin 或字段错误');
+      check(rule.profileId === null || profiles.has(rule.profileId), '映射档案错误');
+      check(rule.entryId === null || entries.get(rule.entryId)?.profileId === rule.profileId, '映射经历错误');
+      check(!mappings.has(rule.mappingId), '重复映射 ID'); mappings.add(rule.mappingId);
+    });
+    check(db.publicFieldIds.every((fieldId) => defs.has(fieldId)) && new Set(db.publicFieldIds).size === db.publicFieldIds.length, '公共导出范围错误');
+    settings(db.settings);
+    check(typeof db.onboardingDone === 'boolean' && object(db.drafts), '草稿/引导格式错误');
+    // 对历史辅助信息也限制形状，禁止以宽松 metadata 偷渡原文件。
+    db.ledger.forEach((row) => {
+      keys(row, ['ts', 'company', 'system', 'url', 'autoCount', 'manualCount'], '填充记录');
+      check(Number.isFinite(row.ts), '记录时间错误');
+      for (const key of ['company', 'system', 'url']) string(row[key] || '', key, 4000, true);
+      for (const key of ['autoCount', 'manualCount']) check(Number.isFinite(row[key]) && row[key] >= 0, '记录数量错误');
+    });
+    for (const [profileId, questions] of Object.entries(db.drafts)) {
+      check(profiles.has(profileId) && object(questions), '草稿档案错误');
+      for (const history of Object.values(questions)) {
+        list(history, '草稿历史', 3);
+        history.forEach((draft) => { keys(draft, ['ts', 'text'], '草稿'); check(Number.isFinite(draft.ts), '草稿时间错误'); string(draft.text, '草稿文本', 10000, true); });
+      }
+    }
+    return db;
+  }
+  // 分离旧 API 配置，不改动原始对象。
+  function splitApi(legacy) {
+    const old = legacy.settings || {};
+    return apiSettings({ provider: old.provider || 'zhipu', model: old.model || '', visionModel: old.visionModel || '',
+      customBase: old.customBase || '', apiKeys: { ...(old.apiKey ? { zhipu: old.apiKey } : {}), ...(old.apiKeys || {}) } });
+  }
+  // 将旧档案按原顺序导入，保留 key/fid/开关；自定义标签不默认对外公开。
+  function syncLegacy(db, state, source = 'manual') {
+    check(Array.isArray(state.profiles) && state.profiles.length > 0, '旧数据缺少档案');
+    const profileIds = state.profiles.map((profile) => profile.id);
+    db.entries = db.entries.filter((entry) => profileIds.includes(entry.profileId));
+    db.fieldValues = db.fieldValues.filter((row) => profileIds.includes(row.profileId));
+    db.mappingRules = db.mappingRules.filter((rule) => !rule.profileId || profileIds.includes(rule.profileId));
+    db.drafts = Object.fromEntries(Object.entries(state.drafts || {}).filter(([key]) => profileIds.includes(key)));
+    const bindings = [];
+    db.profiles = state.profiles.map((profile) => {
+      string(profile.id, '旧档案 ID'); string(profile.name, '旧档案名称'); list(profile.fields, '旧字段');
+      for (const field of profile.fields) {
+        string(field.key, '旧字段 key'); string(field.fid, '旧字段 fid');
+        const previous = db.bindings.find((row) => row.profileId === profile.id && row.fid === field.fid);
+        const builtin = db.fieldDefinitions.find((def) => def.fieldId === 'builtin.' + field.key);
+        const input = { label: field.label, type: field.inputType || 'text', group: field.group || '其他', options: field.options || [] };
+        let def = previous && db.fieldDefinitions.find((row) => row.fieldId === previous.fieldId);
+        if (!def) {
+          const canUseBuiltin = builtin && !bindings.some((row) => row.profileId === profile.id && row.fieldId === builtin.fieldId)
+            && builtin.label === input.label && builtin.type === input.type && builtin.group === input.group && equal(builtin.options, input.options);
+          def = canUseBuiltin ? builtin : makeDefinition({ ...input, fieldId: source === 'legacy' ? legacyFieldId(profile.id, field.fid) : id('custom') });
+          if (!canUseBuiltin) {
+            check(!db.fieldDefinitions.some((row) => row.fieldId === def.fieldId), '旧字段 ID 冲突，请检查原数据');
+            db.fieldDefinitions.push(def);
+          }
+        } else if (['label', 'type', 'group', 'options'].some((key) => !equal(def[key], input[key]))) {
+          // 旧 UI 修改局部元数据时建立私有定义，避免改变其他档案或公共目录。
+          if (!db.publicFieldIds.includes(def.fieldId)) {
+            Object.assign(def, input, { version: def.version + 1 });
+          } else {
+            def = makeDefinition({ ...def, ...input, fieldId: id('custom'), version: 1 });
+            db.fieldDefinitions.push(def);
+          }
+        }
+        const binding = { profileId: profile.id, fieldId: def.fieldId, fid: field.fid, key: field.key,
+          sensitive: !!field.sensitive, autoFill: !!field.autoFill, material: !!field.material, custom: !!field.custom };
+        bindings.push(binding);
+        let row = db.fieldValues.find((value) => value.profileId === profile.id && value.fieldId === def.fieldId && value.entryId === null);
+        let value = field.value === undefined ? '' : field.value;
+        // 旧输入框只产出字符串，按定义转换；错误文字交给校验拒绝而非随意转 true。
+        if (value !== '' && value !== null && typeof value === 'string') {
+          if (def.type === 'number') value = value.trim() === '' ? null : Number(value);
+          if (def.type === 'boolean' && ['true', 'false'].includes(value)) value = value === 'true';
+          if (def.type === 'multiSelect') value = JSON.parse(value);
+        }
+        if (!row) { row = { profileId: profile.id, fieldId: def.fieldId, entryId: null, value,
+          updatedAt: source === 'legacy' ? new Date(profile.createdAt || 0).toISOString() : now(), source }; db.fieldValues.push(row); }
+        else if (!equal(row.value, value)) { row.value = value; row.updatedAt = now(); row.source = source; }
+      }
+      return { profileId: profile.id, name: profile.name, createdAt: new Date(profile.createdAt || 0).toISOString(),
+        materials: (profile.materials || []).map((material) => ({ name: material.name || '', note: material.note || '' })) };
+    });
+    db.bindings = bindings;
+    // 清理已删除的平面字段值，重复经历使用独立 entryId，不受旧 UI 投影影响。
+    db.fieldValues = db.fieldValues.filter((row) => row.entryId !== null || bindings.some((b) => b.profileId === row.profileId && b.fieldId === row.fieldId));
+    db.fieldDefinitions = db.fieldDefinitions.filter((def) => db.publicFieldIds.includes(def.fieldId)
+      || db.bindings.some((row) => row.fieldId === def.fieldId) || db.fieldValues.some((row) => row.fieldId === def.fieldId)
+      || db.mappingRules.some((row) => row.fieldId === def.fieldId));
+    db.activeProfileId = state.activeProfileId;
+    db.settings = Object.fromEntries(['autoThreshold', 'privacyMask', 'autoFloatbar'].map((key) => [key, state.settings?.[key] ?? db.settings[key]]));
+    db.ledger = clone(state.ledger || []);
+    db.onboardingDone = !!state.onboardingDone;
+    return validate(db);
+  }
+  // 旧 schema=1 显式迁移；未知版本失败而不是重置用户数据。
+  function migrate(legacy) {
+    check(legacy.schemaVersion === 1 || legacy.schemaVersion === undefined, '不支持的旧数据库版本');
+    return { db: syncLegacy(emptyDatabase(), clone(legacy), 'legacy'), api: splitApi(legacy) };
+  }
+  // 将规范存储投影为旧 UI 需要的 fields，仅投影平面字段，不损失重复经历。
+  function legacyState(db, api) {
+    return { schemaVersion: SCHEMA_VERSION, revision: db.revision, migratedFullFields: true, onboardingDone: db.onboardingDone,
+      settings: { ...clone(db.settings), ...clone(api) }, activeProfileId: db.activeProfileId, ledger: clone(db.ledger), drafts: clone(db.drafts),
+      profiles: db.profiles.map((profile) => ({ id: profile.profileId, name: profile.name, createdAt: Date.parse(profile.createdAt), templateId: 'all', __wsaFull: true,
+        materials: clone(profile.materials), fields: db.bindings.filter((binding) => binding.profileId === profile.profileId).map((binding) => {
+          const def = db.fieldDefinitions.find((field) => field.fieldId === binding.fieldId);
+          const row = db.fieldValues.find((value) => value.profileId === profile.profileId && value.fieldId === def.fieldId && value.entryId === null);
+          const { profileId, fieldId, ...display } = binding;
+          return { ...clone(display), label: def.label, group: def.group, inputType: def.type, options: clone(def.options), value: row?.value ?? '' };
+        }) })) };
+  }
+  // 旧 UI 新增字段不带 options；标准化快照后才比较，避免把展示默认值误判为冲突。
+  function normalizeSnapshot(state) {
+    const normalized = clone(state);
+    for (const profile of normalized.profiles || []) for (const field of profile.fields || []) {
+      field.options ||= [];
+    }
+    return normalized;
+  }
+  // 三方合并旧 UI 快照：只应用改变的路径，同一字段并发编辑明确冲突。
+  function mergeChanged(base, next, current) {
+    if (equal(base, next)) return clone(current);
+    if (equal(next, current)) return clone(current);
+    if (object(base) && object(next) && object(current)) {
+      const result = clone(current);
+      for (const key of new Set([...Object.keys(base), ...Object.keys(next)])) {
+        if (key === 'revision' || equal(base[key], next[key])) continue;
+        if (!(key in next)) { check(equal(current[key], base[key]), '资料已变化，请刷新后重试'); delete result[key]; }
+        else result[key] = mergeChanged(base[key], next[key], current[key]);
+      }
+      return result;
+    }
+    if (Array.isArray(base) && Array.isArray(next) && Array.isArray(current)) {
+      const key = [...base, ...next, ...current].every((row) => object(row) && row.fid) ? 'fid'
+        : [...base, ...next, ...current].every((row) => object(row) && row.id) ? 'id' : null;
+      if (key) {
+        const result = clone(current);
+        for (const old of base) if (!next.some((row) => row[key] === old[key])) {
+          const index = result.findIndex((row) => row[key] === old[key]);
+          if (index >= 0) { check(equal(result[index], old), '删除目标已变化，请刷新后重试'); result.splice(index, 1); }
+        }
+        for (const item of next) {
+          const old = base.find((row) => row[key] === item[key]);
+          const index = result.findIndex((row) => row[key] === item[key]);
+          if (!old) { check(index < 0 || equal(result[index], item), '新增 ID 冲突'); if (index < 0) result.push(clone(item)); }
+          else if (!equal(old, item)) { check(index >= 0, '资料已删除，请刷新后重试'); result[index] = mergeChanged(old, item, result[index]); }
+        }
+        return result;
+      }
+    }
+    check(equal(base, current), '资料已变化，请刷新后重试');
+    return clone(next);
+  }
+  // 备份只含规范个人库；API 设置及旧恢复源从不进入备份。
+  function backup(db) {
+    return { kind: 'localapply-ai-backup', formatVersion: 1, schemaVersion: SCHEMA_VERSION, exportedAt: now(), database: clone(validate(db)) };
+  }
+  // 导入支持旧档案备份和新备份；所有校验在写入前完成。
+  function parseBackup(input) {
+    const text = typeof input === 'string' ? input : JSON.stringify(input);
+    check(text.length <= 8 * 1024 * 1024, '备份超过 8 MiB 限制');
+    const data = JSON.parse(text);
+    if (data.kind === 'wangshen-autofill-backup') {
+      keys(data, ['kind', 'version', 'exportedAt', 'profiles', 'activeProfileId'], '旧备份');
+      check(data.version === 1, '不支持的旧备份版本');
+      return migrate({ schemaVersion: 1, profiles: data.profiles, activeProfileId: data.activeProfileId || data.profiles?.[0]?.id }).db;
+    }
+    keys(data, ['kind', 'formatVersion', 'schemaVersion', 'exportedAt', 'database'], '备份');
+    check(data.kind === 'localapply-ai-backup' && data.formatVersion === 1 && data.schemaVersion === SCHEMA_VERSION, '不支持的备份版本');
+    return validate(data.database);
+  }
+  // 合并备份保留现有冲突数据，差异预览会列出冲突数量；覆盖模式需显式选择。
+  function importPlan(current, incoming, mode) {
+    check(['merge', 'replace'].includes(mode), '未知导入方式');
+    const summary = { mode, profilesAdded: 0, fieldsAdded: 0, valuesAdded: 0, conflicts: 0, profilesRemoved: 0 };
+    const result = mode === 'replace' ? clone(incoming) : clone(current);
+    const identities = { fieldDefinitions: (row) => row.fieldId, profiles: (row) => row.profileId,
+      fieldValues: (row) => JSON.stringify([row.profileId, row.fieldId, row.entryId]), entries: (row) => row.entryId,
+      bindings: (row) => JSON.stringify([row.profileId, row.fid]), mappingRules: (row) => row.mappingId };
+    for (const table of TABLES) {
+      for (const row of incoming[table]) {
+        const existing = current[table].find((item) => identities[table](item) === identities[table](row));
+        if (!existing) {
+          if (mode === 'merge') result[table].push(clone(row));
+          if (table === 'profiles') summary.profilesAdded++;
+          if (table === 'fieldDefinitions') summary.fieldsAdded++;
+          if (table === 'fieldValues') summary.valuesAdded++;
+        } else if (!equal(existing, row)) summary.conflicts++;
+      }
+    }
+    if (mode === 'replace') summary.profilesRemoved = current.profiles.filter((profile) => !incoming.profiles.some((row) => row.profileId === profile.profileId)).length;
+    // 私人备份不能自行提升公开权限；仅保留本机已审核且元数据完全相同的定义。
+    result.publicFieldIds = current.publicFieldIds.filter((fieldId) => {
+      const known = current.fieldDefinitions.find((def) => def.fieldId === fieldId);
+      return result.fieldDefinitions.some((def) => def.fieldId === fieldId && equal(def, known));
+    });
+    result.revision = current.revision;
+    return { database: validate(result), summary };
+  }
+  // 创建后台仓库；队列同时覆盖读取初始化与写入，避免 UI 并发丢更新。
+  function createRepository(storage) {
+    let queue = Promise.resolve();
+    // 初始化访问限制和数据；失败不删除/修改旧源，下次启动可重试。
+    async function load() {
+      await storage.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+      const data = await storage.get([DB_KEY, API_KEY]);
+      if (data[DB_KEY]) return { db: clone(validate(data[DB_KEY])), api: apiSettings(data[API_KEY]) };
+      const legacy = await storage.get(LEGACY_KEY);
+      const migrated = migrate(legacy[LEGACY_KEY] || global.WangshenTemplates.defaultState());
+      // 先持久化独立配置，再以单 DB 键作为迁移生效点；中断时旧源仍可重试。
+      await storage.set({ [API_KEY]: migrated.api });
+      await storage.set({ [DB_KEY]: migrated.db });
+      const saved = await storage.get([DB_KEY, API_KEY]);
+      check(equal(saved[DB_KEY], migrated.db) && equal(saved[API_KEY], migrated.api), '迁移写入校验失败；旧数据仍保留');
+      return migrated;
+    }
+    // 按序运行操作，单次失败不阻塞后续请求。
+    function run(work) {
+      const task = queue.then(async () => work(await load()));
+      queue = task.catch(() => {});
+      return task;
+    }
+    // 一次数据库写入为提交单位；API 配置独立存储，仅必要时同时更新。
+    async function commit(db, api, previous, recovery = false) {
+      validate(db); db.revision = previous.db.revision + 1;
+      const write = { [DB_KEY]: db };
+      if (api && !equal(api, previous.api)) write[API_KEY] = apiSettings(api);
+      if (recovery) await storage.set({ [RECOVERY_KEY]: clone(previous.db) });
+      await storage.set(write);
+      return clone(db);
+    }
+    // 命令校验并操作独立副本，AI 未来也通过同一入口而不是直接写存储。
+    function command(request) {
+      return run(async (previous) => {
+        const db = clone(previous.db);
+        const input = request.payload || {};
+        if (request.expectedRevision !== undefined) check(request.expectedRevision === db.revision, '数据版本已变化，请重新预览');
+        let result = null;
+        switch (request.action) {
+          case 'createField': {
+            keys(input, ['definition', 'profileId', 'value', 'source'], '新字段');
+            const def = makeDefinition(input.definition);
+            check(!db.fieldDefinitions.some((row) => row.fieldId === def.fieldId), '字段 ID 已存在');
+            check(db.profiles.some((row) => row.profileId === input.profileId), '档案不存在');
+            db.fieldDefinitions.push(def);
+            db.bindings.push({ profileId: input.profileId, fieldId: def.fieldId, fid: id('field'), key: def.fieldId,
+              sensitive: false, autoFill: false, material: false, custom: true });
+            db.fieldValues.push({ profileId: input.profileId, fieldId: def.fieldId, entryId: null, value: input.value ?? null, updatedAt: now(), source: input.source || 'manual' });
+            result = def.fieldId; break;
+          }
+          case 'editField': {
+            keys(input, ['definition'], '编辑字段');
+            const def = definition(input.definition);
+            const index = db.fieldDefinitions.findIndex((row) => row.fieldId === def.fieldId);
+            check(index >= 0 && !db.publicFieldIds.includes(def.fieldId), '字段不存在或属于公共目录，请先创建私有字段');
+            check(def.version === db.fieldDefinitions[index].version + 1, '字段定义版本冲突');
+            db.fieldDefinitions[index] = def; break;
+          }
+          case 'deleteField': {
+            keys(input, ['fieldId'], '删除字段');
+            check(db.fieldDefinitions.some((row) => row.fieldId === input.fieldId) && !db.publicFieldIds.includes(input.fieldId), '公共字段不可全局删除');
+            db.fieldDefinitions = db.fieldDefinitions.filter((row) => row.fieldId !== input.fieldId);
+            for (const table of ['fieldValues', 'bindings', 'mappingRules']) db[table] = db[table].filter((row) => row.fieldId !== input.fieldId);
+            break;
+          }
+          case 'createProfile': {
+            keys(input, ['name'], '新档案'); string(input.name, '档案名称');
+            const profile = global.WangshenTemplates.makeProfile(input.name, 'all');
+            const state = legacyState(db, previous.api); state.profiles.push(profile); state.activeProfileId = profile.id;
+            syncLegacy(db, state); result = profile.id; break;
+          }
+          case 'createEntry': {
+            keys(input, ['profileId', 'kind', 'title'], '新经历');
+            const entry = { entryId: id('entry'), profileId: input.profileId, kind: input.kind, title: input.title || '',
+              order: db.entries.filter((row) => row.profileId === input.profileId && row.kind === input.kind).length };
+            db.entries.push(entry); result = entry.entryId; break;
+          }
+          case 'deleteEntry': {
+            keys(input, ['entryId'], '删除经历');
+            check(db.entries.some((row) => row.entryId === input.entryId), '经历不存在');
+            db.entries = db.entries.filter((row) => row.entryId !== input.entryId);
+            db.fieldValues = db.fieldValues.filter((row) => row.entryId !== input.entryId);
+            db.mappingRules = db.mappingRules.filter((row) => row.entryId !== input.entryId); break;
+          }
+          case 'setValue': {
+            keys(input, ['profileId', 'fieldId', 'entryId', 'value', 'source'], '保存字段值');
+            const row = { profileId: input.profileId, fieldId: input.fieldId, entryId: input.entryId ?? null,
+              value: input.value, updatedAt: now(), source: input.source || 'manual' };
+            const index = db.fieldValues.findIndex((value) => value.profileId === row.profileId && value.fieldId === row.fieldId && value.entryId === row.entryId);
+            if (index >= 0) db.fieldValues[index] = row; else db.fieldValues.push(row);
+            break;
+          }
+          case 'saveMapping': {
+            const rule = clone(input); rule.mappingId ||= id('mapping');
+            const index = db.mappingRules.findIndex((row) => row.mappingId === rule.mappingId);
+            if (index >= 0) db.mappingRules[index] = rule; else db.mappingRules.push(rule);
+            result = rule.mappingId; break;
+          }
+          case 'mergePublicFields': {
+            keys(input, ['kind', 'version', 'fields'], '公共字段包');
+            check(input.kind === 'localapply-public-fields' && input.version === 1, '公共字段包版本错误');
+            list(input.fields, '公共字段', 2000);
+            for (const item of input.fields) {
+              const def = definition(item);
+              const existing = db.fieldDefinitions.find((row) => row.fieldId === def.fieldId);
+              if (existing) {
+                if (equal(existing, def) || def.version < existing.version) continue;
+                check(db.publicFieldIds.includes(def.fieldId) && def.version > existing.version, '公共字段 ID/版本冲突，请人工处理');
+                Object.assign(existing, def); continue;
+              }
+              db.fieldDefinitions.push(def); db.publicFieldIds.push(def.fieldId);
+              for (const profile of db.profiles) db.bindings.push({ profileId: profile.profileId, fieldId: def.fieldId, fid: id('field'), key: def.fieldId,
+                sensitive: false, autoFill: false, material: false, custom: true });
+            }
+            break;
+          }
+          case 'publishDefinition': {
+            // 对外共享必须提供独立审核后的元数据，绝不自动复制私有字段标签/经历标题。
+            keys(input, ['definition'], '公共定义');
+            const def = definition(input.definition);
+            check(!db.fieldDefinitions.some((row) => row.fieldId === def.fieldId), '请为审核后的公共定义分配新 ID');
+            db.fieldDefinitions.push(def); db.publicFieldIds.push(def.fieldId); break;
+          }
+          case 'importBackup': {
+            keys(input, ['backup', 'mode'], '备份导入');
+            check(request.expectedRevision !== undefined, '导入必须先预览并携带版本');
+            const plan = importPlan(db, parseBackup(input.backup), input.mode);
+            await commit(plan.database, null, previous, true);
+            return { result: plan.summary, revision: plan.database.revision };
+          }
+          case 'restoreRecovery': {
+            const data = await storage.get(RECOVERY_KEY);
+            const recovered = validate(data[RECOVERY_KEY]);
+            await commit(clone(recovered), null, previous);
+            return { result: true, revision: db.revision + 1 };
+          }
+          default: throw new Error('未知本地数据命令');
+        }
+        await commit(db, null, previous);
+        return { result, revision: db.revision };
+      });
+    }
+    return {
+      initialize: () => run(({ db }) => clone(db)),
+      read: () => run(({ db }) => clone(db)),
+      readLegacy: () => run(({ db, api }) => legacyState(db, api)),
+      // 内容脚本只能收到明确的非敏感设置，不返回个人库/API。
+      readContentSettings: () => run(({ db }) => clone(db.settings)),
+      saveLegacy: (base, next, source = 'manual') => run(async (previous) => {
+        check(['manual', 'pdf-confirmed', 'docx-confirmed', 'ai-confirmed'].includes(source), '未知数据来源');
+        const merged = mergeChanged(normalizeSnapshot(base), normalizeSnapshot(next), legacyState(previous.db, previous.api));
+        const db = syncLegacy(clone(previous.db), merged, source);
+        await commit(db, splitApi(merged), previous);
+        return legacyState(db, splitApi(merged));
+      }),
+      exportBackup: () => run(({ db }) => backup(db)),
+      previewImport: (input, mode) => run(({ db }) => ({ ...importPlan(db, parseBackup(input), mode).summary, revision: db.revision })),
+      exportPublicFields: () => run(({ db }) => ({ kind: 'localapply-public-fields', version: 1,
+        fields: db.fieldDefinitions.filter((def) => db.publicFieldIds.includes(def.fieldId)).map(definition) })),
+      command,
+    };
+  }
+  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition };
+})(globalThis);

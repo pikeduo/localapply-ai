@@ -392,6 +392,15 @@
             sendResponse({ ok: true, state: publicState() });
             return;
           }
+          case 'wsa:settingsChanged': {
+            // 后台只广播非敏感设置，内容脚本不再直接读取完整存储。
+            settings.autoThreshold = msg.settings.autoThreshold;
+            settings.autoFloatbar = msg.settings.autoFloatbar;
+            if (globalThis.WangshenFloatbar) globalThis.WangshenFloatbar.setSettings(msg.settings);
+            scheduleDetect(300);
+            sendResponse({ ok: true });
+            return;
+          }
           case 'wsa:redetect': {
             detect();
             sendResponse({ ok: true, state: publicState() });
@@ -482,10 +491,11 @@
     }, delay || 0);
   }
 
+  // 通过受限消息读取阈值/开关，敏感存储限制为 TRUSTED_CONTEXTS。
   async function loadSettings() {
     try {
-      const obj = await chrome.storage.local.get(ROOT_KEY);
-      const s = obj[ROOT_KEY] && obj[ROOT_KEY].settings;
+      const response = await chrome.runtime.sendMessage({ type: 'wsa:contentSettings' });
+      const s = response && response.settings;
       if (s) {
         settings.autoThreshold = typeof s.autoThreshold === 'number' ? s.autoThreshold : 0.85;
         settings.autoFloatbar = s.autoFloatbar !== false;
@@ -494,10 +504,6 @@
       /* 用默认值 */
     }
   }
-
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes[ROOT_KEY] && !filling) scheduleDetect(300);
-  });
 
   loadSettings().then(() => {
     scheduleDetect(300);

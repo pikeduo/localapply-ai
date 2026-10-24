@@ -19,14 +19,16 @@ function sandbox(file = 'data/templates.js', initial = {}) {
   const storage = structuredClone(initial);
   const listeners = [];
   const context = vm.createContext({
-    console, setTimeout, clearTimeout, AbortController,
+    console, setTimeout, clearTimeout, AbortController, crypto: require('node:crypto').webcrypto,
     fetch: async () => { throw new Error('基线测试禁止联网'); },
     chrome: {
       storage: { local: {
-        get: async (key) => structuredClone({ [key]: storage[key] }),
+        get: async (key) => structuredClone(Object.fromEntries((Array.isArray(key) ? key : [key]).map((item) => [item, storage[item]]))),
         set: async (value) => { Object.assign(storage, structuredClone(value)); },
+        setAccessLevel: async () => {},
       } },
       runtime: {
+        id: 'test-extension', getURL: (name) => 'chrome-extension://test-extension/' + name,
         onMessage: { addListener: (listener) => listeners.push(listener) },
         onInstalled: { addListener: () => {} },
         onStartup: { addListener: () => {} },
@@ -34,7 +36,7 @@ function sandbox(file = 'data/templates.js', initial = {}) {
     },
   });
   // 原 service worker 通过 importScripts 加载模板，保持相同执行顺序。
-  context.importScripts = (name) => vm.runInContext(source(name), context, { filename: name });
+  context.importScripts = (...names) => names.forEach((name) => vm.runInContext(source(name), context, { filename: name }));
   vm.runInContext(source(file), context, { filename: file });
   return { context, storage, listeners };
 }
@@ -124,7 +126,7 @@ test('共享存储首次初始化和再次读取保持档案一致', async () =>
   const first = await context.getState();
   const second = await context.getState();
   assert.equal(first.profiles[0].id, second.profiles[0].id);
-  assert.equal(storage.wangshenAutofill.schemaVersion, 1);
+  assert.equal(storage['localapply.database'].schemaVersion, 2);
 });
 
 test('AI 回复 JSON 围栏可解析，异常文本返回空结果', () => {
@@ -144,9 +146,23 @@ test('消息层 ping 和无 Key 错误可异步返回', async () => {
   // 使用原消息回调验证异步响应；超时由 node:test 的测试选项控制。
   const ping = await new Promise((resolve) => listeners[0]({ type: 'wsa:ping' }, {}, resolve));
   assert.equal(ping.pong, true);
-  const error = await new Promise((resolve) => listeners[0]({ type: 'wsa:aiChat', payload: {} }, {}, resolve));
+  const error = await new Promise((resolve) => listeners[0]({ type: 'wsa:aiChat', payload: {} },
+    { id: 'test-extension', url: 'chrome-extension://test-extension/options/options.html' }, resolve));
   assert.equal(error.ok, false);
   assert.match(error.error, /尚未配置/);
+});
+
+test('内容脚本不能读取个人库、导出、命令写入或代理 AI', async () => {
+  const { listeners } = sandbox('background.js');
+  const sender = { id: 'test-extension', url: 'https://recruit.example.test/apply', tab: { id: 1 } };
+  for (const type of ['wsa:getState', 'localapply:read', 'localapply:command', 'localapply:exportBackup', 'localapply:exportPublicFields', 'wsa:aiChat']) {
+    const response = await new Promise((resolve) => listeners[0]({ type }, sender, resolve));
+    assert.equal(response.ok, false, type);
+    assert.match(response.error, /仅允许/);
+  }
+  const safe = await new Promise((resolve) => listeners[0]({ type: 'wsa:contentSettings' }, sender, resolve));
+  assert.equal(safe.ok, true);
+  assert.deepEqual(Object.keys(safe.settings).sort(), ['autoFloatbar', 'autoThreshold', 'privacyMask']);
 });
 
 test('CSV 保留 BOM、中文、双引号与换行转义', () => {

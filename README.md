@@ -14,6 +14,8 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript、零构�
 - **开放题 AI 起草**：用档案里的自我介绍/项目/动机素材生成 ≤350 字草稿，保留最近 3 版历史，确认后才落表
 - **多 AI 服务商**：智谱 / DeepSeek / Kimi / 通义千问 / OpenAI / 硅基流动 / OpenRouter / 自定义 OpenAI 兼容接口任选；主模型 + 视觉模型分开配置，Key 按服务商分别保存
 - **多档案**：全字段模板 51 项（基本信息/教育/意向/政治面貌/家庭成员/四六级/奖惩…），有值就填、没值跳过；支持 JSON 备份导出/恢复
+- **本地数据管理**：字段定义与个人值分离；设置页支持多段教育/实习/工作/项目经历、完整 JSON 备份、合并/覆盖预览及导入前恢复点。重复经历已可编辑保存，网页重复区块自动匹配尚待接入。
+- **公共字段包**：可离线导出已审核的字段元数据、合并其他人的公共字段包，新字段为空白；个人自定义字段默认不公开，本版本不连接 GitHub。
 - **投递台账**：每次填充自动记录（公司/系统/URL/时间/数量），一键导出 UTF-8 BOM CSV（Excel 打开不乱码）
 - **隐私遮挡**：手机号/身份证/薪资/家庭成员等敏感字段默认 `••••`，点眼睛可见
 - **安全红线**：代码层面禁止点击任何「提交/发送/投递/确认」按钮，最后一步永远由你本人操作；验证码一律跳过并提示
@@ -40,14 +42,27 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript、零构�
 - 简历字段、档案、台账、草稿**全部只存在本机** `chrome.storage.local`，卸载扩展即彻底删除；插件没有服务器、没有统计埋点
 - 唯一的对外请求是你**主动触发**的 AI 调用（PDF 提取发简历文本、开放题起草发题目+素材），发往你在设置页选择的服务商（智谱 / DeepSeek / Kimi / 通义 / OpenAI / 硅基流动 / OpenRouter，或自定义 OpenAI 兼容地址）；不用 AI 功能则零联网请求
 - 附件清单只登记文件名和备注，不读取文件本体
+- 升级会自动迁移原 `wangshenAutofill` 数据，保留旧源；新资料和 API 配置分开存储，内容脚本不能直接读取。API Key 当前仍为本地明文，尚未实现口令加密。
+- 备份包含档案、动态字段、重复经历、本地映射和填写记录，不含 API 配置/Key 或原 PDF/DOCX 文件。导入前预览差异；合并冲突保留当前内容，覆盖导入可恢复到导入前。
 - 完整政策见 [store/PRIVACY.md](store/PRIVACY.md)
 
 ## 开发
 
-零依赖、零构建：克隆即用。Node 仅用于跑验收脚本和打包。
+扩展运行保持零构建、无需安装 npm 包。开发测试要求 Node.js 22 及以上；浏览器测试使用 Playwright。依赖和 Chromium 由开发者手动安装：
+
+```powershell
+npm ci
+npx playwright install chromium
+npm test
+npm run test:e2e
+```
+
+浏览器测试使用独立临时 profile、loopback 动态端口和合成资料，并关闭自己创建的资源；会验证资料重启持久性。真实招聘网站仍需单独抽检。
+
+以下为保留的历史工具；`verify.js`/`debug-ui.js` 会强制清理固定端口进程，日常回归优先使用上面的测试命令。
 
 ```bash
-node tools/verify.js          # 自动化验收 35 项（Edge 隔离 profile + CDP 驱动，跑完自动清理）
+node tools/verify.js          # 历史 Edge/CDP 验收，不作为新的测试入口
 WSA_RESUME=D:\\path\\to\\resume.pdf node tools/verify.js   # 附加真实简历 PDF 本地解析测试
 node tools/gen-icons.js       # 重新生成图标（含全透明自检）
 node tools/package.js         # 打商店上传包 dist/wangshen-autofill-v<版本>.zip
@@ -67,6 +82,9 @@ content/floatbar.js      页面右下角浮条（Shadow DOM）
 sidepanel/               侧边栏：字段库 / 填充 / 台账 / 附件
 options/                 设置页：API / 阈值 / PDF 导入校对 / 备份
 data/templates.js        60 组同义词 + 全字段模板 + 档案工厂/升级
+data/local-store.js      Schema v2、迁移、字段/值/经历、备份与公共字段接口
+options/data-management.js 备份预览、公共字段包和重复经历编辑
+tests/                   基础、数据层与 Playwright 浏览器测试
 libs/pdfjs/              pdf.js 3.11.174（vendor，离线可用）
 test-pages/              mock 表单（generic / react / moka / iguopin / fake-scan.pdf）
 store/                   Edge 商店上架材料（步骤文案 + 隐私政策）

@@ -78,21 +78,17 @@
     counts.textContent = `可自动填 ${c.auto} · 点选 ${c.manual} · 开放题 ${c.open}`;
   }
 
-  // 读设置
+  // 仅接收后台的非敏感设置投影，不监听个人数据库变化。
   try {
-    chrome.storage.local.get(ROOT_KEY, (obj) => {
-      const s = obj && obj[ROOT_KEY] && obj[ROOT_KEY].settings;
-      if (s) autoFloatbar = s.autoFloatbar !== false;
-    });
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'local' && changes[ROOT_KEY]) {
-        const s = changes[ROOT_KEY].newValue && changes[ROOT_KEY].newValue.settings;
-        if (s) autoFloatbar = s.autoFloatbar !== false;
-      }
-    });
+    chrome.runtime.sendMessage({ type: 'wsa:contentSettings' }).then((response) => {
+      if (response && response.settings) autoFloatbar = response.settings.autoFloatbar !== false;
+    }).catch(() => {});
   } catch (e) {
     /* storage 不可用时保持默认 */
   }
 
-  globalThis.WangshenFloatbar = { onDetection };
+  globalThis.WangshenFloatbar = { onDetection,
+    // 后台设置变化后立即隐藏已关闭的浮条。
+    setSettings(settings) { autoFloatbar = settings.autoFloatbar !== false; if (!autoFloatbar) hide(); },
+  };
 })();

@@ -2,32 +2,43 @@
 'use strict';
 
 const ROOT_KEY = 'wangshenAutofill';
+const DATABASE_KEY = 'localapply.database';
+const stateBases = new WeakMap();
+let pendingSave = Promise.resolve();
+let savingCount = 0;
+let lastSaveError = null;
 
+// 页面只读取后台兼容投影，不再自行初始化、升级或写入整份存储。
 async function getState() {
-  const obj = await chrome.storage.local.get(ROOT_KEY);
-  if (!obj[ROOT_KEY]) {
-    // 自愈：任何页面先于 onInstalled 读到空数据时，用共享工厂种子并写回
-    const fresh = WangshenTemplates.defaultState();
-    await chrome.storage.local.set({ [ROOT_KEY]: fresh });
-    return fresh;
-  }
-  const state = obj[ROOT_KEY];
-  let dirty = WangshenTemplates.normalizeSettings(state);
-  if (!state.migratedFullFields) {
-    // 老数据升级：合并长短表单为全字段，幂等
-    (state.profiles || []).forEach((p) => WangshenTemplates.upgradeProfile(p));
-    state.migratedFullFields = true;
-    dirty = true;
-  }
-  if (dirty) await chrome.storage.local.set({ [ROOT_KEY]: state });
+  const response = await sendMessage('wsa:getState');
+  if (!response.ok) throw new Error(response.error);
+  const state = response.state;
+  stateBases.set(state, JSON.parse(JSON.stringify(state)));
   return state;
 }
 
-async function saveState(state) {
-  await chrome.storage.local.set({ [ROOT_KEY]: state });
+// 只提交相对读取快照的变更，后台三方合并；同字段冲突时提示刷新而非覆盖。
+function saveState(state, source = 'manual') {
+  const base = stateBases.get(state);
+  if (!base) return Promise.reject(new Error('请先读取档案再保存'));
+  const next = JSON.parse(JSON.stringify(state));
+  stateBases.set(state, next);
+  savingCount++;
+  const task = pendingSave.then(async () => {
+    const response = await sendMessage('localapply:saveLegacy', { base, state: next, source });
+    if (!response.ok) { stateBases.delete(state); throw new Error(response.error); }
+    lastSaveError = null;
+    state.revision = response.state.revision;
+    return response.state;
+  });
+  pendingSave = task.catch((error) => { lastSaveError = error; }).finally(() => { savingCount--; });
+  return task;
 }
 
-// 整读整改整写：mutator 同步修改 state，返回后写回
+// 等待页面已提交的操作落盘，备份/导入和测试均复用此屏障。
+async function flushSaves() { await pendingSave; if (lastSaveError) throw lastSaveError; }
+
+// 在刚读取的投影上修改；所有实际写入仍经过后台队列。
 async function mutateState(mutator) {
   const state = await getState();
   const out = mutator(state);
@@ -37,6 +48,11 @@ async function mutateState(mutator) {
 
 function getActiveProfile(state) {
   return state.profiles.find((p) => p.id === state.activeProfileId) || state.profiles[0];
+}
+
+// 旧输入框统一显示类型化值，false/0 和多选数组不会被当作空值。
+function fieldText(value) {
+  return value === null || value === undefined ? '' : Array.isArray(value) ? JSON.stringify(value) : String(value);
 }
 
 function makeId(prefix) {

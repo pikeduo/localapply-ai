@@ -22,15 +22,14 @@ const main = {
 
 // ============ 保存 ============
 
+// 保存投影差异，失败时保留可见输入并提示刷新，避免静默覆盖。
 function scheduleSave() {
   expectedJson = JSON.stringify(state);
-  chrome.storage.local.set({ [ROOT_KEY]: state });
+  saveState(state).catch((error) => toastMsg('保存失败：' + error.message, 'err'));
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local' || !changes[ROOT_KEY]) return;
-  const next = JSON.stringify(changes[ROOT_KEY].newValue);
-  if (next === expectedJson) return; // 自己写入
+  if (area !== 'local' || !changes[DATABASE_KEY] || savingCount) return;
   getState().then((s) => {
     state = s;
     renderAll();
@@ -200,6 +199,7 @@ function renderProfileBar() {
 
 // ============ 字段库 ============
 
+// 将规范资料的兼容投影显示为原有分组字段编辑器。
 function renderFieldsTab() {
   const prof = getActiveProfile(state);
   const { groups, map } = groupProfileFields(prof);
@@ -230,7 +230,7 @@ function renderFieldsTab() {
   }
 
   // —— 下一步引导：字段库有值时，指明怎么用 ——
-  const filledN = prof.fields.filter((x) => !x.material && (x.value || '').trim()).length;
+  const filledN = prof.fields.filter((x) => !x.material && fieldText(x.value).trim()).length;
   if (filledN > 0) {
     const next = document.createElement('div');
     next.className = 'nextstep';
@@ -265,6 +265,7 @@ function renderFieldsTab() {
   root.appendChild(tip);
 }
 
+// 渲染单个字段；数值/布尔等类型也通过后台 Schema 保持原类型。
 function fieldRow(f) {
   const row = document.createElement('div');
   row.className = 'frow';
@@ -288,7 +289,7 @@ function fieldRow(f) {
     input = document.createElement('input');
     input.type = 'text';
   }
-  if (f.inputType !== 'select') input.value = f.value || '';
+  if (f.inputType !== 'select') input.value = fieldText(f.value);
   input.dataset.fid = f.fid;
   if (f.sensitive && state.settings.privacyMask && !revealAll && !revealed.has(f.fid) && f.inputType === 'text') {
     input.classList.add('masked');
@@ -384,6 +385,7 @@ function addForm(groupName) {
 
 // ============ 填充页 ============
 
+// 渲染检测结果和复查清单，保留原有填充行为。
 function renderFillTab() {
   const root = main.fill;
   root.innerHTML = '';
@@ -459,7 +461,7 @@ function renderFillTab() {
   const autos = detection.fields.filter((f) => f.cls === 'auto');
   const fillable = autos.filter((f) => {
     const pf = findProfileFieldByKey(prof, f.key);
-    return pf && pf.autoFill !== false && (pf.value || '').trim();
+    return pf && pf.autoFill !== false && fieldText(pf.value).trim();
   });
   const autoCard = document.createElement('div');
   autoCard.className = 'card';
@@ -478,7 +480,7 @@ function renderFillTab() {
       const pf = findProfileFieldByKey(prof, f.key);
       const row = document.createElement('div');
       row.className = 'rrow';
-      const status = pf && (pf.value || '').trim() ? '✓' : '—';
+      const status = pf && fieldText(pf.value).trim() ? '✓' : '—';
       row.innerHTML = `<span class="k" title="${escapeHtml(f.label)}">${escapeHtml(f.label)}</span><span class="arrow">←</span><span class="v muted">${escapeHtml(pf ? pf.label : '未匹配档案字段')} ${status}</span>`;
       list.appendChild(row);
     }
@@ -566,6 +568,7 @@ function findProfileFieldByKey(prof, key) {
   return prof.fields.find((f) => f.key === key) || null;
 }
 
+// 提供原有点选填入方式，类型化值通过统一文本表示判断空值。
 function manualItem(f, prof) {
   const div = document.createElement('div');
   div.className = 'fitem';
@@ -588,7 +591,7 @@ function manualItem(f, prof) {
   btn.addEventListener('click', async () => {
     const pf = prof.fields.find((x) => x.fid === sel.value);
     if (!pf) return toastMsg('请先选择要填入的档案字段', 'err');
-    if (!pf.value.trim()) return toastMsg(`「${pf.label}」在档案里是空的`, 'err');
+    if (!fieldText(pf.value).trim()) return toastMsg(`「${pf.label}」在档案里是空的`, 'err');
     await doFillOne(f, pf, btn);
   });
   l2.appendChild(sel);
@@ -680,7 +683,7 @@ async function draftOpen(f, btn) {
   btn.textContent = '⏳生成中';
   try {
     const prof = getActiveProfile(state);
-    const mats = prof.fields.filter((x) => x.material && (x.value || '').trim());
+    const mats = prof.fields.filter((x) => x.material && fieldText(x.value).trim());
     const matText = mats.map((x) => `【${x.label.replace(/（素材）$/, '')}】\n${x.value}`).join('\n\n');
     const m = f.label.match(/(\d+)\s*字/);
     const wordLimit = m ? Math.max(50, Math.min(Number(m[1]), 500)) : 300;
@@ -724,6 +727,7 @@ async function draftOpen(f, btn) {
 
 // ============ 填充执行 ============
 
+// 将当前档案的非空值交给原引擎，持久化交给统一数据入口。
 async function onAutoFill() {
   const btn = $('#btnAutoFill');
   if (btn) {
@@ -736,7 +740,7 @@ async function onAutoFill() {
     for (const f of detection.fields.filter((x) => x.cls === 'auto')) {
       const pf = findProfileFieldByKey(prof, f.key);
       if (!pf || pf.autoFill === false) continue;
-      if (!(pf.value || '').trim()) continue; // 没值就跳过，不进复查清单制造噪音
+      if (!fieldText(pf.value).trim()) continue; // 没值就跳过，不进复查清单制造噪音
       items.push({
         id: f.id,
         label: pf.label,
@@ -765,7 +769,7 @@ async function onAutoFill() {
         ? detection.fields.filter((x) => {
             if (x.cls !== 'auto') return false;
             const pf = findProfileFieldByKey(prof, x.key);
-            return pf && pf.autoFill !== false && (pf.value || '').trim();
+            return pf && pf.autoFill !== false && fieldText(pf.value).trim();
           }).length
         : 0;
       btn.textContent = `一键填充 ${n} 项`;
@@ -1065,7 +1069,7 @@ window.WSA = {
   },
   async save() {
     scheduleSave();
-    await new Promise((r) => setTimeout(r, 500));
+    await flushSaves(); // 等待真实存储完成，不再以固定延时判断成功。
     return true;
   },
   createProfile: onNewProfileWrapper,

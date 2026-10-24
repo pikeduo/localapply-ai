@@ -87,20 +87,42 @@
       <div class="row">
         <button id="btnBackup" class="btn plain">导出档案备份（JSON）</button>
         <button id="btnRestore" class="btn ghost">从备份恢复</button>
+        <label>导入方式 <select id="restoreMode"><option value="merge">合并（冲突保留当前）</option><option value="replace">覆盖（保存恢复点）</option></select></label>
         <input type="file" id="backupFile" accept="application/json,.json" style="display:none" />
       </div>
+      <div id="restorePreview" class="muted" role="status"></div>
+      <button id="btnApplyRestore" class="btn" hidden>确认按预览导入</button>
+      <button id="btnRestoreRecovery" class="btn ghost">恢复到导入前</button>
+      <div class="row">
+        <button id="btnPublicExport" class="btn plain">导出已审核公共字段定义</button>
+        <button id="btnPublicImport" class="btn ghost">合并公共字段定义</button>
+        <input id="publicFieldsFile" type="file" accept=".json,application/json" hidden />
+      </div>
+      <p class="muted">公共字段导出只含元数据；个人自定义字段默认不公开，不包含个人值、档案、记录或 Key。本阶段不连接 GitHub。</p>
       <p class="muted" id="backupMsg">备份包含全部档案和字段值，<b>不含 API Key</b>。换电脑或重装浏览器前建议先导出。</p>
       <p class="muted">
-        所有简历数据、档案、台账只存在本机浏览器的 chrome.storage.local 中；唯一的对外网络请求是你主动触发的
-        智谱 AI 调用（内容：简历文本或题目+素材段落），请求只发往 open.bigmodel.cn。
+        资料与 API 设置分别存在本机 chrome.storage.local，原简历文件不保存。AI 调用只在你主动触发时将必要内容发送到配置的服务商。
         插件永不自动点击任何「提交/投递」类按钮，最后一步永远由你本人操作。
       </p>
+    </section>
+    <section class="card">
+      <h2>⑥ 重复经历（本地数据管理）</h2>
+      <p class="muted">教育、实习、工作、项目分别保存多条经历。此处数据已纳入备份；当前填表引擎仍使用侧边栏平面字段，重复区块自动匹配将在后续阶段接入。</p>
+      <div class="row">
+        <select id="entryProfile" aria-label="经历所属档案"></select>
+        <select id="entryKind" aria-label="经历类别"><option value="education">教育经历</option><option value="internship">实习经历</option><option value="employment">工作经历</option><option value="project">项目经历</option></select>
+        <input id="entryTitle" type="text" placeholder="经历标题（仅本地）" aria-label="经历标题" />
+        <button id="btnAddEntry" class="btn">新增经历</button>
+      </div>
+      <div id="entriesList"></div>
+      <div id="entryStatus" class="muted" role="status"></div>
     </section>
   </div>
 
   <script src="../libs/pdfjs/pdf.min.js"></script>
   <script src="../data/templates.js"></script>
   <script src="../common.js"></script>
+  <script src="data-management.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

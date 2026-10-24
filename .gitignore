@@ -12,4 +12,8 @@
 .verify-run.log
 Thumbs.db
 dist/
+node_modules/
+.browser-tests/
+playwright-report/
+test-results/
 执行文档.md

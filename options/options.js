@@ -124,8 +124,12 @@ function requestCustomPermission() {
   });
 }
 
-function save() {
-  chrome.storage.local.set({ [ROOT_KEY]: state });
+// 提交旧界面快照到后台；错误已向用户显示，避免事件处理产生未捕获 rejection。
+function save(source = 'manual') {
+  return saveState(state, source).catch((error) => {
+    toastMsg('保存失败：' + error.message, 'err');
+    return false;
+  });
 }
 
 async function testConnection() {
@@ -305,7 +309,7 @@ function buildReviewItems(data) {
         value: String(data[key]),
         checked: true,
         multi: false,
-        map: { kind: 'field', key },
+        map: { kind: 'field', key: key === 'graduation' ? 'graduationDate' : key }, // 对齐原填充词库。
       });
     }
   }
@@ -412,7 +416,8 @@ function renderReview() {
 
 // ============ 导入（确认后才写档案） ============
 
-function doImport() {
+// 人工确认后保存解析结果，等待真实落盘成功再清理校对区域。
+async function doImport() {
   const targetId = $('#targetProfile').value;
   const prof = state.profiles.find((p) => p.id === targetId);
   if (!prof) return toastMsg('找不到目标档案', 'err');
@@ -439,7 +444,7 @@ function doImport() {
       }
     }
   }
-  save();
+  if (await save('pdf-confirmed') === false) return;
   toastMsg(`已导入 ${picked.length} 项到「${prof.name}」（新增 ${created} 个自定义字段），可在侧边栏字段库查看`, 'ok');
   $('#pdfReview').innerHTML = '<p class="ok">✓ 已导入。如需重新导入请再次提取。</p>';
   $('#importRow').style.display = 'none';
@@ -466,48 +471,29 @@ function newCustomField(prof, label, group, inputType, value) {
 
 // ============ 档案备份导出 / 恢复（不含 API Key） ============
 
+// 显示已转义的备份结果。
 function backupMsg(text) {
   $('#backupMsg').innerHTML = text;
 }
 
-function doBackup() {
-  const payload = {
-    kind: 'wangshen-autofill-backup',
-    version: 1,
-    exportedAt: new Date().toISOString(),
-    profiles: state.profiles,
-    activeProfileId: state.activeProfileId,
-  };
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const d = new Date();
-  const p = (n) => (n < 10 ? '0' + n : '' + n);
-  a.href = url;
-  a.download = `网申助手档案备份-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.json`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
-  backupMsg(`✓ 已导出 ${state.profiles.length} 个档案（不含 API Key）。文件在浏览器默认下载目录。`);
+// 从已提交的规范数据库导出，包含重复经历与映射，但不包含 API 配置。
+async function doBackup() {
+  try {
+    await flushSaves();
+    const response = await dataRequest('localapply:exportBackup');
+    downloadJson(response.backup, 'localapply-backup.json');
+    backupMsg('✓ 完整资料、动态字段及本地映射已导出，不含 API Key 或原文件。');
+  } catch (error) { backupMsg(escapeHtml('导出失败：' + error.message)); }
 }
 
+// 导入先校验并展示差异，必须另行点击确认，文件不持久化。
 async function doRestore(ev) {
   const file = ev.target.files[0];
   ev.target.value = '';
   if (!file) return;
   try {
-    const data = JSON.parse(await file.text());
-    if (data.kind !== 'wangshen-autofill-backup' || !Array.isArray(data.profiles) || !data.profiles.length) {
-      throw new Error('不是本插件导出的备份文件');
-    }
-    const valid = data.profiles.filter((p) => p && p.id && p.name && Array.isArray(p.fields));
-    if (!valid.length) throw new Error('备份里没有可用档案');
-    if (!confirm(`将用备份里的 ${valid.length} 个档案替换当前全部档案（共 ${state.profiles.length} 个）。设置和 API Key 不变，继续？`)) return;
-    state.profiles = valid.map((p) => WangshenTemplates.upgradeProfile(p)); // 兼容老备份，顺手升级全字段
-    state.activeProfileId = valid.some((p) => p.id === data.activeProfileId) ? data.activeProfileId : valid[0].id;
-    save();
-    backupMsg(`✓ 已恢复 ${valid.length} 个档案（${new Date(data.exportedAt).toLocaleString()} 导出）。`);
-    renderTargetProfiles();
-    toastMsg('档案恢复完成', 'ok');
+    if (file.size > 8 * 1024 * 1024) throw new Error('备份超过 8 MiB 限制');
+    await prepareRestore(await file.text());
   } catch (e) {
     backupMsg('<span class="err">✗ 恢复失败：' + escapeHtml(e.message) + '</span>');
   }
@@ -532,4 +518,5 @@ window.__wsaOptions = {
   state: () => state,
 };
 
-init();
+// 初始化既有设置后挂载本地数据管理，不重写原有页面。
+init().then(initDataManagement).catch((error) => toastMsg('初始化失败：' + error.message, 'err'));

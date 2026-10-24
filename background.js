@@ -1,10 +1,11 @@
 // Service Worker：AI 请求代理（OpenAI 兼容，多服务商预设）、CSV 导出、初始数据、侧边栏开关。
 'use strict';
 
-importScripts('data/templates.js'); // 模板 / 档案工厂 / 服务商预设依赖 WangshenTemplates
+importScripts('data/templates.js', 'data/local-store.js'); // 保留词库，数据统一交由后台仓库。
 
 const ROOT_KEY = 'wangshenAutofill';
 const DEFAULT_TIMEOUT_MS = 30000;
+const repository = LocalApplyStore.createRepository(chrome.storage.local);
 
 function getProvider(settings) {
   return WangshenTemplates.PROVIDERS[settings.provider] || WangshenTemplates.PROVIDERS.zhipu;
@@ -16,23 +17,22 @@ function defaultState() {
   return WangshenTemplates.defaultState();
 }
 
+// 兼容旧 AI 调用结构；底层资料与 API 设置始终分别存储。
 async function getState() {
-  const obj = await chrome.storage.local.get(ROOT_KEY);
-  let state = obj[ROOT_KEY];
-  if (!state) {
-    state = defaultState();
-    await chrome.storage.local.set({ [ROOT_KEY]: state });
-    return state;
-  }
-  let dirty = WangshenTemplates.normalizeSettings(state);
-  if (!state.migratedFullFields) {
-    // 老数据升级：合并长短表单为全字段（幂等）
-    (state.profiles || []).forEach((p) => WangshenTemplates.upgradeProfile(p));
-    state.migratedFullFields = true;
-    dirty = true;
-  }
-  if (dirty) await chrome.storage.local.set({ [ROOT_KEY]: state });
-  return state;
+  return repository.readLegacy();
+}
+
+// 只有本扩展管理页和侧栏可以访问个人数据/模型；网页内容脚本不能提升权限。
+function trustedPage(sender) {
+  return sender.id === chrome.runtime.id && ['options/options.html', 'sidepanel/sidepanel.html']
+    .some((page) => sender.url && sender.url.split(/[?#]/)[0] === chrome.runtime.getURL(page));
+}
+
+// 广播的设置投影只有阈值/界面开关，不把存储事件中的敏感对象发到网页。
+async function notifySettings() {
+  const settings = await repository.readContentSettings();
+  const tabs = await chrome.tabs.query({});
+  await Promise.all(tabs.filter((tab) => tab.id).map((tab) => chrome.tabs.sendMessage(tab.id, { type: 'wsa:settingsChanged', settings }).catch(() => {})));
 }
 
 // 扫描件回退的视觉模型解析：主模型带视觉或用户显式配置了视觉模型才放行
@@ -180,6 +180,9 @@ function formatTs(ts) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
+      if (!['wsa:ping', 'wsa:openPanel', 'wsa:contentSettings'].includes(msg && msg.type) && !trustedPage(sender)) {
+        throw new Error('此消息仅允许扩展管理页调用');
+      }
       switch (msg && msg.type) {
         case 'wsa:ping':
           sendResponse({ ok: true, pong: true });
@@ -203,6 +206,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: true, state: await getState() });
           return;
         }
+        case 'wsa:contentSettings': {
+          sendResponse({ ok: true, settings: await repository.readContentSettings() });
+          return;
+        }
+        case 'localapply:saveLegacy': {
+          const state = await repository.saveLegacy(msg.base, msg.state, msg.source);
+          sendResponse({ ok: true, state });
+          notifySettings().catch(() => {});
+          return;
+        }
+        case 'localapply:read':
+          sendResponse({ ok: true, database: await repository.read() }); return;
+        case 'localapply:command':
+          sendResponse({ ok: true, ...await repository.command(msg.request || {}) }); return;
+        case 'localapply:exportBackup':
+          sendResponse({ ok: true, backup: await repository.exportBackup() }); return;
+        case 'localapply:previewImport':
+          sendResponse({ ok: true, preview: await repository.previewImport(msg.backup, msg.mode) }); return;
+        case 'localapply:exportPublicFields':
+          sendResponse({ ok: true, fields: await repository.exportPublicFields() }); return;
         case 'wsa:aiChat': {
           const out = await callGLM(msg.payload || {});
           sendResponse({ ok: true, ...out });
