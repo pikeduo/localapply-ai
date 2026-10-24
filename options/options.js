@@ -10,26 +10,20 @@ const $ = (s) => document.querySelector(s);
 
 // ============ 初始化 ============
 
+// 读取本地资料并挂载设置事件，服务商元数据交由共享解析器处理。
 async function init() {
   state = await getState();
   pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('libs/pdfjs/pdf.worker.min.js');
 
   // —— AI 服务商区（可选功能） ——
-  const PROV = WangshenTemplates.PROVIDERS;
-  const provSel = $('#provider');
-  for (const [id, p] of Object.entries(PROV)) provSel.appendChild(new Option(p.name, id));
-  provSel.value = state.settings.provider || 'zhipu';
+  state.settings.customProviders ||= {};
+  state.settings.providerModels ||= {};
   refreshProviderUI();
-  provSel.addEventListener('change', () => {
-    state.settings.provider = provSel.value;
-    save();
-    refreshProviderUI();
+  $('#provider').addEventListener('change', () => applyProviderInput($('#provider').value));
+  $('#provider').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); $('#provider').blur(); }
   });
-  $('#customBase').addEventListener('change', () => {
-    state.settings.customBase = $('#customBase').value.trim();
-    save();
-    requestCustomPermission();
-  });
+  $('#customBase').addEventListener('change', () => applyProviderInput($('#customBase').value));
   $('#apiKey').value = (state.settings.apiKeys || {})[state.settings.provider] || '';
   $('#apiKey').addEventListener('change', () => {
     state.settings.apiKeys = state.settings.apiKeys || {};
@@ -39,11 +33,13 @@ async function init() {
   $('#model').value = state.settings.model || '';
   $('#model').addEventListener('change', () => {
     state.settings.model = $('#model').value.trim();
+    rememberProviderModels();
     save();
   });
   $('#visionModel').value = state.settings.visionModel || '';
   $('#visionModel').addEventListener('change', () => {
     state.settings.visionModel = $('#visionModel').value.trim();
+    rememberProviderModels();
     save();
   });
 
@@ -87,11 +83,15 @@ async function init() {
   renderTargetProfiles();
 }
 
-// 服务商切换后：刷新 Key/模型/提示，并在自定义服务商时请求域名授权
+// 切换时还原对应的 Key/模型；列表同时包含内置预设和已保存的自定义地址。
 function refreshProviderUI() {
-  const providerId = state.settings.provider || 'zhipu';
-  const p = WangshenTemplates.PROVIDERS[providerId] || WangshenTemplates.PROVIDERS.zhipu;
+  const p = LocalApplyProviders.resolve(state.settings);
+  const providerId = p.providerId;
+  $('#provider').value = p.name;
+  $('#providerList').replaceChildren(...LocalApplyProviders.entries(state.settings).map((provider) => new Option(provider.name, provider.name)));
   $('#apiKey').value = (state.settings.apiKeys || {})[providerId] || '';
+  $('#apiKey').type = 'password'; $('#btnRevealKey').textContent = '显示';
+  $('#apiKey').placeholder = p.requiresKey ? '在所选服务商官网创建' : '按服务端要求填写，本地服务通常可留空';
   const modelInput = $('#model');
   modelInput.value = state.settings.model || '';
   modelInput.placeholder = p.models[0] || '服务商模型 ID';
@@ -105,22 +105,55 @@ function refreshProviderUI() {
   vl.innerHTML = '';
   (p.visionModels || []).forEach((m) => vl.appendChild(new Option(m, m)));
   $('#providerNote').textContent = p.note || '';
-  $('#customBaseRow').style.display = providerId === 'custom' ? '' : 'none';
-  $('#customBase').value = state.settings.customBase || '';
+  $('#customBaseRow').style.display = '';
+  $('#customBase').readOnly = !p.custom && providerId !== 'ollama';
+  $('#customBase').value = p.baseUrl;
 }
 
-function requestCustomPermission() {
-  const base = (state.settings.customBase || '').trim();
-  if (!base) return;
-  let origin;
+// 在切换前保存当前服务商的模型，防止沿用上一家的模型 ID。
+function rememberProviderModels() {
+  state.settings.providerModels ||= {};
+  state.settings.providerModels[state.settings.provider] = { model: state.settings.model || '', visionModel: state.settings.visionModel || '' };
+}
+
+// 输入服务商名称或地址后自动选择/创建；规范化去重，不继承其他端点的 Key。
+async function applyProviderInput(raw) {
   try {
-    origin = new URL(base).origin + '/*';
-  } catch (e) {
-    return toastMsg('接口地址格式不对，请填完整 URL', 'err');
+    let providerId = LocalApplyProviders.find(state.settings, raw);
+    let created = false;
+    if (!providerId) {
+      const baseUrl = LocalApplyProviders.normalizeBase(raw);
+      providerId = 'custom.' + crypto.randomUUID();
+      state.settings.customProviders[providerId] = { name: baseUrl, baseUrl };
+      created = true;
+    }
+    if (providerId === state.settings.provider) { refreshProviderUI(); return; }
+    rememberProviderModels();
+    state.settings.provider = providerId;
+    const provider = LocalApplyProviders.resolve(state.settings);
+    const models = state.settings.providerModels[providerId];
+    state.settings.model = models ? models.model : provider.models[0] || '';
+    state.settings.visionModel = models ? models.visionModel : '';
+    refreshProviderUI();
+    if (provider.baseUrl) requestCustomPermission(provider.baseUrl);
+    if (await save() === false) { state = await getState(); refreshProviderUI(); return; }
+    if (created) toastMsg('已创建并保存自定义服务商，请填写模型 ID。', 'ok');
+  } catch (error) {
+    refreshProviderUI();
+    $('#providerNote').textContent = error.message;
+    toastMsg(error.message, 'err');
   }
-  chrome.permissions.request({ origins: [origin] }, (granted) => {
-    if (granted) toastMsg('已授权访问 ' + origin, 'ok');
-    else toastMsg('未授权该域名，AI 请求会被浏览器拦截', 'err');
+}
+
+// 已有主机权限时无需重复授权；HTTP IP 接口也按实际 origin 检查。
+function requestCustomPermission(base) {
+  const url = new URL(base);
+  const origin = url.protocol + '//' + url.hostname + '/*';
+  chrome.permissions.contains({ origins: [origin] }, (granted) => {
+    if (granted) return;
+    chrome.permissions.request({ origins: [origin] }, (allowed) => {
+      if (!allowed) toastMsg('接口地址已保存，使用前请在扩展管理页授予该站点访问权限。', 'err');
+    });
   });
 }
 
@@ -132,10 +165,12 @@ function save(source = 'manual') {
   });
 }
 
+// 先保存当前输入再发起连通测试，避免失焦保存尚未完成时读取旧模型/端点。
 async function testConnection() {
   const el = $('#testResult');
   el.textContent = '⏳ 测试中…';
   el.className = 'muted';
+  try { await flushSaves(); } catch (error) { el.textContent = '✗ ' + error.message; el.className = 'err'; return; }
   const res = await sendMessage('wsa:aiChat', {
     payload: { messages: [{ role: 'user', content: '请只回复两个字：正常' }], maxTokens: 16, temperature: 0.1 },
   });
@@ -518,5 +553,13 @@ window.__wsaOptions = {
   state: () => state,
 };
 
+// 初始化失败时展示持续可见的操作指引，禁用无法保存的表单，防止误认为可用。
+function showInitializationError(error) {
+  const banner = $('#initializationError');
+  banner.textContent = '设置页未能初始化：' + error.message;
+  banner.hidden = false;
+  document.querySelectorAll('input, select, button').forEach((control) => { control.disabled = true; });
+}
+
 // 初始化既有设置后挂载本地数据管理，不重写原有页面。
-init().then(initDataManagement).catch((error) => toastMsg('初始化失败：' + error.message, 'err'));
+init().then(initDataManagement).catch(showInitializationError);

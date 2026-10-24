@@ -10,14 +10,20 @@ const ROOT = path.resolve(__dirname, '..');
 
 // 本地夹具服务仅绑定 loopback，并限制路径属于 test-pages。
 async function serve() {
+  const calls = [];
   const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
+    if (pathname === '/v1/chat/completions' && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk;
+      calls.push({ authorization: req.headers.authorization, model: JSON.parse(body).model });
+      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: '正常' } }] })); return;
+    }
     if (!/^\/test-pages\/[a-z-]+\.html$/.test(pathname)) { res.writeHead(404); res.end(); return; }
     try { const body = await fs.readFile(path.join(ROOT, pathname)); res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(body); }
     catch { res.writeHead(404); res.end(); }
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  return { server, base: 'http://127.0.0.1:' + server.address().port };
+  return { server, calls, base: 'http://127.0.0.1:' + server.address().port };
 }
 
 // 允许使用用户指定的现有 Chromium；默认采用 Playwright 配套浏览器，不自动下载。
@@ -59,7 +65,7 @@ async function detect(sidebar, page) {
 test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启持久性', async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
   const profile = await fs.mkdtemp(path.join(testRoot, 'profile-'));
-  const { server, base } = await serve();
+  const { server, base, calls } = await serve();
   let context;
   const pageErrors = [];
   try {
@@ -114,6 +120,33 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       await first.locator('select').selectOption('builtin.school'); await first.locator('input').fill('合成测试学院');
       await first.locator('button').filter({ hasText: '保存字段' }).click();
       await options.waitForFunction(() => document.getElementById('entriesList').textContent.includes('合成测试学院'));
+    });
+    await t.test('服务商输入支持 DeepSeek/Qwen 和 IP 自动创建，Key/模型隔离且本地接口可调用', async () => {
+      // 回车提交使用真实 UI 事件；等待本页保存队列完成。
+      const choose = async (text) => {
+        await options.locator('#provider').fill(text); await options.locator('#provider').press('Enter');
+        await options.evaluate(() => flushSaves());
+      };
+      await choose('deepseek'); assert.equal(await options.locator('#provider').inputValue(), 'DeepSeek');
+      await options.locator('#apiKey').fill('fake-deepseek-ui-key'); await options.locator('#apiKey').press('Tab');
+      await options.locator('#model').fill('synthetic-deepseek'); await options.locator('#model').press('Tab');
+      await choose('qwen'); assert.equal(await options.locator('#apiKey').inputValue(), '');
+      await choose('deepseek'); assert.equal(await options.locator('#model').inputValue(), 'synthetic-deepseek');
+      assert.equal(await options.locator('#apiKey').inputValue(), 'fake-deepseek-ui-key');
+      await choose(base.replace('http://', ''));
+      assert.equal(await options.locator('#customBase').inputValue(), base + '/v1');
+      assert.equal(await options.locator('#apiKey').inputValue(), ''); assert.equal(await options.locator('#model').inputValue(), '');
+      await options.locator('#model').fill('synthetic-local'); await options.locator('#btnTestKey').click();
+      await options.waitForFunction(() => document.getElementById('testResult').textContent.includes('连接正常'));
+      assert.equal(calls.at(-1).model, 'synthetic-local'); assert.equal(calls.at(-1).authorization, undefined);
+      const before = await rpc(options, 'wsa:getState'); const customId = before.state.settings.provider;
+      await choose('192.0.2.15:9000'); assert.equal(await options.locator('#model').inputValue(), '');
+      await choose(base + '/v1/chat/completions'); assert.equal(await options.locator('#model').inputValue(), 'synthetic-local');
+      assert.equal((await rpc(options, 'wsa:getState')).state.settings.provider, customId);
+      await options.reload(); await options.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      const after = await rpc(options, 'wsa:getState'); assert.equal(after.state.settings.provider, customId);
+      assert.equal(Object.keys(after.state.settings.customProviders).length, 2);
+      await choose('zhipu');
     });
     const page = await context.newPage();
     await t.test('generic 识别和填充正确；内容脚本无法读取资料和 API', async () => {
@@ -175,6 +208,15 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
     });
     await t.test('扩展页面与夹具没有未捕获 JavaScript 错误', async () => {
       assert.deepEqual(pageErrors, []);
+    });
+    await t.test('直接打开设置 HTML 时说明正确入口，不显示底部英文异常', async () => {
+      const preview = await context.newPage();
+      await preview.goto(require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href);
+      await preview.locator('#initializationError').waitFor({ state: 'visible' });
+      assert.match(await preview.locator('#initializationError').textContent(), /扩展选项/);
+      assert.equal(await preview.locator('#provider').isDisabled(), true);
+      assert.ok(!(await preview.locator('body').textContent()).includes('Cannot read properties'));
+      await preview.close();
     });
   } finally {
     if (context) await context.close();

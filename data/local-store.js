@@ -8,7 +8,7 @@
   const SCHEMA_VERSION = 2;
   const TYPES = ['text', 'textarea', 'select', 'number', 'boolean', 'date', 'multiSelect'];
   const KINDS = ['education', 'internship', 'employment', 'project'];
-  const API_FIELDS = ['provider', 'model', 'visionModel', 'customBase', 'apiKeys'];
+  const API_FIELDS = ['provider', 'model', 'visionModel', 'customBase', 'apiKeys', 'customProviders', 'providerModels'];
   const DEF_KEYS = ['fieldId', 'label', 'type', 'group', 'aliases', 'options', 'description', 'version'];
   const TABLES = ['fieldDefinitions', 'profiles', 'fieldValues', 'entries', 'bindings', 'mappingRules'];
 
@@ -113,9 +113,20 @@
   // API 配置独立校验与保存，当前阶段保留旧凭据格式，不承诺静态加密。
   function apiSettings(value) {
     keys(value, API_FIELDS, 'API 设置');
-    for (const key of API_FIELDS.filter((key) => key !== 'apiKeys')) string(value[key] || '', key, 2000, true);
+    for (const key of ['provider', 'model', 'visionModel', 'customBase']) string(value[key] || '', key, 2000, true);
     check(object(value.apiKeys), 'apiKeys 格式错误');
     for (const [provider, key] of Object.entries(value.apiKeys)) { string(provider, '服务商'); string(key, 'API Key', 4096, true); }
+    for (const key of ['customProviders', 'providerModels']) check(object(value[key] || {}), key + ' 格式错误');
+    for (const [providerId, provider] of Object.entries(value.customProviders || {})) {
+      check(/^custom\.[a-z\d-]+$/i.test(providerId), '自定义服务商 ID 错误');
+      keys(provider, ['name', 'baseUrl'], '自定义服务商'); string(provider.name, '服务商名称'); string(provider.baseUrl, '接口地址', 2000);
+      const url = new URL(provider.baseUrl);
+      check(['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash, '接口地址无效');
+    }
+    for (const models of Object.values(value.providerModels || {})) {
+      keys(models, ['model', 'visionModel'], '服务商模型');
+      string(models.model, '模型 ID', 2000, true); string(models.visionModel, '视觉模型 ID', 2000, true);
+    }
     return clone(value);
   }
   // 校验数据库完整性和所有引用；输入错误时不进行任何写入。
@@ -196,7 +207,8 @@
   function splitApi(legacy) {
     const old = legacy.settings || {};
     return apiSettings({ provider: old.provider || 'zhipu', model: old.model || '', visionModel: old.visionModel || '',
-      customBase: old.customBase || '', apiKeys: { ...(old.apiKey ? { zhipu: old.apiKey } : {}), ...(old.apiKeys || {}) } });
+      customBase: old.customBase || '', apiKeys: { ...(old.apiKey ? { zhipu: old.apiKey } : {}), ...(old.apiKeys || {}) },
+      customProviders: old.customProviders || {}, providerModels: old.providerModels || {} });
   }
   // 将旧档案按原顺序导入，保留 key/fid/开关；自定义标签不默认对外公开。
   function syncLegacy(db, state, source = 'manual') {

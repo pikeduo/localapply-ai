@@ -10,7 +10,7 @@ const { webcrypto } = require('node:crypto');
 // 创建独立 JS 上下文与持久内存介质，可模拟后台重启和存储异常。
 function fixture(initial = {}) {
   const disk = structuredClone(initial);
-  const context = vm.createContext({ crypto: webcrypto, console });
+  const context = vm.createContext({ crypto: webcrypto, console, URL });
   for (const name of ['data/templates.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
   let failCountdown = null;
   const storage = {
@@ -257,4 +257,18 @@ test('迁移中断于 API 保存之后仍保留旧源，可重试；导入落盘
   await assert.rejects(command(env.repo, 'importBackup', { backup, mode: 'replace' }, preview.revision), /模拟磁盘/);
   assert.equal(JSON.stringify(await env.repo.read()), before);
   assert.ok(env.disk['localapply.recovery']);
+});
+
+test('自定义服务商、每家模型与 Key 独立保存，重启可读，备份不含配置', async () => {
+  const { repo, restart } = fixture();
+  const base = await repo.readLegacy(); const next = structuredClone(base);
+  next.settings.provider = 'custom.unit'; next.settings.model = 'synthetic-model';
+  next.settings.customProviders = { 'custom.unit': { name: '测试地址', baseUrl: 'http://127.0.0.1:9000/v1' } };
+  next.settings.providerModels = { deepseek: { model: 'synthetic-deepseek', visionModel: '' }, 'custom.unit': { model: 'synthetic-model', visionModel: '' } };
+  next.settings.apiKeys['custom.unit'] = 'fake-custom-unit-key';
+  await repo.saveLegacy(base, next);
+  const after = await restart().readLegacy(); assert.equal(after.settings.customProviders['custom.unit'].baseUrl, 'http://127.0.0.1:9000/v1');
+  assert.equal(after.settings.providerModels.deepseek.model, 'synthetic-deepseek');
+  assert.equal(after.settings.apiKeys['custom.unit'], 'fake-custom-unit-key');
+  const exported = JSON.stringify(await repo.exportBackup()); assert.ok(!exported.includes('customProviders')); assert.ok(!exported.includes('fake-custom-unit-key'));
 });

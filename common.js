@@ -65,15 +65,28 @@ function maskValue(value, sensitive, privacyMask, revealed) {
   return '••••';
 }
 
+// 先确认扩展运行环境；普通网页预览无法访问扩展存储和后台。
 function sendMessage(type, payload) {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type, ...(payload || {}) }, (res) => {
-      if (chrome.runtime.lastError) {
-        resolve({ ok: false, error: chrome.runtime.lastError.message });
-        return;
-      }
-      resolve(res || { ok: false, error: '无响应' });
-    });
+    const runtime = globalThis.chrome && globalThis.chrome.runtime;
+    if (!runtime || !runtime.id || typeof runtime.sendMessage !== 'function') {
+      resolve({ ok: false, error: '当前页面不在有效的浏览器扩展环境中。请先在浏览器扩展管理页加载本项目，再从插件的「设置」或「扩展选项」进入；直接打开 HTML 或通过本地服务器预览无法使用。扩展刚重载时，请关闭此页后重新打开。' });
+      return;
+    }
+    try {
+      runtime.sendMessage({ type, ...(payload || {}) }, (res) => {
+        if (runtime.lastError) {
+          resolve({ ok: false, error: runtime.lastError.message });
+          return;
+        }
+        resolve(res || { ok: false, error: '扩展后台无响应，请在扩展管理页重新加载插件后再打开设置。' });
+      });
+    } catch (error) {
+      // 扩展重载会使旧页面的消息接口失效，提示重新打开，不掩盖其他错误。
+      resolve({ ok: false, error: /context invalidated/i.test(error.message || '')
+        ? '扩展已重载，当前页面已失效。请关闭此页，再从插件的「设置」重新打开。'
+        : error.message || String(error) });
+    }
   });
 }
 

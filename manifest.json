@@ -45,6 +45,7 @@
     "https://*/*"
   ],
   "optional_host_permissions": [
+    "http://*/*",
     "https://*/*"
   ],
   "content_scripts": [

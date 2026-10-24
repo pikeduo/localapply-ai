@@ -12,7 +12,7 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript、零构�
 - **下拉框智能匹配**：`CET-4` ↔ `四级`、`共青团员` ↔ `团员`、`硕士` ↔ `研究生` 等同义写法自动对上
 - **简历 PDF 导入**：pdf.js 本地抽文本 → AI 按固定 schema 提取 → 人工校对后入库；文本过少/乱码（扫描件）自动转视觉模型逐页识别，纯文本模型即可覆盖普通 PDF
 - **开放题 AI 起草**：用档案里的自我介绍/项目/动机素材生成 ≤350 字草稿，保留最近 3 版历史，确认后才落表
-- **多 AI 服务商**：智谱 / DeepSeek / Kimi / 通义千问 / OpenAI / 硅基流动 / OpenRouter / 自定义 OpenAI 兼容接口任选；主模型 + 视觉模型分开配置，Key 按服务商分别保存
+- **多 AI 服务商**：智谱 / DeepSeek / Qwen（通义千问）/ Kimi / OpenAI / 硅基流动 / OpenRouter / Ollama 任选；服务商框支持直接输入 IP 或 API 地址创建自定义 OpenAI 兼容服务。Key、主模型和视觉模型按服务商分别保存
 - **多档案**：全字段模板 51 项（基本信息/教育/意向/政治面貌/家庭成员/四六级/奖惩…），有值就填、没值跳过；支持 JSON 备份导出/恢复
 - **本地数据管理**：字段定义与个人值分离；设置页支持多段教育/实习/工作/项目经历、完整 JSON 备份、合并/覆盖预览及导入前恢复点。重复经历已可编辑保存，网页重复区块自动匹配尚待接入。
 - **公共字段包**：可离线导出已审核的字段元数据、合并其他人的公共字段包，新字段为空白；个人自定义字段默认不公开，本版本不连接 GitHub。
@@ -29,6 +29,12 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript、零构�
 > **AI 是可选加速器**：想用 PDF 自动提取 / 开放题起草时，再点侧边栏 ⚙ 配置任一家 AI 服务商（智谱 / DeepSeek / Kimi / 通义 / OpenAI / 硅基流动 / OpenRouter / 自定义 OpenAI 兼容接口）。普通 PDF 用纯文本模型即可，只有扫描件 PDF 才需要配一个视觉模型。
 
 > Chrome 同理：`chrome://extensions` → 开发人员模式 → 加载已解压的扩展程序。
+
+设置页请从插件的「设置」或扩展管理页的「扩展选项」打开；直接双击 `options/options.html` 或用本地 HTTP 服务预览，无法访问扩展后台和本地资料。重新加载插件后，原来打开的设置页应关闭再重新进入。
+
+AI 服务商可以从输入框的建议列表选择，也可以输入 `192.168.1.10:8000` 后按回车或移开焦点，自动保存为 `http://192.168.1.10:8000/v1`。域名默认使用 HTTPS；完整地址保留自定义路径，粘贴 `/chat/completions` 地址时自动提取 Base URL。相同地址不重复创建，新地址不继承其他服务商的 Key 或模型。填写该服务的模型 ID 后点“测试连接”；本地服务无认证要求时 Key 可留空。只保存配置不会自动连接或下载模型。
+
+服务端需支持 OpenAI Chat Completions 兼容协议。接口参考：[DeepSeek](https://api-docs.deepseek.com/)、[Qwen/阿里云百炼](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)、[Ollama 本地接口](https://docs.ollama.com/api/openai-compatibility)。
 
 ## 快速上手
 
@@ -83,6 +89,7 @@ sidepanel/               侧边栏：字段库 / 填充 / 台账 / 附件
 options/                 设置页：API / 阈值 / PDF 导入校对 / 备份
 data/templates.js        60 组同义词 + 全字段模板 + 档案工厂/升级
 data/local-store.js      Schema v2、迁移、字段/值/经历、备份与公共字段接口
+data/providers.js        服务商统一解析、IP/URL 规范化与地址去重
 options/data-management.js 备份预览、公共字段包和重复经历编辑
 tests/                   基础、数据层与 Playwright 浏览器测试
 libs/pdfjs/              pdf.js 3.11.174（vendor，离线可用）

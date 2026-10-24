@@ -8,15 +8,18 @@
 <body>
   <div class="wrap">
     <h1>网申自动填写助手 · 设置</h1>
+    <p id="initializationError" class="init-error" role="alert" hidden></p>
     <div id="toast" class="toast"></div>
 
     <section class="card">
       <h2>① AI 服务（可选，不用 AI 可整节跳过）</h2>
       <p class="muted" style="margin-top:-4px">不配置 AI 完全不影响使用：直接在侧边栏「字段库」手动录入，核心的一键填充零配置可用。AI 只用来加速两件事：简历 PDF 自动提取、开放题起草。</p>
       <div class="row">
-        <label class="lbl">服务商</label>
-        <select id="provider"></select>
+        <label class="lbl" for="provider">服务商</label>
+        <input id="provider" type="text" list="providerList" autocomplete="off" placeholder="选择服务商，或输入 IP:端口 / API 地址" />
+        <datalist id="providerList"></datalist>
       </div>
+      <p class="muted">支持 DeepSeek、Qwen、Kimi、智谱、OpenAI、硅基流动、OpenRouter 和 Ollama。输入 IP 或接口地址后按回车或移开焦点，自动保存为自定义服务商；仅根地址自动补 /v1。</p>
       <div class="row" id="customBaseRow" style="display:none">
         <label class="lbl">接口地址</label>
         <input type="text" id="customBase" placeholder="https://xx.com/v1（OpenAI 兼容，不含 /chat/completions）" />
@@ -121,6 +124,7 @@
 
   <script src="../libs/pdfjs/pdf.min.js"></script>
   <script src="../data/templates.js"></script>
+  <script src="../data/providers.js"></script>
   <script src="../common.js"></script>
   <script src="data-management.js"></script>
   <script src="options.js"></script>

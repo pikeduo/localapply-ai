@@ -340,8 +340,8 @@
     },
     deepseek: {
       name: 'DeepSeek', baseUrl: 'https://api.deepseek.com', visionDefault: false,
-      models: ['deepseek-chat', 'deepseek-reasoner'], visionModels: [],
-      note: '无视觉模型：普通 PDF 可用，扫描件请换别家',
+      models: ['deepseek-flash', 'deepseek-v4-pro'], visionModels: [],
+      note: 'OpenAI 兼容接口；模型 ID 可手动填写，以服务商账户实际支持为准。扫描件请配置支持图片的视觉模型。',
     },
     moonshot: {
       name: '月之暗面 Kimi', baseUrl: 'https://api.moonshot.cn/v1', visionDefault: false,
@@ -349,7 +349,7 @@
       note: '扫描件需把视觉模型设为 moonshot-v1-8k-vision-preview',
     },
     qwen: {
-      name: '阿里通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', visionDefault: false,
+      name: 'Qwen（通义千问）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', visionDefault: false,
       models: ['qwen-plus', 'qwen-max', 'qwen-turbo'], visionModels: ['qwen-vl-max', 'qwen-vl-plus'],
       note: '扫描件需把视觉模型设为 qwen-vl-max / qwen-vl-plus',
     },
@@ -371,6 +371,10 @@
     custom: {
       name: '自定义（OpenAI 兼容）', baseUrl: '', visionDefault: true, models: [], visionModels: [],
       note: '填兼容 OpenAI /chat/completions 的接口地址；保存时会请求该域名的访问授权',
+    },
+    ollama: {
+      name: 'Ollama（本地）', baseUrl: 'http://localhost:11434/v1', visionDefault: false, requiresKey: false,
+      models: [], visionModels: [], note: '填写本机已安装的模型 ID；默认不需要 API Key。也可直接输入其他 IP 或端口创建服务商。',
     },
   };
 

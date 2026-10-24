@@ -19,7 +19,7 @@ function sandbox(file = 'data/templates.js', initial = {}) {
   const storage = structuredClone(initial);
   const listeners = [];
   const context = vm.createContext({
-    console, setTimeout, clearTimeout, AbortController, crypto: require('node:crypto').webcrypto,
+    console, setTimeout, clearTimeout, AbortController, URL, crypto: require('node:crypto').webcrypto,
     fetch: async () => { throw new Error('基线测试禁止联网'); },
     chrome: {
       storage: { local: {
@@ -68,6 +68,66 @@ test('MV3 清单的脚本、页面及图标资源均存在', () => {
       assert.ok(fs.existsSync(path.resolve(ROOT, path.dirname(html), match[1])), `${html}: ${match[1]}`);
     }
   }
+});
+
+test('普通网页缺少扩展接口时返回中文打开指引，不抛 sendMessage 异常', async () => {
+  for (const globals of [{}, { chrome: {} }, { chrome: { runtime: {} } }]) {
+    const context = vm.createContext(globals);
+    vm.runInContext(source('common.js'), context);
+    const response = await context.sendMessage('wsa:getState');
+    assert.equal(response.ok, false);
+    assert.match(response.error, /扩展选项/);
+    assert.ok(!response.error.includes('Cannot read properties'));
+  }
+});
+
+test('扩展页面消息正常转发，失效上下文提示重新打开', async () => {
+  const runtime = { id: 'test-extension', sendMessage: (message, callback) => callback({ ok: true, type: message.type }) };
+  const context = vm.createContext({ chrome: { runtime } });
+  vm.runInContext(source('common.js'), context);
+  assert.equal((await context.sendMessage('wsa:ping')).type, 'wsa:ping');
+  runtime.sendMessage = () => { throw new Error('Extension context invalidated.'); };
+  assert.match((await context.sendMessage('wsa:getState')).error, /重新打开/);
+});
+
+test('服务商地址规范化支持 IPv4/IPv6、本地域名和完整接口，拒绝危险地址', () => {
+  const { context } = sandbox(); vm.runInContext(source('data/providers.js'), context);
+  const providers = context.LocalApplyProviders;
+  for (const [input, expected] of [
+    ['192.168.1.10:8000', 'http://192.168.1.10:8000/v1'], ['[::1]:11434', 'http://[::1]:11434/v1'],
+    ['localhost:11434/v1/', 'http://localhost:11434/v1'], ['api.example.test', 'https://api.example.test/v1'],
+    ['https://api.example.test/custom/v1/chat/completions', 'https://api.example.test/custom/v1'],
+  ]) assert.equal(providers.normalizeBase(input), expected);
+  for (const input of ['javascript:alert(1)', 'file:///tmp/x', 'https://name:password@example.test/v1', 'https://example.test/v1?key=private', '999.999.1.1:80']) {
+    assert.throws(() => providers.normalizeBase(input), input);
+  }
+  assert.equal(providers.find({}, 'DeepSeek'), 'deepseek'); assert.equal(providers.find({}, 'qwen'), 'qwen');
+  assert.equal(providers.find({}, 'http://localhost:11434'), 'ollama');
+});
+
+test('自定义地址精确解析，未知服务商不回退到其他端点', () => {
+  const { context } = sandbox(); vm.runInContext(source('data/providers.js'), context);
+  const settings = { provider: 'custom.unit', customProviders: { 'custom.unit': { name: '测试服务', baseUrl: 'http://127.0.0.1:9000/v1' } } };
+  assert.equal(context.LocalApplyProviders.find(settings, '127.0.0.1:9000'), 'custom.unit');
+  assert.equal(context.LocalApplyProviders.resolve(settings).baseUrl, 'http://127.0.0.1:9000/v1');
+  assert.throws(() => context.LocalApplyProviders.resolve({ provider: 'missing' }), /不存在/);
+});
+
+test('后台只向所选自定义端点发送其 Key，无 Key 本地服务不添加认证头', async () => {
+  const initial = sandbox().context.WangshenTemplates.defaultState();
+  initial.settings = { ...initial.settings, provider: 'custom.unit', model: 'synthetic-model',
+    customProviders: { 'custom.unit': { name: '测试本地服务', baseUrl: 'http://127.0.0.1:9000/v1' } },
+    apiKeys: { deepseek: 'fake-unrelated-key', 'custom.unit': 'fake-endpoint-key' } };
+  const { context, storage } = sandbox('background.js', { wangshenAutofill: initial });
+  const calls = [];
+  context.fetch = async (url, request) => { calls.push({ url, request }); return { ok: true, json: async () => ({ choices: [{ message: { content: '正常' } }] }) }; };
+  await context.callGLM({ messages: [] });
+  assert.equal(calls[0].url, 'http://127.0.0.1:9000/v1/chat/completions');
+  assert.equal(calls[0].request.headers.Authorization, 'Bearer fake-endpoint-key');
+  assert.equal(calls[0].request.redirect, 'error');
+  delete storage['localapply.apiSettings'].apiKeys['custom.unit'];
+  await context.callGLM({ messages: [] });
+  assert.ok(!Object.hasOwn(calls[1].request.headers, 'Authorization'));
 });
 
 test('默认档案包含 51 个唯一字段及隐私默认值', () => {

@@ -673,7 +673,7 @@ function openItem(f, prof) {
 async function draftOpen(f, btn) {
   // 未配置 Key：引导而不是报错。不用 AI 的用户直接在预览框手写即可。
   const curKey = ((state.settings.apiKeys || {})[state.settings.provider || 'zhipu']) || '';
-  if (!curKey) {
+  if (!curKey && !['custom', 'ollama'].includes(state.settings.provider) && !state.settings.customProviders?.[state.settings.provider]) {
     if (confirm('开放题 AI 起草需要先配置任一家 AI 服务的 Key。\n不配置也完全可以：直接在下方输入框手写答案。\n\n现在去设置页配置吗？')) {
       chrome.runtime.openOptionsPage();
     }

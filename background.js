@@ -1,14 +1,15 @@
 // Service Worker：AI 请求代理（OpenAI 兼容，多服务商预设）、CSV 导出、初始数据、侧边栏开关。
 'use strict';
 
-importScripts('data/templates.js', 'data/local-store.js'); // 保留词库，数据统一交由后台仓库。
+importScripts('data/templates.js', 'data/providers.js', 'data/local-store.js'); // 服务商解析和本地存储共用纯数据逻辑。
 
 const ROOT_KEY = 'wangshenAutofill';
 const DEFAULT_TIMEOUT_MS = 30000;
 const repository = LocalApplyStore.createRepository(chrome.storage.local);
 
+// 从预设或本地地址创建的服务商中解析，保持 Key 与端点一一对应。
 function getProvider(settings) {
-  return WangshenTemplates.PROVIDERS[settings.provider] || WangshenTemplates.PROVIDERS.zhipu;
+  return LocalApplyProviders.resolve(settings);
 }
 
 // ============ 初始数据（工厂在 data/templates.js） ============
@@ -42,7 +43,7 @@ async function resolveVisionModel() {
   const provider = getProvider(settings);
   const vm = settings.visionModel || settings.model || (provider.models[0] || '');
   const ok =
-    settings.provider === 'custom' ||
+    provider.custom ||
     provider.visionDefault ||
     !!settings.visionModel ||
     (provider.visionModels || []).includes(vm);
@@ -64,17 +65,18 @@ function aiError(message, detail) {
   return e;
 }
 
+// 按当前服务商调用兼容接口；自定义/本地服务可不发送认证头。
 async function callGLM(req) {
   const state = await getState();
   const settings = state.settings || {};
   const provider = getProvider(settings);
   const key = (settings.apiKeys || {})[settings.provider] || '';
-  if (!key) {
+  if (!key && provider.requiresKey) {
     throw aiError(`尚未配置 ${provider.name} 的 API Key。不配置 AI 也完全可以使用：在字段库手动录入后一键填充不受影响；如需 PDF 提取/开放题起草，请到设置页填写。`);
   }
   const model = req.model || settings.model || (provider.models[0] || '');
   if (!model) throw aiError('请到设置页填写模型 ID。');
-  const baseUrl = ((settings.provider === 'custom' ? settings.customBase : provider.baseUrl) || '').replace(/\/+$/, '');
+  const baseUrl = (provider.baseUrl || '').replace(/\/+$/, '');
   if (!baseUrl) throw aiError('自定义服务商缺少接口地址，请到设置页填写（OpenAI 兼容地址，如 https://xx.com/v1）。');
   const timeoutMs = req.timeoutMs || DEFAULT_TIMEOUT_MS;
   const ctrl = new AbortController();
@@ -83,7 +85,8 @@ async function callGLM(req) {
   try {
     res = await fetch(baseUrl + '/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+      headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}) },
+      redirect: 'error', // 不把端点 A 的凭据经重定向转发到其他服务商。
       body: JSON.stringify({
         model,
         messages: req.messages,
