@@ -12,12 +12,22 @@ function resetCapabilities() {
 }
 // 分格式显示端点的实际检测结果，鉴权、网络和识别失败均不会伪装成支持。
 async function detectCapabilities() {
+  // 先完成 Key 保存引起的刷新，再建立检测代次，避免点击后被旧保存任务误取消。
+  const clickedModels = JSON.stringify([state.settings.provider, state.settings.model, state.settings.visionModel]);
+  $('#btnDetectCapabilities').disabled = $('#btnDetectImport').disabled = true;
+  try { await flushCredentials(); }
+  catch (error) {
+    $('#btnDetectCapabilities').disabled = $('#btnDetectImport').disabled = false;
+    $('#capabilityStatus').textContent = '检测未完成：' + error.message; return;
+  }
+  if (clickedModels !== JSON.stringify([state.settings.provider, state.settings.model, state.settings.visionModel])) {
+    $('#btnDetectCapabilities').disabled = $('#btnDetectImport').disabled = false; return;
+  }
   resetCapabilities(); const generation = capabilityGeneration;
   const requestId = crypto.randomUUID(); capabilityJob = requestId;
   $('#btnDetectCapabilities').disabled = $('#btnDetectImport').disabled = true;
   $('#capabilityStatus').textContent = '检测中：每个所选模型最多 3 次请求，仅发送随机数字图片及图片型 PDF/DOCX，不发送简历。';
   try {
-    await flushCredentials();
     if (generation !== capabilityGeneration) return;
     const { results } = await dataRequest('wsa:probeCapabilities', { payload: { requestId, probe: LocalApplyProbes.createProbe() } });
     if (generation !== capabilityGeneration) return;

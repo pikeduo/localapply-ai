@@ -4,6 +4,7 @@ let resumeJob = null;
 let resumeSource = null;
 let resumeRows = [];
 let resumeDatabase = null;
+let selectedResumeFile = null; // 仅留在当前页面内存，取消或识别完成后释放。
 // 清理旧任务及其草稿，迟到响应不能重建已取消的审核结果。
 function clearResume(message = '', keepFile = false) {
   if (resumeJob) {
@@ -11,17 +12,20 @@ function clearResume(message = '', keepFile = false) {
     sendMessage('wsa:cancelResume', { requestId: resumeJob.id });
   }
   resumeJob = resumeSource = resumeDatabase = null; resumeRows = [];
+  selectedResumeFile = null;
   if (!keepFile) $('#pdfFile').value = '';
   $('#sourcePreview').textContent = ''; $('#pdfReview').replaceChildren();
+  $('#resumePreview').open = false; $('#resumeFileInfo').textContent = '尚未选择文件';
   $('#importRow').style.display = 'none'; $('#sendResume').hidden = true;
   $('#sendResume').disabled = false;
   $('#pdfStatus').textContent = message; $('#btnExtract').disabled = false;
 }
 // 本地仅生成页面预览，包含所有可渲染文字和图片；不做字段抽取和文字识别。
-async function prepareResume() {
-  const file = $('#pdfFile').files[0];
+async function prepareResume(file = selectedResumeFile || $('#pdfFile').files[0]) {
   if (!file) { $('#pdfStatus').textContent = '请先选择 PDF 或 DOCX'; return; }
   clearResume();
+  selectedResumeFile = file;
+  $('#resumeFileInfo').textContent = `${file.name} · ${(file.size / 1024).toFixed(1)} KiB`;
   const job = { id: crypto.randomUUID(), controller: new AbortController() }; resumeJob = job;
   $('#btnExtract').disabled = true; $('#pdfStatus').textContent = '正在本地读取与检查文件…';
   try {
@@ -33,6 +37,7 @@ async function prepareResume() {
       const image = document.createElement('img'); image.src = page.dataUrl; image.alt = '简历第 ' + (index + 1) + ' 页/图';
       $('#sourcePreview').append(image);
     }
+    $('#resumePreview').open = true;
     $('#pdfStatus').textContent = `已生成 ${source.pages.length} 张页面预览，文字和嵌入图片均交由模型识别。尚未发送文件，请先检测模型能力。`;
     $('#sendResume').hidden = false;
   } catch (error) { if (resumeJob === job) clearResume('读取失败：' + error.message); }
@@ -58,7 +63,7 @@ async function analyzeResume() {
     if (resumeJob !== job) return;
     resumeRows = LocalApplyResume.normalize(response.data, source);
     // 文件识别结束释放原字节，页面预览仅留在本次内存供人工核对。
-    source.bytes = source.renderBytes = null;
+    source.bytes = source.renderBytes = selectedResumeFile = null;
     $('#sendResume').hidden = true;
     $('#pdfStatus').textContent = '解析完成。所有字段均由模型识别，默认不勾选；请对照页面图片核对引用、字段值及目标档案后选择导入。';
     $('#importRow').style.display = '';
@@ -68,6 +73,34 @@ async function analyzeResume() {
   } finally {
     if (resumeJob === job) { $('#sendResume').disabled = false; $('#btnExtract').disabled = false; }
   }
+}
+// 文件选择和拖放使用同一入口；一次只接收一份简历，预览不会调用模型。
+function acceptResumeFiles(files) {
+  if (files.length !== 1) { clearResume('请每次选择或拖入一份 PDF/DOCX 简历'); return; }
+  return prepareResume(files[0]);
+}
+// 支持鼠标、键盘与系统文件拖放，始终阻止拖放文件导致页面跳转。
+function initResumeDrop() {
+  const zone = $('#resumeDropZone'); let dragDepth = 0;
+  zone.addEventListener('click', () => $('#pdfFile').click());
+  zone.addEventListener('keydown', (event) => {
+    if (['Enter', ' '].includes(event.key)) { event.preventDefault(); $('#pdfFile').click(); }
+  });
+  zone.addEventListener('dragenter', (event) => {
+    event.preventDefault(); dragDepth++; zone.classList.add('drag-active');
+  });
+  zone.addEventListener('dragover', (event) => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; });
+  zone.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) zone.classList.remove('drag-active'); });
+  zone.addEventListener('drop', (event) => {
+    event.preventDefault(); event.stopPropagation(); dragDepth = 0; zone.classList.remove('drag-active');
+    acceptResumeFiles(event.dataTransfer?.files || []);
+  });
+  document.addEventListener('dragover', (event) => { if (Array.from(event.dataTransfer?.types || []).includes('Files')) event.preventDefault(); });
+  document.addEventListener('drop', (event) => {
+    if (Array.from(event.dataTransfer?.types || []).includes('Files')) {
+      event.preventDefault(); $('#pdfStatus').textContent = '请将文件拖入“选择简历文件”区域';
+    }
+  });
 }
 // 计算规范字段与稳定经历 ID，和数据库入口采用相同去重规则。
 function resumeExisting(row, database, profileId) {
@@ -142,7 +175,8 @@ async function renderResumeCenter() {
 }
 // 独立挂载导入和本地编辑入口，切换文件时取消旧任务。
 function initResume() {
-  $('#btnExtract').addEventListener('click', prepareResume);
+  initResumeDrop();
+  $('#btnExtract').addEventListener('click', () => prepareResume());
   $('#sendResume').addEventListener('click', analyzeResume);
   $('#btnImport').addEventListener('click', confirmResume);
   $('#selectAllResume').addEventListener('click', () => {
@@ -150,7 +184,9 @@ function initResume() {
     document.querySelectorAll('#pdfReview input[type="checkbox"]').forEach((control) => { control.checked = true; });
   });
   $('#cancelResume').addEventListener('click', () => clearResume('已取消，本次草稿已清理，未写入资料。'));
-  $('#pdfFile').addEventListener('change', () => clearResume('', true));
+  $('#pdfFile').addEventListener('change', (event) => {
+    if (event.target.files.length) acceptResumeFiles(event.target.files);
+  });
   $('#targetProfile').addEventListener('change', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));
   $('#overwriteResume').addEventListener('change', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));
   $('#refreshReview').addEventListener('click', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));

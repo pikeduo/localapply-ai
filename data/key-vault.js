@@ -62,5 +62,32 @@
     await open(record, key);
     return key;
   }
-  global.LocalApplyVault = { validate, create, unlock, open, seal, decode };
+  // 无口令模式仅做本机自动保存，密钥与密文同机存储，不具备口令的独立保护强度。
+  function validateDevice(record) {
+    if (!record || record.version !== 1 || decode(record.deviceKey).length !== 32 || decode(record.iv).length !== 12
+      || decode(record.ciphertext).length < 16 || !Number.isInteger(record.revision) || record.revision < 1
+      || !Array.isArray(record.providers) || !Array.isArray(record.overrides)
+      || [...record.providers, ...record.overrides].some((id) => typeof id !== 'string')) throw new Error('本机密钥记录损坏');
+    return record;
+  }
+  // 自动生成本机密钥，每次保存都换密钥与 IV；原始 API Key 不直接落盘。
+  async function sealDevice(keys, revision) {
+    const raw = crypto.getRandomValues(new Uint8Array(32)); const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt']);
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: encoder.encode('localapply-device-keys:v1') }, key, encoder.encode(JSON.stringify(keys)));
+    return { version: 1, revision, deviceKey: encode(raw), iv: encode(iv), ciphertext: encode(ciphertext),
+      providers: Object.keys(keys).filter((id) => keys[id]), overrides: Object.keys(keys) };
+  }
+  // 读取自动保存的 Key；空字符串是删除覆盖标记，不能让旧口令 Key 意外恢复使用。
+  async function openDevice(record) {
+    validateDevice(record);
+    try {
+      const key = await crypto.subtle.importKey('raw', decode(record.deviceKey), 'AES-GCM', false, ['decrypt']);
+      const data = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: decode(record.iv), additionalData: encoder.encode('localapply-device-keys:v1') }, key, decode(record.ciphertext));
+      const keys = JSON.parse(new TextDecoder().decode(data));
+      if (!keys || typeof keys !== 'object' || Array.isArray(keys) || Object.values(keys).some((value) => typeof value !== 'string' || value.length > 4096)) throw new Error('bad payload');
+      return keys;
+    } catch { throw new Error('本机密钥记录损坏，请重新配置 API Key'); }
+  }
+  global.LocalApplyVault = { validate, create, unlock, open, seal, decode, validateDevice, sealDevice, openDevice };
 })(globalThis);

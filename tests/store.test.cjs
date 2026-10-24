@@ -358,3 +358,66 @@ test('Schema v2 数据/备份/恢复点升级到 v3，失败不改原版本，�
   const future = fixture({ ...v2, 'localapply.database': { ...v2['localapply.database'], schemaVersion: 100 } });
   await assert.rejects(future.repo.read(), /版本/); assert.equal(future.disk['localapply.database'].schemaVersion, 100);
 });
+
+test('默认直接保存 Key 无需口令，迁移旧明文后重启可用且备份不含自动密钥', async () => {
+  const old = fixture().templates.defaultState(); old.settings.apiKeys = { zhipu: 'fake-legacy-local-key' };
+  const env = fixture({ wangshenAutofill: old }); await env.repo.initialize(); const before = await env.repo.read();
+  await env.repo.vaultCommand('setKey', { providerId: 'deepseek', key: 'fake-direct-local-key', revision: 0, localRevision: 0 });
+  assert.ok(!JSON.stringify(env.disk).includes('fake-direct-local-key')); assert.ok(!JSON.stringify(env.disk).includes('fake-legacy-local-key'));
+  const state = await env.repo.readLegacy(); assert.equal(state.settings.vault.enabled, false); assert.equal(state.settings.keyStatus.deepseek, true);
+  assert.deepEqual(Object.keys(state.settings.apiKeys), []);
+  const settings = await env.restart().readAiSettings(); assert.equal(settings.apiKeys.deepseek, 'fake-direct-local-key'); assert.equal(settings.apiKeys.zhipu, 'fake-legacy-local-key');
+  assert.deepEqual(await env.repo.read(), before);
+  assert.ok(!JSON.stringify(await env.repo.exportBackup()).includes('deviceKey'));
+  await assert.rejects(env.repo.vaultCommand('setKey', { providerId: 'deepseek', key: 'stale-value', revision: 0, localRevision: 0 }), /已变化/);
+});
+
+test('口令可选开启和取消，错误口令不写入，取消后整个仓库重启无需解锁', async () => {
+  const env = fixture(); await env.repo.initialize();
+  await env.repo.vaultCommand('setKey', { providerId: 'zhipu', key: 'fake-optional-key', revision: 0 });
+  await env.repo.vaultCommand('setup', { password: 'test-passphrase' });
+  assert.equal(env.disk['localapply.deviceKeys'], null);
+  const restarted = env.restart(); await assert.rejects(restarted.readAiSettings(), /锁定/);
+  const before = JSON.stringify(env.disk);
+  await assert.rejects(restarted.vaultCommand('disable', { password: 'wrong-password' }), /口令错误/); assert.equal(JSON.stringify(env.disk), before);
+  await restarted.vaultCommand('disable', { password: 'test-passphrase' });
+  assert.equal(env.disk['localapply.keyVault'], null); assert.ok(!JSON.stringify(env.disk).includes('fake-optional-key'));
+  assert.equal((await env.restart().readAiSettings()).apiKeys.zhipu, 'fake-optional-key');
+});
+
+test('旧密钥锁定时可直接重填新 Key，旧密文保留；删除覆盖不恢复旧 Key', async () => {
+  const old = fixture().templates.defaultState(); old.settings.apiKeys = { zhipu: 'fake-old-protected', deepseek: 'fake-other-protected' };
+  const env = fixture({ wangshenAutofill: old }); await env.repo.initialize(); await env.repo.vaultCommand('setup', { password: 'test-passphrase' });
+  const repo = env.restart(); const encrypted = JSON.stringify(env.disk['localapply.keyVault']);
+  await repo.vaultCommand('setKey', { providerId: 'zhipu', key: 'fake-reentered-key', revision: 1 });
+  assert.equal(JSON.stringify(env.disk['localapply.keyVault']), encrypted);
+  assert.equal((await repo.readAiSettings()).apiKeys.zhipu, 'fake-reentered-key');
+  const base = await repo.readLegacy(); const next = structuredClone(base); next.settings.provider = 'deepseek'; await repo.saveLegacy(base, next);
+  await assert.rejects(repo.readAiSettings(), /锁定/);
+  await repo.vaultCommand('setKey', { providerId: 'zhipu', key: '', revision: 1 });
+  await repo.vaultCommand('unlock', { password: 'test-passphrase' });
+  const settings = await repo.readAiSettings(); assert.equal(settings.apiKeys.deepseek, 'fake-other-protected'); assert.equal(settings.apiKeys.zhipu, '');
+});
+
+test('无口令迁移中断可恢复；口令迁移中断后的新 Key 不会在重试时丢失', async () => {
+  const old = fixture().templates.defaultState(); old.settings.apiKeys = { zhipu: 'fake-old-migration' };
+  const env = fixture({ wangshenAutofill: old }); await env.repo.initialize(); env.fail(1);
+  await assert.rejects(env.repo.vaultCommand('setKey', { providerId: 'deepseek', key: 'fake-new-migration', revision: 0 }), /模拟磁盘/);
+  const repo = env.restart(); assert.equal((await repo.readAiSettings()).apiKeys.deepseek, 'fake-new-migration');
+  await repo.vaultCommand('setKey', { providerId: 'zhipu', key: 'fake-old-migration', revision: 0 });
+  assert.ok(!JSON.stringify(env.disk).includes('fake-new-migration'));
+  env.fail(2); await assert.rejects(repo.vaultCommand('setup', { password: 'test-passphrase' }), /模拟磁盘/);
+  const pending = env.restart(); const state = await pending.readLegacy(); assert.equal(state.settings.vault.pendingMigration, true);
+  await pending.vaultCommand('setKey', { providerId: 'zhipu', key: 'fake-after-interruption', revision: state.settings.vault.revision });
+  await pending.vaultCommand('unlock', { password: 'test-passphrase' });
+  assert.equal((await pending.readAiSettings()).apiKeys.zhipu, 'fake-after-interruption'); assert.equal(env.disk['localapply.deviceKeys'], null);
+});
+
+test('另一页面取消并重设口令后，旧会话失效但仍可无口令重填新 Key', async () => {
+  const env = fixture(); await env.repo.initialize(); await env.repo.vaultCommand('setup', { password: 'first-passphrase' });
+  const other = env.restart(); await other.vaultCommand('disable', { password: 'first-passphrase' });
+  await other.vaultCommand('setup', { password: 'second-passphrase' });
+  const current = await env.repo.readLegacy(); assert.equal(current.settings.vault.unlocked, false);
+  await env.repo.vaultCommand('setKey', { providerId: 'zhipu', key: 'fake-new-tab-key', revision: current.settings.vault.revision });
+  assert.equal((await env.repo.readAiSettings()).apiKeys.zhipu, 'fake-new-tab-key');
+});

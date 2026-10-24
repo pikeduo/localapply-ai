@@ -6,8 +6,10 @@
 
 - 本阶段按用户最新要求采用 `chrome.storage.local`，保持无构建的原生 JS；阶段零的 IndexedDB/Vite/Vue 工程化方案后置。
 - `data/local-store.js` 为规范数据入口，`background.js` 持有唯一 repository 实例。页面禁止绕开后台直接写数据库；内容脚本只能请求阈值/开关等安全投影。
-- `localapply.database` 为 Schema v3 个人库，v2 经完整校验后原子升级；`localapply.apiSettings` 为独立配置。`wangshenAutofill` 保留旧个人资料，唯一清理例外是用户设置口令并验证密文后删除旧 API Key。恢复点仅含个人库，v2 恢复点也必须升级后恢复。
+- `localapply.database` 为 Schema v3 个人库，v2 经完整校验后原子升级；`localapply.apiSettings` 为独立配置。`wangshenAutofill` 保留旧个人资料，唯一清理例外是 Key 迁移密文验证成功后删除旧明文 Key。恢复点仅含个人库，v2 恢复点须升级后恢复。
 - `localapply.keyVault` 仅保存 PBKDF2/AES-GCM 封套；派生密钥只驻留当前 repository 内存，错误口令不得修改存储。迁移分为先写密文、读回认证、清理明文；中断后须通过 unlock 继续。UI 不得读回已加密 Key，仅显示 keyStatus；新增 Key 必须通过 vaultCommand 保存。
+- 用户已要求取消强制口令：默认可直接填 Key，localapply.deviceKeys 保存自动密钥/密文，不宣称独立口令安全性。口令保护为可选；旧口令锁定时允许新 Key 以本机模式覆盖使用，旧密文保留。开启/取消保护须保留所有 Key，合并中断期间的新覆盖；删除覆盖不能使旧 Key 恢复使用。自动记录和密钥均不得进入备份。
+- 拖放和文件选择必须走同一校验/自动预览流程，页面预览自动展开，禁止自动调用模型或写入资料。多文件/损坏文件拒绝；替换文件、取消及关闭页面清理 File、字节和页面图引用。密钥保存后的模型查询与检测须等待界面刷新完成，不能被前一保存任务误取消。
 - 用户后续授权 file:// 设置页独立操作：options/standalone.js 复用同一 repository，将存储适配到按文件目录隔离的 IndexedDB，多页写入由 Web Lock 串行。它不访问/同步扩展私有数据，仅允许文件协议启用；不得将此回退推广到任意 HTTP 页面。
 - data/ai-client.js 为后台和文件页共用的 AI 管线，配置通过读取函数注入。文件 API 请求遵守 CORS，不能使用关闭浏览器安全策略的方式绕过；页面必须说明独立存储边界。
 - API 设置中的 customProviders 保存按地址建立的服务商，providerModels 按服务商保存模型；data/providers.js 统一解析和规范化地址。新增端点不得继承上一家的 Key/模型，默认备份也不得夹带这些 API 配置。
@@ -40,3 +42,5 @@
 阶段二已验收：`npm test` 54 项、`npm run test:e2e` 31 项通过，覆盖两种入口的真实 PDF/DOCX、口令、取消及重启；AI 接口使用合成模拟服务。详见 docs/阶段2简历导入与密钥加密验收.md。
 
 后续修正已验收：基础 58 项、浏览器 37 项通过；图像 PDF/DOCX 像素保留、原文件字节、能力拦截及旧填表回归均通过。模型优先识别及能力实测新增 docx-preview/html2canvas 本地渲染资源；普通用户仍不需安装依赖。详见最新阶段二记录。
+
+2026-10-25：可选口令、直接 Key 输入与拖拽自动预览验收完成，基础 63 项、浏览器 43 项通过。覆盖无口令重启、旧锁定 Key 替换、取消口令、并发/中断恢复、拖入 PDF/DOCX 不调用模型及旧填表回归。

@@ -24,8 +24,13 @@ body {
 .page-nav a { color: var(--brand); text-decoration: none; padding: 6px 0; }
 section { scroll-margin-top: 20px; }
 summary { cursor: pointer; color: var(--sub); padding: 10px 0; }
-#sourcePreview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; background: var(--bg); padding: 14px; }
+#sourcePreview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 520px; overflow: auto; background: var(--bg); padding: 14px; }
 #sourcePreview img { display: block; width: 100%; height: auto; margin-bottom: 16px; background: #fff; }
+/* 拖放与文件选择共用自动预览，不把文件直接发送给模型。 */
+.resume-drop-zone { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 16px; border: 2px dashed var(--line-strong); border-radius: 12px; background: var(--bg); cursor: pointer; text-align: center; }
+.resume-drop-zone > span:not(.btn) { color: var(--sub); font-size: 12px; }
+.resume-drop-zone.drag-active, .resume-drop-zone:focus-visible { border-color: var(--brand); background: var(--brand-weak); outline: none; }
+#resumeFileInfo { overflow-wrap: anywhere; }
 #capabilityStatus { white-space: pre-line; overflow-wrap: anywhere; }
 .basic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 .center-field { display: flex; flex-direction: column; gap: 5px; color: var(--sub); }

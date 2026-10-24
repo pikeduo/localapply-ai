@@ -6,6 +6,7 @@
   const RECOVERY_KEY = 'localapply.recovery';
   const LEGACY_KEY = 'wangshenAutofill';
   const VAULT_KEY = 'localapply.keyVault';
+  const DEVICE_KEY = 'localapply.deviceKeys';
   const SCHEMA_VERSION = 3;
   const TYPES = ['text', 'textarea', 'select', 'number', 'boolean', 'date', 'multiSelect'];
   const KINDS = ['education', 'internship', 'employment', 'project'];
@@ -404,18 +405,21 @@
   function createRepository(storage) {
     let queue = Promise.resolve();
     let sessionKey = null; // 不落盘；后台回收或文件页关闭后须重新解锁。
+    let sessionSalt = null; // 另一页面重设口令时，旧会话密钥必须失效。
     // 初始化访问限制和数据；失败不删除/修改旧源，下次启动可重试。
     async function load() {
       await storage.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
-      const data = await storage.get([DB_KEY, API_KEY, VAULT_KEY]);
+      const data = await storage.get([DB_KEY, API_KEY, VAULT_KEY, DEVICE_KEY]);
       if (data[VAULT_KEY]) global.LocalApplyVault.validate(data[VAULT_KEY]);
+      if (sessionKey && data[VAULT_KEY]?.salt !== sessionSalt) { sessionKey = sessionSalt = null; }
+      if (data[DEVICE_KEY]) global.LocalApplyVault.validateDevice(data[DEVICE_KEY]);
       if (data[DB_KEY]) {
         const db = upgradeDatabase(data[DB_KEY]); const api = apiSettings(data[API_KEY]);
         if (data[DB_KEY].schemaVersion !== SCHEMA_VERSION) {
           db.revision++;
           await storage.set({ [DB_KEY]: db }); // 校验完整副本后一次提交，失败保留旧版本。
         }
-        return { db, api, vault: data[VAULT_KEY] || null };
+        return { db, api, vault: data[VAULT_KEY] || null, device: data[DEVICE_KEY] || null };
       }
       const legacy = await storage.get(LEGACY_KEY);
       const migrated = migrate(legacy[LEGACY_KEY] || global.WangshenTemplates.defaultState());
@@ -424,17 +428,20 @@
       await storage.set({ [DB_KEY]: migrated.db });
       const saved = await storage.get([DB_KEY, API_KEY]);
       check(equal(saved[DB_KEY], migrated.db) && equal(saved[API_KEY], migrated.api), '迁移写入校验失败；旧数据仍保留');
-      return migrated;
+      return { ...migrated, vault: data[VAULT_KEY] || null, device: data[DEVICE_KEY] || null };
     }
     // UI 只获得密钥存在状态；启用保险库后绝不通过兼容投影返回真实 Key。
     function project(previous) {
       const api = clone(previous.api);
-      const providers = previous.vault?.providers || Object.keys(api.apiKeys).filter((id) => api.apiKeys[id]);
-      if (previous.vault) api.apiKeys = {};
+      const providers = new Set(previous.vault?.providers || Object.keys(api.apiKeys).filter((id) => api.apiKeys[id]));
+      for (const providerId of previous.device?.overrides || []) providers.delete(providerId);
+      for (const providerId of previous.device?.providers || []) providers.add(providerId);
+      if (previous.vault || previous.device) api.apiKeys = {};
       const state = legacyState(previous.db, api);
-      state.settings.keyStatus = Object.fromEntries(providers.map((id) => [id, true]));
+      state.settings.keyStatus = Object.fromEntries([...providers].map((id) => [id, true]));
       state.settings.vault = { enabled: !!previous.vault, unlocked: !!sessionKey, revision: previous.vault?.revision || 0,
-        pendingMigration: !!previous.vault?.migrationPending };
+        pendingMigration: !!previous.vault?.migrationPending, localRevision: previous.device?.revision || 0,
+        localProviders: previous.device?.overrides || [] };
       return state;
     }
     // 按序运行操作，单次失败不阻塞后续请求。
@@ -454,12 +461,31 @@
     }
     // 密文读回并认证成功后才清理旧明文，档案和其他旧源内容保持不变。
     async function finishVaultMigration(previous, record, key) {
-      await global.LocalApplyVault.open(record, key);
+      const payload = await global.LocalApplyVault.open(record, key);
+      if (previous.device) {
+        // 迁移中断后新增的无口令 Key 也要合并，验证新密文后才移除本机自动密钥。
+        Object.assign(payload.keys, await global.LocalApplyVault.openDevice(previous.device));
+        record = await global.LocalApplyVault.seal(payload, key, global.LocalApplyVault.decode(record.salt), record.revision + 1, true);
+        await storage.set({ [VAULT_KEY]: record });
+        record = (await storage.get(VAULT_KEY))[VAULT_KEY]; await global.LocalApplyVault.open(record, key);
+      }
       const old = await storage.get(LEGACY_KEY);
-      const write = { [VAULT_KEY]: { ...record, migrationPending: false }, [API_KEY]: { ...previous.api, apiKeys: {} } };
+      const write = { [VAULT_KEY]: { ...record, migrationPending: false }, [DEVICE_KEY]: null, [API_KEY]: { ...previous.api, apiKeys: {} } };
       if (old[LEGACY_KEY]?.settings) {
         const legacy = clone(old[LEGACY_KEY]); delete legacy.settings.apiKey; legacy.settings.apiKeys = {};
         write[LEGACY_KEY] = legacy;
+      }
+      await storage.set(write);
+    }
+    // 无口令保存也先验证密文，再清理旧明文；旧的口令密文不会被擅自覆盖。
+    async function saveDeviceKeys(previous, keys) {
+      const record = await global.LocalApplyVault.sealDevice(keys, (previous.device?.revision || 0) + 1);
+      await storage.set({ [DEVICE_KEY]: record });
+      await global.LocalApplyVault.openDevice((await storage.get(DEVICE_KEY))[DEVICE_KEY]);
+      const old = await storage.get(LEGACY_KEY);
+      const write = { [API_KEY]: { ...previous.api, apiKeys: {} } };
+      if (old[LEGACY_KEY]?.settings) {
+        const legacy = clone(old[LEGACY_KEY]); delete legacy.settings.apiKey; legacy.settings.apiKeys = {}; write[LEGACY_KEY] = legacy;
       }
       await storage.set(write);
     }
@@ -470,26 +496,40 @@
         if (action === 'setup') {
           check(!previous.vault, '保险库已设置，请解锁');
           const old = (await storage.get(LEGACY_KEY))[LEGACY_KEY];
-          const payload = { keys: clone(previous.api.apiKeys), legacy: old?.settings
+          const payload = { keys: { ...clone(previous.api.apiKeys), ...(previous.device ? await vault.openDevice(previous.device) : {}) }, legacy: old?.settings
             ? { apiKey: old.settings.apiKey || '', apiKeys: old.settings.apiKeys || {} } : {} };
           const created = await vault.create(input.password, payload);
           await storage.set({ [VAULT_KEY]: created.record });
           const saved = (await storage.get(VAULT_KEY))[VAULT_KEY];
           await finishVaultMigration(previous, saved, created.key);
           sessionKey = created.key;
+          sessionSalt = created.record.salt;
         } else if (action === 'unlock') {
           check(previous.vault, '请先设置安全口令');
           const key = await vault.unlock(input.password, previous.vault);
           if (previous.vault.migrationPending) await finishVaultMigration(previous, previous.vault, key);
           sessionKey = key;
+          sessionSalt = previous.vault.salt;
         } else if (action === 'lock') {
-          sessionKey = null;
+          sessionKey = sessionSalt = null;
+        } else if (action === 'disable') {
+          check(previous.vault, '当前没有启用口令保护');
+          const key = sessionKey || await vault.unlock(input.password, previous.vault);
+          const payload = await vault.open(previous.vault, key);
+          const local = previous.device ? await vault.openDevice(previous.device) : {};
+          await saveDeviceKeys(previous, { ...payload.keys, ...local });
+          await storage.set({ [VAULT_KEY]: null }); sessionKey = sessionSalt = null;
         } else if (action === 'setKey') {
-          check(previous.vault && sessionKey, '请先设置安全口令并解锁保险库');
-          check(input.revision === previous.vault.revision, '密钥已变化，请刷新状态后重试');
+          check(input.revision === (previous.vault?.revision || 0), '密钥已变化，请刷新状态后重试');
+          if (input.localRevision !== undefined) check(input.localRevision === (previous.device?.revision || 0), '本机密钥已变化，请刷新后重试');
           check(Object.hasOwn(global.WangshenTemplates.PROVIDERS, input.providerId)
             || Object.hasOwn(previous.api.customProviders || {}, input.providerId), '服务商不存在');
           string(input.key, 'API Key', 4096, true);
+          if (!previous.vault || !sessionKey) {
+            const local = previous.device ? await vault.openDevice(previous.device) : {};
+            await saveDeviceKeys(previous, { ...previous.api.apiKeys, ...local, [input.providerId]: input.key });
+            return project(await load()).settings;
+          }
           const payload = await vault.open(previous.vault, sessionKey);
           if (input.key) payload.keys[input.providerId] = input.key;
           else {
@@ -498,7 +538,12 @@
             if (input.providerId === 'zhipu' && payload.legacy) delete payload.legacy.apiKey;
           }
           const record = await vault.seal(payload, sessionKey, vault.decode(previous.vault.salt), previous.vault.revision + 1);
-          await storage.set({ [VAULT_KEY]: record });
+          const write = { [VAULT_KEY]: record };
+          if (previous.device) {
+            const local = await vault.openDevice(previous.device); delete local[input.providerId];
+            write[DEVICE_KEY] = await vault.sealDevice(local, previous.device.revision + 1);
+          }
+          await storage.set(write);
         } else if (action !== 'status') throw new Error('未知保险库操作');
         return project(await load()).settings;
       });
@@ -657,13 +702,14 @@
       readLegacy: () => run(project),
       // 仅 AI 客户端可用：解密发生在后台/文件运行时，不向 UI 返回明文。
       readAiSettings: () => run(async (previous) => {
-        if (!previous.vault) return clone(previous.api);
+        const local = previous.device ? await global.LocalApplyVault.openDevice(previous.device) : {};
+        if (!previous.vault) return { ...clone(previous.api), apiKeys: { ...previous.api.apiKeys, ...local } };
         if (!sessionKey) {
-          check(!previous.vault.providers.includes(previous.api.provider), '密钥保险库已锁定，请在设置页输入口令解锁');
-          return { ...clone(previous.api), apiKeys: {} };
+          check(!previous.vault.providers.includes(previous.api.provider) || Object.hasOwn(local, previous.api.provider), '旧密钥已锁定，可解锁口令或直接重新填写 API Key');
+          return { ...clone(previous.api), apiKeys: { ...previous.api.apiKeys, ...local } };
         }
         const payload = await global.LocalApplyVault.open(previous.vault, sessionKey);
-        return { ...clone(previous.api), apiKeys: payload.keys };
+        return { ...clone(previous.api), apiKeys: { ...payload.keys, ...local } };
       }),
       vaultCommand,
       // 内容脚本只能收到明确的非敏感设置，不返回个人库/API。
@@ -673,9 +719,9 @@
         const merged = mergeChanged(normalizeSnapshot(base), normalizeSnapshot(next), project(previous));
         const db = syncLegacy(clone(previous.db), merged, source);
         const api = splitApi(merged);
-        if (previous.vault) check(!Object.values(api.apiKeys).some(Boolean), '启用保险库后请使用密钥保存入口');
+        if (previous.vault || previous.device) check(!Object.values(api.apiKeys).some(Boolean), '请使用密钥保存入口');
         await commit(db, api, previous);
-        return project({ db, api, vault: previous.vault });
+        return project({ db, api, vault: previous.vault, device: previous.device });
       }),
       exportBackup: () => run(({ db }) => backup(db)),
       previewImport: (input, mode) => run(({ db }) => ({ ...importPlan(db, parseBackup(input), mode).summary, revision: db.revision })),
@@ -684,5 +730,5 @@
       command,
     };
   }
-  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId };
+  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, DEVICE_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId };
 })(globalThis);

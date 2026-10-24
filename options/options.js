@@ -151,6 +151,12 @@ function renderModelChoices() {
 
 // 用户主动获取模型列表；保存配置后由可信后台携带当前端点的 Key 发起 GET。
 async function fetchAvailableModels() {
+  // 先完成密钥保存/解锁引起的界面刷新，再建立本次请求编号，避免刷新取消新请求。
+  const clickedProvider = state.settings.provider;
+  $('#btnFetchModels').disabled = true;
+  try { await flushCredentials(); }
+  catch (error) { $('#btnFetchModels').disabled = false; $('#modelsStatus').textContent = '获取失败：' + error.message; return; }
+  if (clickedProvider !== state.settings.provider) { $('#btnFetchModels').disabled = false; return; }
   resetModelCatalog();
   const requestId = modelsRequestId;
   const providerId = state.settings.provider;
@@ -159,7 +165,6 @@ async function fetchAvailableModels() {
   $('#btnFetchModels').textContent = '获取中…';
   status.textContent = '正在从当前服务商获取模型列表…';
   try {
-    await flushCredentials();
     if (requestId !== modelsRequestId) return;
     const response = await sendMessage('wsa:listModels', { providerId });
     if (requestId !== modelsRequestId || providerId !== state.settings.provider) return;

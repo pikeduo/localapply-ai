@@ -87,6 +87,7 @@ async function rpc(page, type, payload = {}) {
 
 // 通过真实控件建立保险库，测试口令及 Key 全为合成数据。
 async function setupVault(page) {
+  await page.locator('#keyProtection').evaluate((details) => { details.open = true; });
   await page.locator('#vaultPassword').fill('synthetic-password');
   await page.locator('#vaultConfirm').fill('synthetic-password');
   await page.locator('#vaultSetup').click();
@@ -120,7 +121,6 @@ for (const withExtension of [true, false]) {
     const prepare = async (name, buffer) => {
       const count = api.calls.length;
       await page.locator('#pdfFile').setInputFiles({ name, mimeType: name.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer });
-      await page.locator('#btnExtract').click();
       await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
       assert.equal(await page.locator('#sendResume').isVisible(), true, await page.locator('#pdfStatus').textContent());
       assert.equal(api.calls.length, count);
@@ -148,12 +148,24 @@ for (const withExtension of [true, false]) {
         : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
       page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url);
       await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      await t.test('首次可直接填写并保存 Key，无需设置或展开安全口令', async () => {
+        assert.equal(await page.locator('#apiKey').isEditable(), true);
+        assert.equal(await page.locator('#keyProtection').evaluate((details) => details.open), false);
+        await page.locator('#provider').fill(api.base); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+        await page.locator('#apiKey').fill('synthetic-default-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
+        const state = (await call('wsa:getState')).state; assert.equal(state.settings.vault.enabled, false);
+        assert.equal(state.settings.keyStatus[state.settings.provider], true); assert.deepEqual(state.settings.apiKeys, {});
+        await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取'));
+        assert.equal(api.modelRequests.at(-1).authorization, 'Bearer synthetic-default-key');
+      });
       await setupVault(page);
       // PDF 图像解码使用随包 WASM；仅允许本地 WebAssembly，不开放 JavaScript eval。
       assert.equal(await page.evaluate(async () => (await WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]))) instanceof WebAssembly.Module), true);
       await page.locator('#provider').fill(api.base); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
       await page.locator('#apiKey').fill('synthetic-stage2-key'); await page.locator('#apiKey').press('Tab'); await page.evaluate(() => flushCredentials());
       await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-local'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+      // 点击检测时由失焦触发 Key 保存，检测必须等待保存刷新后继续执行。
+      await page.locator('#apiKey').fill('synthetic-stage2-key');
       await detectModel(page);
       await t.test('锁定只阻止密钥调用，错误口令不清除数据，正确口令可恢复调用', async () => {
         await page.locator('#vaultLock').click(); await page.waitForFunction(async () => !(await getState()).settings.vault.unlocked);
@@ -161,9 +173,40 @@ for (const withExtension of [true, false]) {
         await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('锁定'));
         await page.locator('#vaultPassword').fill('wrong-password'); await page.locator('#vaultUnlock').click();
         await page.waitForFunction(() => document.getElementById('vaultStatus').textContent.includes('口令错误'));
+        // 忘记旧口令时也能重新输入 Key；旧密文保持可恢复，其他资料不受影响。
+        assert.equal(await page.locator('#apiKey').isEditable(), true);
+        await page.locator('#apiKey').fill('synthetic-stage2-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
+        await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取'));
+        assert.equal(api.modelRequests.at(-1).authorization, 'Bearer synthetic-stage2-key');
         await page.locator('#vaultPassword').fill('synthetic-password'); await page.locator('#vaultUnlock').click();
         await page.waitForFunction(async () => (await getState()).settings.vault.unlocked);
         assert.deepEqual((await call('wsa:getState')).state.settings.apiKeys, {});
+      });
+      await t.test('拖入 PDF/DOCX 自动展开页面预览，取消/错误文件不调用模型', async () => {
+        const count = api.calls.length; const before = (await call('localapply:read')).database;
+        for (const [name, buffer] of [['drag-resume.pdf', fixtures.pdf()], ['drag-resume.docx', fixtures.docx()]]) {
+          await page.evaluate(({ name, bytes }) => {
+            const transfer = new DataTransfer(); transfer.items.add(new File([Uint8Array.from(bytes)], name));
+            const zone = document.getElementById('resumeDropZone');
+            zone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+            zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+          }, { name, bytes: [...buffer] });
+          await page.locator('#sourcePreview img').first().waitFor({ state: 'visible' });
+          await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
+          assert.equal(await page.locator('#resumePreview').evaluate((details) => details.open), true);
+          assert.match(await page.locator('#resumeFileInfo').textContent(), new RegExp(name.replace('.', '\\.')));
+          assert.equal(await page.locator('#resumeDropZone').evaluate((zone) => zone.classList.contains('drag-active')), false);
+          assert.equal(api.calls.length, count);
+        }
+        await page.locator('#pdfCard').screenshot({ path: path.join(testRoot, `drag-preview-${withExtension ? 'extension' : 'file'}.png`) });
+        await page.locator('#cancelResume').click(); assert.equal(await page.locator('#sourcePreview img').count(), 0);
+        await page.evaluate(() => {
+          const transfer = new DataTransfer();
+          transfer.items.add(new File(['x'], 'one.pdf')); transfer.items.add(new File(['y'], 'two.docx'));
+          document.getElementById('resumeDropZone').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        });
+        assert.match(await page.locator('#pdfStatus').textContent(), /每次/);
+        assert.deepEqual((await call('localapply:read')).database, before); assert.equal(api.calls.length, count);
       });
       const primary = (await call('wsa:getState')).state.activeProfileId;
       api.modelApi.chatContent = JSON.stringify(fixtures.parsed());
@@ -199,7 +242,7 @@ for (const withExtension of [true, false]) {
       await t.test('畸形文档、无效 AI 和取消进行中的请求均不写入资料', async () => {
         const before = (await call('localapply:read')).database;
         await page.locator('#pdfFile').setInputFiles({ name: 'bad.docx', mimeType: 'application/octet-stream', buffer: Buffer.from('not a zip') });
-        await page.locator('#btnExtract').click(); await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('读取失败'));
+        await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('读取失败'));
         await prepare('resume.docx', fixtures.docx()); api.modelApi.chatContent = '{"education":"wrong-type"}';
         await page.locator('#sendResume').click(); await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('解析失败'));
         api.modelApi.chatHold = true; const received = new Promise((resolve) => { api.modelApi.onChat = resolve; });
@@ -240,6 +283,7 @@ for (const withExtension of [true, false]) {
         const route = (await call('wsa:resumeRoute', { format: 'pdf' })).route; const count = api.calls.length;
         const oldPath = await page.evaluate(async (route) => sendMessage('wsa:aiExtractResume', { payload: { requestId: crypto.randomUUID(), type: 'pdf', mode: route.mode, routeToken: route.token, text: '不能通过文字入口解析简历' } }), route);
         assert.equal(oldPath.ok, false); assert.equal(api.calls.length, count);
+        await page.locator('#manualModel').check();
         await page.locator('#model').fill('unprobed-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
         await prepare('blocked.pdf', fixtures.pdf()); await page.locator('#sendResume').click();
         await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('尚未通过'));
@@ -262,11 +306,23 @@ for (const withExtension of [true, false]) {
       await t.test('整个浏览器重启后资料不变、保险库锁定且可再次解锁', async () => {
         assert.deepEqual((await call('localapply:read')).database, before);
         const s = (await call('wsa:getState')).state.settings; assert.equal(s.vault.unlocked, false); assert.equal(s.keyStatus[s.provider], true);
+        await page.locator('#keyProtection').evaluate((details) => { details.open = true; });
         await page.locator('#vaultPassword').fill('synthetic-password'); await page.locator('#vaultUnlock').click();
         await page.waitForFunction(async () => (await getState()).settings.vault.unlocked);
         await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取'));
         assert.equal(api.modelRequests.at(-1).authorization, 'Bearer synthetic-stage2-key');
         assert.deepEqual(errors, []);
+      });
+      await t.test('取消可选口令后，整个浏览器重启可直接调用已保存的 Key', async () => {
+        await page.locator('#vaultDisable').click(); await page.evaluate(() => flushCredentials());
+        assert.equal((await call('wsa:getState')).state.settings.vault.enabled, false);
+        await context.close(); context = await launch(profile, withExtension);
+        page = await context.newPage(); await page.goto(url); await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+        assert.equal(await page.locator('#apiKey').isEditable(), true);
+        assert.equal((await call('wsa:getState')).state.settings.vault.enabled, false);
+        await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取'));
+        assert.equal(api.modelRequests.at(-1).authorization, 'Bearer synthetic-stage2-key');
+        assert.deepEqual((await call('localapply:read')).database, before);
       });
     } finally {
       if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve));
@@ -529,7 +585,6 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       await detectModel(page);
       modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成文件姓名', evidence: '合成文件姓名', page: 1 } } });
       await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
-      await page.locator('#btnExtract').click();
       await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
       assert.ok(!await page.locator('#sendResume').isHidden(), await page.locator('#pdfStatus').textContent());
       await page.locator('#sendResume').waitFor({ state: 'visible' }); await page.locator('#sendResume').click();

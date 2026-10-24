@@ -26,6 +26,17 @@
         <label class="lbl">接口地址</label>
         <input type="text" id="customBase" placeholder="https://xx.com/v1（OpenAI 兼容，不含 /chat/completions）" />
       </div>
+
+      <div class="row">
+        <label class="lbl" for="apiKey">API Key</label>
+        <input type="password" id="apiKey" placeholder="在这里粘贴服务商提供的 API Key，无需安全口令" autocomplete="off" />
+        <button id="saveKey" class="btn">保存 Key</button>
+        <button id="btnRevealKey" class="btn ghost">显示</button>
+        <button id="deleteKey" class="btn ghost">删除当前 Key</button>
+      </div>
+      <p id="keySavedStatus" class="muted" role="status"></p>
+      <details id="keyProtection">
+        <summary>口令保护（可选，不影响直接填写 API Key）</summary>
       <div class="row">
         <label class="lbl" for="vaultPassword">安全口令</label>
         <input type="password" id="vaultPassword" autocomplete="off" placeholder="至少 8 位，口令不保存" />
@@ -33,15 +44,11 @@
         <button id="vaultSetup" class="btn plain">设置口令并加密</button>
         <button id="vaultUnlock" class="btn plain" hidden>解锁密钥</button>
         <button id="vaultLock" class="btn ghost" hidden>锁定</button>
+        <button id="vaultDisable" class="btn ghost" hidden>取消口令保护</button>
       </div>
       <p id="vaultStatus" class="muted" role="status"></p>
-      <p class="muted">API Key 使用口令派生密钥加密，仅在本地解锁。请自行保管口令：无法找回；备份不包含 Key、口令或保险库。个人简历资料本身仍按本地数据库保存。</p>
-      <div class="row">
-        <label class="lbl">API Key</label>
-        <input type="password" id="apiKey" placeholder="在所选服务商官网创建" autocomplete="off" />
-        <button id="btnRevealKey" class="btn ghost">显示</button>
-        <button id="deleteKey" class="btn ghost">删除当前 Key</button>
-      </div>
+      <p class="muted">安全口令是你自行设置的本地保护密码，不是服务商的 API Key。可不设置；已启用时，使用原口令可取消保护。默认本机保存模式不提供独立口令保护。资料备份均不包含 Key。</p>
+      </details>
       <div class="row">
         <span class="lbl"></span>
         <button id="btnFetchModels" class="btn plain">获取可用模型</button>
@@ -88,15 +95,21 @@
 
     <section class="card" id="pdfCard">
       <h2>导入简历 <span class="badge">PDF / DOCX</span></h2>
+      <div id="resumeDropZone" class="resume-drop-zone" tabindex="0" role="button" aria-label="拖入或选择 PDF、DOCX 简历">
+        <strong>将 PDF / DOCX 简历拖到这里</strong>
+        <span>或点击选择文件，自动生成预览 · 单份文件不超过 10 MiB</span>
+        <span class="btn plain">选择简历文件</span>
+      </div>
+      <p id="resumeFileInfo" class="muted" role="status">尚未选择文件</p>
       <div class="row">
-        <input type="file" id="pdfFile" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
-        <button id="btnExtract" class="btn plain">本地读取与预览</button>
+        <input type="file" id="pdfFile" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden />
+        <button id="btnExtract" class="btn plain">重新生成预览</button>
         <button id="btnDetectImport" class="btn plain">先检测模型能力</button>
         <button id="sendResume" class="btn" hidden>发送内容给当前模型解析</button>
         <button id="cancelResume" class="btn ghost">取消并清理草稿</button>
       </div>
-      <div id="pdfStatus" class="muted" style="margin-top:8px"></div>
-      <details><summary>查看完整页面图片（仅本次内存，含文档内嵌图片）</summary><div id="sourcePreview"></div></details>
+      <div id="pdfStatus" class="muted" style="margin-top:8px" role="status"></div>
+      <details id="resumePreview"><summary>简历预览（完整页面，含文档内嵌图片）</summary><div id="sourcePreview"></div></details>
       <div id="pdfReview"></div>
       <div class="row" id="importRow" style="display:none">
         <label class="lbl">导入到档案</label>
