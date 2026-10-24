@@ -53,5 +53,14 @@
     })?.providerId || null;
   }
 
-  global.LocalApplyProviders = { normalizeBase, entries, resolve, find };
+  // 标准 /models 响应只读取 ID，忽略不可信的其他元数据，不推断模型能力。
+  function parseModels(data) {
+    if (!data || !Array.isArray(data.data) || data.data.length > 10000) throw new Error('模型列表格式异常，需要 OpenAI 兼容的 data 数组，可改为手动填写模型 ID。');
+    const models = [...new Set(data.data.map((item) => typeof item?.id === 'string' ? item.id.trim() : '')
+      .filter((model) => model.length > 0 && model.length <= 2000 && !/[\u0000-\u001f\u007f]/.test(model)))].sort();
+    if (data.data.length && !models.length) throw new Error('接口没有返回有效模型 ID，可改为手动填写。');
+    return models;
+  }
+
+  global.LocalApplyProviders = { normalizeBase, entries, resolve, find, parseModels };
 })(globalThis);

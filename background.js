@@ -41,7 +41,8 @@ async function resolveVisionModel() {
   const state = await getState();
   const settings = state.settings || {};
   const provider = getProvider(settings);
-  const vm = settings.visionModel || settings.model || (provider.models[0] || '');
+  const vm = settings.visionModel || settings.model || '';
+  if (!vm) throw aiError('请先在设置页获取模型列表并选择模型，或手动填写模型 ID。');
   const ok =
     provider.custom ||
     provider.visionDefault ||
@@ -74,8 +75,8 @@ async function callGLM(req) {
   if (!key && provider.requiresKey) {
     throw aiError(`尚未配置 ${provider.name} 的 API Key。不配置 AI 也完全可以使用：在字段库手动录入后一键填充不受影响；如需 PDF 提取/开放题起草，请到设置页填写。`);
   }
-  const model = req.model || settings.model || (provider.models[0] || '');
-  if (!model) throw aiError('请到设置页填写模型 ID。');
+  const model = req.model || settings.model || '';
+  if (!model) throw aiError('请先获取模型列表并选择模型，或手动填写模型 ID。');
   const baseUrl = (provider.baseUrl || '').replace(/\/+$/, '');
   if (!baseUrl) throw aiError('自定义服务商缺少接口地址，请到设置页填写（OpenAI 兼容地址，如 https://xx.com/v1）。');
   const timeoutMs = req.timeoutMs || DEFAULT_TIMEOUT_MS;
@@ -124,6 +125,42 @@ async function callGLM(req) {
     throw aiError('AI 返回格式异常，未找到回复内容。原始返回：' + JSON.stringify(data).slice(0, 300));
   }
   return { content, usage: data.usage || null, model };
+}
+
+// 只向当前服务商获取模型 ID；不发送简历/聊天内容，不跟随携带凭据的重定向。
+async function listAvailableModels(expectedProviderId) {
+  const state = await getState();
+  const settings = state.settings;
+  const provider = getProvider(settings);
+  if (expectedProviderId && provider.providerId !== expectedProviderId) throw aiError('服务商已切换，请重新获取模型列表。');
+  const key = settings.apiKeys?.[provider.providerId] || '';
+  if (!key && provider.requiresKey) throw aiError('请先填写当前服务商的 API Key，再获取模型列表。');
+  const baseUrl = (provider.baseUrl || '').replace(/\/+$/, '');
+  if (!baseUrl) throw aiError('请先填写服务商接口地址。');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  try {
+    const response = await fetch(baseUrl + '/models', { method: 'GET',
+      headers: { Accept: 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}) },
+      redirect: 'error', signal: controller.signal });
+    if (!response.ok) {
+      if ([401, 403].includes(response.status)) throw aiError('无法获取模型列表（' + response.status + '），请检查 API Key 和模型列表访问权限。');
+      if ([404, 405].includes(response.status)) throw aiError('此服务未提供兼容的模型列表接口，可勾选「手动填写模型 ID」。');
+      if (response.status === 429) throw aiError('获取模型列表受频率或额度限制（429），请稍后重试。');
+      throw aiError('获取模型列表失败（HTTP ' + response.status + '），可稍后重试或手动填写。');
+    }
+    let data;
+    try { data = await response.json(); }
+    catch (error) {
+      if (error.name === 'AbortError') throw error;
+      throw aiError('模型列表不是有效 JSON，可重试或手动填写模型 ID。');
+    }
+    return { providerId: provider.providerId, baseUrl, models: LocalApplyProviders.parseModels(data) };
+  } catch (error) {
+    if (error.name === 'AbortError') throw aiError('获取模型列表超时，请检查服务地址或稍后重试。');
+    if (error instanceof TypeError) throw aiError('无法连接模型列表接口，请检查地址、网络及站点访问权限。');
+    throw error;
+  } finally { clearTimeout(timer); }
 }
 
 // 从模型回复里稳健地抠出 JSON（容忍 ```json 围栏与前后杂文字）
@@ -232,6 +269,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'wsa:aiChat': {
           const out = await callGLM(msg.payload || {});
           sendResponse({ ok: true, ...out });
+          return;
+        }
+        case 'wsa:listModels': {
+          sendResponse({ ok: true, ...await listAvailableModels(msg.providerId) });
           return;
         }
         case 'wsa:aiExtractResume': {

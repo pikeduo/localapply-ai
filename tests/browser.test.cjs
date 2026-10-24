@@ -11,8 +11,17 @@ const ROOT = path.resolve(__dirname, '..');
 // 本地夹具服务仅绑定 loopback，并限制路径属于 test-pages。
 async function serve() {
   const calls = [];
+  const modelRequests = [];
+  const modelApi = { status: 200, data: { data: [{ id: 'synthetic-local' }, { id: 'synthetic-other' }, { id: 'synthetic-local' }] }, hold: false };
   const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
+    if (pathname === '/v1/models' && req.method === 'GET') {
+      modelRequests.push({ authorization: req.headers.authorization, method: req.method });
+      // 保留一次请求用于验证切换服务商后迟到响应不会污染新列表。
+      const respond = () => { if (res.writableEnded) return; res.writeHead(modelApi.status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(modelApi.data)); };
+      if (modelApi.hold) { modelApi.release = respond; modelApi.onRequest(); } else respond();
+      return;
+    }
     if (pathname === '/v1/chat/completions' && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk;
       calls.push({ authorization: req.headers.authorization, model: JSON.parse(body).model });
@@ -23,7 +32,7 @@ async function serve() {
     catch { res.writeHead(404); res.end(); }
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  return { server, calls, base: 'http://127.0.0.1:' + server.address().port };
+  return { server, calls, modelApi, modelRequests, base: 'http://127.0.0.1:' + server.address().port };
 }
 
 // 允许使用用户指定的现有 Chromium；默认采用 Playwright 配套浏览器，不自动下载。
@@ -65,7 +74,7 @@ async function detect(sidebar, page) {
 test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启持久性', async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
   const profile = await fs.mkdtemp(path.join(testRoot, 'profile-'));
-  const { server, base, calls } = await serve();
+  const { server, base, calls, modelApi, modelRequests } = await serve();
   let context;
   const pageErrors = [];
   try {
@@ -129,6 +138,7 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       };
       await choose('deepseek'); assert.equal(await options.locator('#provider').inputValue(), 'DeepSeek');
       await options.locator('#apiKey').fill('fake-deepseek-ui-key'); await options.locator('#apiKey').press('Tab');
+      await options.locator('#manualModel').check();
       await options.locator('#model').fill('synthetic-deepseek'); await options.locator('#model').press('Tab');
       await choose('qwen'); assert.equal(await options.locator('#apiKey').inputValue(), '');
       await choose('deepseek'); assert.equal(await options.locator('#model').inputValue(), 'synthetic-deepseek');
@@ -147,6 +157,42 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       const after = await rpc(options, 'wsa:getState'); assert.equal(after.state.settings.provider, customId);
       assert.equal(Object.keys(after.state.settings.customProviders).length, 2);
       await choose('zhipu');
+    });
+    await t.test('先获取模型列表再选择，选择持久化且成功调用；失败可手填，旧响应不污染新服务商', async () => {
+      // 模拟用户进入已保存的本地端点，初次选择必须来自实际 GET /models 响应。
+      const choose = async (text) => {
+        await options.locator('#provider').fill(text); await options.locator('#provider').press('Enter'); await options.evaluate(() => flushSaves());
+      };
+      await choose(base); await options.locator('#manualModel').check();
+      await options.locator('#model').fill(''); await options.locator('#model').press('Tab');
+      await options.locator('#manualModel').uncheck();
+      await options.locator('#btnFetchModels').click();
+      await options.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取 2 个模型'));
+      assert.equal(modelRequests.at(-1).method, 'GET'); assert.equal(modelRequests.at(-1).authorization, undefined);
+      assert.equal(await options.locator('#modelSelect').inputValue(), '');
+      assert.equal((await rpc(options, 'wsa:getState')).state.settings.model, '');
+      await options.locator('#modelSelect').selectOption('synthetic-other');
+      await options.locator('#btnTestKey').click();
+      await options.waitForFunction(() => document.getElementById('testResult').textContent.includes('连接正常'));
+      assert.equal(calls.at(-1).model, 'synthetic-other');
+      await options.reload(); await options.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      assert.equal(await options.locator('#modelSelect').inputValue(), 'synthetic-other');
+      assert.equal(await options.locator('#modelSelect').isDisabled(), true);
+      modelApi.status = 401;
+      await options.locator('#btnFetchModels').click();
+      await options.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('401'));
+      assert.equal(await options.locator('#manualModel').isChecked(), true);
+      assert.equal((await rpc(options, 'wsa:getState')).state.settings.model, 'synthetic-other');
+      modelApi.status = 200; modelApi.data = { data: [] };
+      await options.locator('#btnFetchModels').click();
+      await options.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('空模型列表'));
+      modelApi.data = { data: [{ id: 'late-local-model' }] }; modelApi.hold = true;
+      const received = new Promise((resolve) => { modelApi.onRequest = resolve; });
+      const fetching = options.evaluate(() => fetchAvailableModels());
+      await received; await choose('qwen'); modelApi.release(); await fetching;
+      assert.equal(await options.locator('#modelSelect option[value="late-local-model"]').count(), 0);
+      assert.equal((await rpc(options, 'wsa:getState')).state.settings.provider, 'qwen');
+      modelApi.hold = false; await choose('zhipu');
     });
     const page = await context.newPage();
     await t.test('generic 识别和填充正确；内容脚本无法读取资料和 API', async () => {
@@ -219,6 +265,7 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       await preview.close();
     });
   } finally {
+    if (modelApi.release) modelApi.release(); // 失败路径也释放挂起的本地响应，避免清理阶段卡住。
     if (context) await context.close();
     await new Promise((resolve) => server.close(resolve));
     // 删除前验证路径始终属于本次创建的独立测试根，绝不按端口强杀进程。

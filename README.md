@@ -32,9 +32,11 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript、零构�
 
 设置页请从插件的「设置」或扩展管理页的「扩展选项」打开；直接双击 `options/options.html` 或用本地 HTTP 服务预览，无法访问扩展后台和本地资料。重新加载插件后，原来打开的设置页应关闭再重新进入。
 
-AI 服务商可以从输入框的建议列表选择，也可以输入 `192.168.1.10:8000` 后按回车或移开焦点，自动保存为 `http://192.168.1.10:8000/v1`。域名默认使用 HTTPS；完整地址保留自定义路径，粘贴 `/chat/completions` 地址时自动提取 Base URL。相同地址不重复创建，新地址不继承其他服务商的 Key 或模型。填写该服务的模型 ID 后点“测试连接”；本地服务无认证要求时 Key 可留空。只保存配置不会自动连接或下载模型。
+AI 服务商可以从输入框的建议列表选择，也可以输入 `192.168.1.10:8000` 后按回车或移开焦点，自动保存为 `http://192.168.1.10:8000/v1`。域名默认使用 HTTPS；完整地址保留自定义路径，粘贴 `/chat/completions` 地址时自动提取 Base URL。相同地址不重复创建，新地址不继承其他服务商的 Key 或模型。
 
-服务端需支持 OpenAI Chat Completions 兼容协议。接口参考：[DeepSeek](https://api-docs.deepseek.com/)、[Qwen/阿里云百炼](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)、[Ollama 本地接口](https://docs.ollama.com/api/openai-compatibility)。
+配置顺序：选择服务商 → 填写所需 API Key → 点击“获取可用模型” → 从主模型下拉列表选择 → “测试连接”。本地服务无认证要求时 Key 可留空。模型列表通过当前 Base URL 的 `GET /models` 获取，只发送所需认证，不发送简历内容；不会自动选中第一个模型。列表只在当前页面使用，选中的模型按服务商保存在本地；切换服务商或修改 Key 后需重新获取。未开放列表接口、获取失败或列表为空时，可勾选“手动填写模型 ID”。视觉模型也可从获取后的输入建议中选择，但是否支持图片须按服务商说明确认。只保存配置不会自动联网或下载模型。
+
+服务端需支持 OpenAI Chat Completions 兼容协议。接口参考：[DeepSeek](https://api-docs.deepseek.com/)、[DeepSeek 模型列表](https://api-docs.deepseek.com/api/list-models/)、[Qwen/阿里云百炼](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope)、[Ollama 本地接口](https://docs.ollama.com/api/openai-compatibility)。
 
 ## 快速上手
 

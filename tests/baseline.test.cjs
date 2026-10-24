@@ -130,6 +130,73 @@ test('后台只向所选自定义端点发送其 Key，无 Key 本地服务不�
   assert.ok(!Object.hasOwn(calls[1].request.headers, 'Authorization'));
 });
 
+// 使用独立合成端点测试模型发现，所有网络响应都由内存桩提供。
+function modelListingFixture(provider = 'custom.models') {
+  const initial = sandbox().context.WangshenTemplates.defaultState();
+  initial.settings = { ...initial.settings, provider, apiKeys: { [provider]: 'fake-models-key', unrelated: 'fake-other-key' },
+    customProviders: { 'custom.models': { name: '合成模型服务', baseUrl: 'http://127.0.0.1:9000/v1' } } };
+  return sandbox('background.js', { wangshenAutofill: initial });
+}
+
+test('模型列表解析去重排序，仅接受有效 ID，空列表与异常格式区分', () => {
+  const { context } = sandbox(); vm.runInContext(source('data/providers.js'), context);
+  const parse = context.LocalApplyProviders.parseModels;
+  assert.deepEqual(Array.from(parse({ data: [{ id: 'z' }, { id: ' a ' }, { id: 'z' }, { id: 5 }, null] })), ['a', 'z']);
+  assert.equal(parse({ data: [] }).length, 0);
+  for (const input of [null, { models: [] }, { data: [{ id: '\n' }] }, { data: [{ id: 'x'.repeat(2001) }] }]) assert.throws(() => parse(input));
+});
+
+test('模型发现使用 GET 和当前 Key，不携带个人资料，并校验预期服务商', async () => {
+  const { context } = modelListingFixture(); const calls = [];
+  context.fetch = async (url, request) => { calls.push({ url, request }); return { ok: true, json: async () => ({ data: [{ id: 'synthetic-chat' }] }) }; };
+  const response = await context.listAvailableModels('custom.models');
+  assert.equal(calls[0].url, 'http://127.0.0.1:9000/v1/models');
+  assert.equal(calls[0].request.method, 'GET'); assert.equal(calls[0].request.headers.Authorization, 'Bearer fake-models-key');
+  assert.equal(calls[0].request.body, undefined); assert.equal(calls[0].request.redirect, 'error');
+  assert.equal(response.models[0], 'synthetic-chat'); assert.ok(!JSON.stringify(response).includes('fake-models-key'));
+  await assert.rejects(context.listAvailableModels('deepseek'), /已切换/); assert.equal(calls.length, 1);
+});
+
+test('模型发现兼容无 Key 本地服务；云服务缺 Key 在联网前失败', async () => {
+  const local = modelListingFixture(); await local.context.getState();
+  delete local.storage['localapply.apiSettings'].apiKeys['custom.models'];
+  local.context.fetch = async (url, request) => {
+    assert.ok(!Object.hasOwn(request.headers, 'Authorization'));
+    return { ok: true, json: async () => ({ data: [] }) };
+  };
+  assert.equal((await local.context.listAvailableModels('custom.models')).models.length, 0);
+  const cloud = modelListingFixture('deepseek'); await cloud.context.getState();
+  delete cloud.storage['localapply.apiSettings'].apiKeys.deepseek;
+  await assert.rejects(cloud.context.listAvailableModels('deepseek'), /先填写/);
+});
+
+test('模型发现处理认证、无接口、限流及服务器错误，不返回原始错误体', async () => {
+  const { context } = modelListingFixture();
+  for (const [status, message] of [[401, /401/], [403, /403/], [404, /手动/], [405, /手动/], [429, /429/], [500, /500/]]) {
+    context.fetch = async () => ({ ok: false, status, json: async () => { throw new Error('禁止读取错误响应秘密'); } });
+    await assert.rejects(context.listAvailableModels('custom.models'), message);
+  }
+});
+
+test('模型发现区分坏 JSON、网络失败和超时，超时覆盖响应体解析', async () => {
+  const { context } = modelListingFixture();
+  context.fetch = async () => ({ ok: true, json: async () => { throw new SyntaxError('private response'); } });
+  await assert.rejects(context.listAvailableModels('custom.models'), /有效 JSON/);
+  context.fetch = async () => { vm.runInContext('throw new TypeError("failed to fetch")', context); };
+  await assert.rejects(context.listAvailableModels('custom.models'), /无法连接/);
+  context.fetch = async () => ({ ok: true, json: async () => { const error = new Error('abort'); error.name = 'AbortError'; throw error; } });
+  await assert.rejects(context.listAvailableModels('custom.models'), /超时/);
+  let cleared = false;
+  context.setTimeout = () => 1; context.clearTimeout = () => { cleared = true; };
+  context.fetch = async () => ({ ok: true, json: async () => { assert.equal(cleared, false); return { data: [] }; } });
+  await context.listAvailableModels('custom.models'); assert.equal(cleared, true);
+});
+
+test('未选主模型时不使用预设的第一个模型偷偷发起调用', async () => {
+  const { context } = modelListingFixture('deepseek');
+  await assert.rejects(context.callGLM({ messages: [] }), /先获取模型列表/);
+});
+
 test('默认档案包含 51 个唯一字段及隐私默认值', () => {
   const state = sandbox().context.WangshenTemplates.defaultState();
   assert.equal(state.schemaVersion, 1);
@@ -215,7 +282,7 @@ test('消息层 ping 和无 Key 错误可异步返回', async () => {
 test('内容脚本不能读取个人库、导出、命令写入或代理 AI', async () => {
   const { listeners } = sandbox('background.js');
   const sender = { id: 'test-extension', url: 'https://recruit.example.test/apply', tab: { id: 1 } };
-  for (const type of ['wsa:getState', 'localapply:read', 'localapply:command', 'localapply:exportBackup', 'localapply:exportPublicFields', 'wsa:aiChat']) {
+  for (const type of ['wsa:getState', 'localapply:read', 'localapply:command', 'localapply:exportBackup', 'localapply:exportPublicFields', 'wsa:aiChat', 'wsa:listModels']) {
     const response = await new Promise((resolve) => listeners[0]({ type }, sender, resolve));
     assert.equal(response.ok, false, type);
     assert.match(response.error, /仅允许/);

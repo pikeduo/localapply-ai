@@ -30,8 +30,15 @@
         <button id="btnRevealKey" class="btn ghost">显示</button>
       </div>
       <div class="row">
-        <label class="lbl">主模型</label>
-        <input type="text" id="model" list="modelList" />
+        <span class="lbl"></span>
+        <button id="btnFetchModels" class="btn plain">获取可用模型</button>
+        <span id="modelsStatus" class="muted" role="status">填写接口和所需 Key 后，先获取模型列表，再选择主模型。</span>
+      </div>
+      <div class="row">
+        <label class="lbl" for="modelSelect">主模型</label>
+        <select id="modelSelect" disabled><option value="">请先获取模型列表</option></select>
+        <label class="manual-model"><input type="checkbox" id="manualModel" /> 手动填写模型 ID</label>
+        <input type="text" id="model" list="modelList" aria-label="手动模型 ID" hidden />
         <datalist id="modelList"></datalist>
         <button id="btnTestKey" class="btn plain">测试连接</button>
         <span id="testResult" class="muted"></span>
@@ -41,6 +48,7 @@
         <input type="text" id="visionModel" list="visionList" />
         <datalist id="visionList"></datalist>
       </div>
+      <p class="muted">模型列表来自当前服务商；获取失败或接口未开放时可手动填写。列表本身不一定说明聊天或图片能力，视觉模型请按服务商说明选择。</p>
       <p class="muted" id="providerNote"></p>
       <p class="muted">主模型处理普通 PDF（pdf.js 本地抽出文字，纯文本模型即可）和开放题起草；<b>视觉模型只在扫描件 PDF 时用到</b>，留空 = 用主模型。纯文本模型读不了扫描件是物理限制（页面本质是照片），不是插件限制。</p>
     </section>

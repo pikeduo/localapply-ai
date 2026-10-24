@@ -8,6 +8,7 @@
 - `data/local-store.js` 为规范数据入口，`background.js` 持有唯一 repository 实例。页面禁止绕开后台直接写数据库；内容脚本只能请求阈值/开关等安全投影。
 - `localapply.database` 是 Schema v2 个人库；`localapply.apiSettings` 是独立 API 设置。`wangshenAutofill` 仅为只读迁移源，不得清理。`localapply.recovery` 保留最近一次导入前的个人库，不含 API 设置。
 - API 设置中的 customProviders 保存按地址建立的服务商，providerModels 按服务商保存模型；data/providers.js 统一解析和规范化地址。新增端点不得继承上一家的 Key/模型，默认备份也不得夹带这些 API 配置。
+- 模型列表只在设置页主动获取，wsa:listModels 仅接受可信扩展页面调用。列表不持久化，切换服务商/Key 后使旧响应失效；没有明确选择时不可回退预设第一个模型发请求。
 - 公共 FieldDefinition 只允许 fieldId/label/type/group/aliases/options/description/version。个人值位于 fieldValues，重复经历由 entries.entryId 关联。
 - 私有字段元数据默认不进入公共导出；publishDefinition 必须接收独立审核后的定义，不能自动复制经历标题。禁止新增 GitHub 上传功能，除非后续用户明确授权。
 - 现有 UI 通过 readLegacy/saveLegacy 兼容投影接入；三方合并只改用户编辑的路径，同字段冲突拒绝。不要重新引入整份旧状态直接覆盖存储。

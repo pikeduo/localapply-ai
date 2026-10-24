@@ -5,6 +5,8 @@ let state = null;
 let pdfInfo = null; // {text, numPages, pages, mode}
 let extracted = null; // AI 提取结果（待校对）
 let reviewItems = []; // {section,label,value,checked,multi,map}
+let availableModels = null; // 当前页面、当前服务商获取的模型 ID，不跨服务商缓存。
+let modelsRequestId = 0; // 使切换服务商/Key 后迟到的响应失效。
 
 const $ = (s) => document.querySelector(s);
 
@@ -28,11 +30,24 @@ async function init() {
   $('#apiKey').addEventListener('change', () => {
     state.settings.apiKeys = state.settings.apiKeys || {};
     state.settings.apiKeys[state.settings.provider] = $('#apiKey').value.trim();
+    resetModelCatalog();
+    save();
+  });
+  $('#btnFetchModels').addEventListener('click', fetchAvailableModels);
+  $('#manualModel').addEventListener('change', () => {
+    $('#model').hidden = !$('#manualModel').checked;
+    $('#modelSelect').disabled = $('#manualModel').checked || !availableModels?.length;
+  });
+  $('#modelSelect').addEventListener('change', () => {
+    state.settings.model = $('#modelSelect').value;
+    $('#model').value = state.settings.model;
+    rememberProviderModels();
     save();
   });
   $('#model').value = state.settings.model || '';
   $('#model').addEventListener('change', () => {
     state.settings.model = $('#model').value.trim();
+    renderModelChoices();
     rememberProviderModels();
     save();
   });
@@ -108,6 +123,75 @@ function refreshProviderUI() {
   $('#customBaseRow').style.display = '';
   $('#customBase').readOnly = !p.custom && providerId !== 'ollama';
   $('#customBase').value = p.baseUrl;
+  resetModelCatalog();
+}
+
+// 服务商或 Key 改变后清空旧列表，已保存的模型保留，但不能冒充实时可用列表。
+function resetModelCatalog() {
+  modelsRequestId++;
+  availableModels = null;
+  renderModelChoices();
+  $('#modelsStatus').textContent = '填写接口和所需 Key 后，先获取模型列表，再选择主模型。';
+  $('#modelsStatus').className = 'muted';
+  $('#btnFetchModels').disabled = false;
+  $('#btnFetchModels').textContent = '获取可用模型';
+  $('#testResult').textContent = '';
+}
+
+// 仅把服务器返回的模型加入选择列表；缺失的旧模型标注清楚，不自动替用户换模型。
+function renderModelChoices() {
+  const current = state.settings.model || '';
+  const select = $('#modelSelect');
+  const options = [new Option(availableModels ? '请选择模型' : '请先获取模型列表', '')];
+  (availableModels || []).forEach((model) => options.push(new Option(model, model)));
+  if (current && !availableModels?.includes(current)) options.push(new Option('已保存：' + current + '（尚未在本次列表确认）', current));
+  select.replaceChildren(...options);
+  select.value = current;
+  select.disabled = $('#manualModel').checked || !availableModels?.length;
+  $('#model').hidden = !$('#manualModel').checked;
+  if (availableModels) {
+    $('#modelList').replaceChildren(...availableModels.map((model) => new Option(model, model)));
+    $('#visionList').replaceChildren(...availableModels.map((model) => new Option(model, model)));
+  }
+}
+
+// 用户主动获取模型列表；保存配置后由可信后台携带当前端点的 Key 发起 GET。
+async function fetchAvailableModels() {
+  resetModelCatalog();
+  const requestId = modelsRequestId;
+  const providerId = state.settings.provider;
+  const status = $('#modelsStatus');
+  $('#btnFetchModels').disabled = true;
+  $('#btnFetchModels').textContent = '获取中…';
+  status.textContent = '正在从当前服务商获取模型列表…';
+  try {
+    await flushSaves();
+    if (requestId !== modelsRequestId) return;
+    const response = await sendMessage('wsa:listModels', { providerId });
+    if (requestId !== modelsRequestId || providerId !== state.settings.provider) return;
+    if (!response.ok) throw new Error(response.error);
+    if (response.providerId !== providerId) throw new Error('服务商已变化，请重新获取模型列表。');
+    availableModels = response.models;
+    if (availableModels.length) $('#manualModel').checked = false;
+    renderModelChoices();
+    const missing = state.settings.model && !availableModels.includes(state.settings.model);
+    status.textContent = availableModels.length
+      ? `已获取 ${availableModels.length} 个模型，请选择主模型。${missing ? '当前保存的模型未出现在列表中，请核对后重新选择。' : ''}`
+      : '服务商返回了空模型列表，可确认模型部署后重试，或手动填写模型 ID。';
+    status.className = availableModels.length ? 'ok' : 'warn';
+    if (!availableModels.length) { $('#manualModel').checked = true; renderModelChoices(); }
+  } catch (error) {
+    if (requestId !== modelsRequestId) return;
+    status.textContent = '获取失败：' + error.message;
+    status.className = 'err';
+    $('#manualModel').checked = true;
+    renderModelChoices();
+  } finally {
+    if (requestId === modelsRequestId) {
+      $('#btnFetchModels').disabled = false;
+      $('#btnFetchModels').textContent = '重新获取模型';
+    }
+  }
 }
 
 // 在切换前保存当前服务商的模型，防止沿用上一家的模型 ID。
@@ -132,12 +216,12 @@ async function applyProviderInput(raw) {
     state.settings.provider = providerId;
     const provider = LocalApplyProviders.resolve(state.settings);
     const models = state.settings.providerModels[providerId];
-    state.settings.model = models ? models.model : provider.models[0] || '';
+    state.settings.model = models ? models.model : '';
     state.settings.visionModel = models ? models.visionModel : '';
     refreshProviderUI();
     if (provider.baseUrl) requestCustomPermission(provider.baseUrl);
     if (await save() === false) { state = await getState(); refreshProviderUI(); return; }
-    if (created) toastMsg('已创建并保存自定义服务商，请填写模型 ID。', 'ok');
+    if (created) toastMsg('已保存自定义服务商，请获取模型列表后选择模型。', 'ok');
   } catch (error) {
     refreshProviderUI();
     $('#providerNote').textContent = error.message;
