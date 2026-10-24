@@ -4,6 +4,7 @@
 let state = null;
 let availableModels = null; // 当前端点近期获取的完整列表；临时标签页缓存不进入数据库或备份。
 let modelsRequestId = 0; // 使切换服务商/Key 后迟到的响应失效。
+let providerPicker = null; // 全量服务商选择器保留输入地址创建入口。
 
 const $ = (s) => document.querySelector(s);
 
@@ -21,11 +22,8 @@ async function init() {
   // —— AI 服务商区（可选功能） ——
   state.settings.customProviders ||= {};
   state.settings.providerModels ||= {};
+  providerPicker = createProviderPicker(applyProviderInput);
   refreshProviderUI();
-  $('#provider').addEventListener('change', () => applyProviderInput($('#provider').value));
-  $('#provider').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') { event.preventDefault(); $('#provider').blur(); }
-  });
   $('#customBase').addEventListener('change', () => applyProviderInput($('#customBase').value));
   initCredentials();
   initCapabilities();
@@ -101,12 +99,12 @@ async function init() {
   renderTargetProfiles();
 }
 
-// 切换时还原对应的 Key/模型；列表同时包含内置预设和已保存的自定义地址。
+// 切换时还原对应 Key/模型，并刷新全量服务商及当前接口的排查地址。
 function refreshProviderUI() {
   const p = LocalApplyProviders.resolve(state.settings);
   const providerId = p.providerId;
-  $('#provider').value = p.name;
-  $('#providerList').replaceChildren(...LocalApplyProviders.entries(state.settings).map((provider) => new Option(provider.name, provider.name)));
+  providerPicker.update(LocalApplyProviders.entries(state.settings), providerId);
+  $('#modelsEndpoint').textContent = p.baseUrl ? p.baseUrl.replace(/\/+$/, '') + '/models' : '请先填写接口地址';
   renderVault();
   $('#apiKey').type = 'password'; $('#btnRevealKey').textContent = '显示';
   const modelInput = $('#model');
@@ -175,7 +173,7 @@ function renderModelChoices() {
   $('#visionModel').hidden = !$('#manualVisionModel').checked;
 }
 
-// 用户主动获取模型列表；保存配置后由可信后台携带当前端点的 Key 发起 GET。
+// 用户主动获取模型列表；失败时展开对应接口的跨域、鉴权和协议排查说明。
 async function fetchAvailableModels() {
   // 先完成密钥保存/解锁引起的界面刷新，再建立本次请求编号，避免刷新取消新请求。
   const clickedProvider = state.settings.provider;
@@ -210,6 +208,7 @@ async function fetchAvailableModels() {
     if (requestId !== modelsRequestId) return;
     status.textContent = '获取失败：' + error.message;
     status.className = 'err';
+    $('#modelApiHelp').open = true;
     $('#manualModel').checked = true;
     renderModelChoices();
   } finally {

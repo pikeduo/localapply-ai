@@ -18,8 +18,11 @@
       <p class="muted" style="margin-top:-4px">不配置 AI 完全不影响使用：直接在侧边栏「字段库」手动录入，核心的一键填充零配置可用。AI 只用来加速两件事：PDF/DOCX 简历解析、开放题起草。</p>
       <div class="row">
         <label class="lbl" for="provider">服务商</label>
-        <input id="provider" type="text" list="providerList" autocomplete="off" placeholder="选择服务商，或输入 IP:端口 / API 地址" />
-        <datalist id="providerList"></datalist>
+        <div id="providerPicker" class="provider-picker">
+          <input id="provider" type="text" role="combobox" aria-autocomplete="none" aria-expanded="false" aria-controls="providerList" autocomplete="off" placeholder="选择服务商，或输入 IP:端口 / API 地址" />
+          <button id="providerToggle" class="provider-toggle" type="button" aria-label="展开全部服务商" aria-controls="providerList" aria-expanded="false" tabindex="-1">▾</button>
+          <div id="providerList" class="provider-list" role="listbox" aria-label="全部服务商" hidden></div>
+        </div>
       </div>
       <p class="muted">支持 DeepSeek、Qwen、Kimi、智谱、OpenAI、硅基流动、OpenRouter 和 Ollama。输入 IP 或接口地址后按回车或移开焦点，自动保存为自定义服务商；仅根地址自动补 /v1。</p>
       <div class="row" id="customBaseRow" style="display:none">
@@ -54,6 +57,14 @@
         <button id="btnFetchModels" class="btn plain">获取可用模型</button>
         <span id="modelsStatus" class="muted" role="status">填写接口和所需 Key 后，先获取模型列表，再选择主模型。</span>
       </div>
+      <details id="modelApiHelp" class="muted">
+        <summary>第三方接口 / sub2api 无法获取模型？</summary>
+        <p>当前模型列表地址：<code id="modelsEndpoint"></code>。请求使用 Bearer Key，返回格式须为 OpenAI 兼容的 data 模型数组。</p>
+        <p>文件页受浏览器 CORS 限制。可从浏览器扩展管理页打开本插件的设置，在该入口重新填写接口和 Key（与文件页独立保存），并允许访问该接口站点。</p>
+        <p>继续使用 file:// 时，请由 sub2api 管理员在现有配置的 cors.allowed_origins 中加入字符串 "null"，保留原有来源并重启服务；前置反代也须放行 OPTIONS、Authorization 和 Content-Type。</p>
+        <p>401/403 请检查 Key、分组及访问权限；404/405 请核对接口前缀或版本。模型列表接口未开放时可手填管理员提供的模型 ID，但手填无法解决网络或跨域问题。</p>
+        <p>本插件调用 /chat/completions；请确认反代版本和 Key 所属分组支持此协议。只有 /responses 或 /messages 的接口尚不能直接使用。</p>
+      </details>
       <div class="row">
         <label class="lbl" for="modelSelect">主模型</label>
         <select id="modelSelect" disabled><option value="">请先获取模型列表</option></select>
@@ -190,6 +201,7 @@
   <script src="document-renderer.js"></script>
   <script src="resume-files.js"></script>
   <script src="resume-ui.js"></script>
+  <script src="provider-picker.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

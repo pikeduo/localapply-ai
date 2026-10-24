@@ -94,6 +94,42 @@ async function setupVault(page) {
   await page.waitForFunction(async () => (await getState()).settings.vault.unlocked);
 }
 
+// 两种入口共用真实服务商交互验收：完整列表、当前项滚动定位、键盘选择和手输撤销。
+async function checkProviderPicker(page) {
+  const input = page.locator('#provider');
+  const name = await input.inputValue();
+  const count = await page.evaluate(() => LocalApplyProviders.entries(state.settings).length);
+  await page.locator('#providerToggle').click();
+  assert.equal(await input.getAttribute('aria-expanded'), 'true');
+  assert.equal(await page.locator('#providerList [role=option]').count(), count);
+  const selected = page.locator('#providerList [aria-selected=true]');
+  assert.equal(await selected.count(), 1);
+  const currentId = await selected.getAttribute('data-provider-id');
+  assert.ok((await selected.textContent()).includes(name));
+  assert.ok((await selected.textContent()).includes('当前'));
+  assert.equal(await selected.evaluate((item) => {
+    const list = item.parentElement;
+    return item.offsetTop >= list.scrollTop && item.offsetTop + item.offsetHeight <= list.scrollTop + list.clientHeight;
+  }), true);
+  const second = await page.locator('#providerList [role=option]').nth(1).getAttribute('data-provider-id');
+  // 文字编辑不缩减候选项，Escape 恢复已保存项；键盘浏览也不立即写配置。
+  await input.fill('尚未提交的服务商');
+  assert.equal(await page.locator('#providerList [role=option]').count(), count);
+  await input.press('Escape'); assert.equal(await input.inputValue(), name);
+  await input.click(); await input.press('Home'); await input.press('ArrowDown'); await input.press('Enter');
+  await page.evaluate(() => flushSaves());
+  assert.equal(await page.evaluate(() => state.settings.provider), second);
+  await input.click();
+  assert.equal(await page.locator('#providerList [role=option]').count(), count);
+  // 鼠标选择自定义项不会触发失焦重复创建，恢复本测试进入时的服务商。
+  await page.locator('#providerList [data-provider-id="' + currentId + '"]').click();
+  await page.evaluate(() => flushSaves());
+  assert.equal(await input.inputValue(), name);
+  await page.locator('#providerToggle').click();
+  await page.screenshot({ path: path.join(ROOT, '.browser-tests', page.url().startsWith('file:') ? 'provider-picker-file.png' : 'provider-picker-extension.png') });
+  await input.press('Escape');
+}
+
 // 测试模型只识别已知合成挑战；文件和图片仍由生产代码真实生成，其他业务调用不伪造。
 async function detectModel(page) {
   await page.evaluate(() => {
@@ -431,6 +467,7 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       await options.reload(); await options.locator('#entryProfile option').first().waitFor({ state: 'attached' });
       const after = await rpc(options, 'wsa:getState'); assert.equal(after.state.settings.provider, customId);
       assert.equal(Object.keys(after.state.settings.customProviders).length, 2);
+      await checkProviderPicker(options);
       await choose('zhipu');
     });
     await t.test('先获取模型列表再选择，选择持久化且成功调用；失败可手填，旧响应不污染新服务商', async () => {
@@ -588,6 +625,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       assert.equal(await page.locator('#standaloneNotice').isVisible(), true);
       assert.equal(await page.locator('#provider').isDisabled(), false);
       await page.locator('#provider').fill(base); await page.locator('#provider').press('Enter');
+      await checkProviderPicker(page);
       await setupVault(page);
       await page.locator('#apiKey').fill('fake-file-only-key'); await page.locator('#apiKey').press('Tab');
       await page.locator('#btnFetchModels').click();
@@ -664,6 +702,8 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       modelApi.allowCors = false;
       await page.locator('#btnFetchModels').click();
       await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('CORS'));
+      assert.equal(await page.locator('#modelApiHelp').evaluate((details) => details.open), true);
+      assert.ok((await page.locator('#modelsEndpoint').textContent()).endsWith('/v1/models'));
       assert.equal(await page.locator('#btnAddEntry').isDisabled(), false);
       assert.equal(await page.locator('#btnBackup').isDisabled(), false);
       modelApi.allowCors = true;

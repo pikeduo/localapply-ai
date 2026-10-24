@@ -90,7 +90,7 @@
     } catch (error) {
       const networkError = /网络请求失败|无法连接模型列表接口|failed to fetch/i.test(error.message || '');
       return { ok: false, error: networkError
-        ? '无法连接接口。文件页请求受 CORS 限制，请检查地址、服务是否可达及服务端是否允许 Origin: null；也可使用插件设置页。'
+        ? '浏览器未能读取接口响应，可能是网络、地址或 CORS 限制，尚不能判断 Key 是否有效。文件页需服务端允许 Origin: null 和 OPTIONS；也可从扩展管理页打开插件设置。'
         : error.message || String(error) };
     }
   }
