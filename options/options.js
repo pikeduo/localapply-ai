@@ -14,8 +14,12 @@ const $ = (s) => document.querySelector(s);
 
 // 读取本地资料并挂载设置事件，服务商元数据交由共享解析器处理。
 async function init() {
+  const standalone = globalThis.LocalApplyStandalone?.enabled;
+  $('#standaloneNotice').hidden = !standalone;
   state = await getState();
-  pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('libs/pdfjs/pdf.worker.min.js');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = standalone
+    ? new URL('../libs/pdfjs/pdf.worker.min.js', location.href).href
+    : chrome.runtime.getURL('libs/pdfjs/pdf.worker.min.js');
 
   // —— AI 服务商区（可选功能） ——
   state.settings.customProviders ||= {};
@@ -231,6 +235,7 @@ async function applyProviderInput(raw) {
 
 // 已有主机权限时无需重复授权；HTTP IP 接口也按实际 origin 检查。
 function requestCustomPermission(base) {
+  if (globalThis.LocalApplyStandalone?.enabled) return; // 文件页使用浏览器 CORS，不请求扩展权限。
   const url = new URL(base);
   const origin = url.protocol + '//' + url.hostname + '/*';
   chrome.permissions.contains({ origins: [origin] }, (granted) => {
@@ -365,8 +370,9 @@ function resumeSchemaPrompt() {
   );
 }
 
+// 只在内存提取 PDF 文本，禁用 eval 以兼容文件页并缓解旧 PDF.js 的已知风险。
 async function extractPdfText(bytes) {
-  const doc = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const doc = await pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise;
   const pages = [];
   let full = '';
   for (let i = 1; i <= doc.numPages; i++) {
@@ -394,8 +400,9 @@ function decideMode(info) {
   return 'text';
 }
 
+// 在内存渲染扫描页供视觉模型使用，文件页与插件页使用相同安全参数。
 async function renderPages(bytes) {
-  const doc = await pdfjsLib.getDocument({ data: bytes }).promise;
+  const doc = await pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise;
   const out = [];
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);

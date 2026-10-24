@@ -90,6 +90,29 @@ test('扩展页面消息正常转发，失效上下文提示重新打开', async
   assert.match((await context.sendMessage('wsa:getState')).error, /重新打开/);
 });
 
+test('文件设置页走独立运行时，HTTP 页面不能启用该存储回退', async () => {
+  let fileCalls = 0; let extensionCalls = 0;
+  const context = vm.createContext({ location: { protocol: 'file:' },
+    LocalApplyStandalone: { enabled: true, request: async (type) => { fileCalls++; return { ok: true, type }; } },
+    chrome: { runtime: { id: 'test-extension', sendMessage: (message, callback) => { extensionCalls++; callback({ ok: true }); } } },
+  });
+  vm.runInContext(source('common.js'), context);
+  assert.equal((await context.sendMessage('wsa:getState')).type, 'wsa:getState');
+  assert.equal(fileCalls, 1); assert.equal(extensionCalls, 0);
+  context.location.protocol = 'https:';
+  await context.sendMessage('wsa:getState'); assert.equal(fileCalls, 1); assert.equal(extensionCalls, 1);
+  context.location.protocol = 'file:'; context.LocalApplyStandalone = undefined;
+  assert.match((await context.sendMessage('wsa:getState')).error, /组件未加载/);
+});
+
+test('独立运行时在扩展/网页上下文不打开任何文件数据库', () => {
+  for (const protocol of ['chrome-extension:', 'https:']) {
+    const context = vm.createContext({ location: { protocol } });
+    vm.runInContext(source('options/standalone.js'), context);
+    assert.equal(context.LocalApplyStandalone.enabled, false);
+  }
+});
+
 test('服务商地址规范化支持 IPv4/IPv6、本地域名和完整接口，拒绝危险地址', () => {
   const { context } = sandbox(); vm.runInContext(source('data/providers.js'), context);
   const providers = context.LocalApplyProviders;

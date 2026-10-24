@@ -30,7 +30,9 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript、零构�
 
 > Chrome 同理：`chrome://extensions` → 开发人员模式 → 加载已解压的扩展程序。
 
-设置页请从插件的「设置」或扩展管理页的「扩展选项」打开；直接双击 `options/options.html` 或用本地 HTTP 服务预览，无法访问扩展后台和本地资料。重新加载插件后，原来打开的设置页应关闭再重新进入。
+设置页支持两种入口：从插件的「设置/扩展选项」进入时使用插件资料；直接双击 `options/options.html`（`file://`）进入时使用独立的本地文件管理模式，可配置 API、查询模型、读取 PDF 并校对导入、编辑重复经历和备份恢复，无需安装扩展。两者不自动同步，也不共享 Key；通过 JSON 备份交换个人资料，API 配置分别填写。文件页数据保存在此浏览器、此文件目录对应的 IndexedDB，移动目录或更换浏览器前请导出备份。
+
+文件管理模式访问 API 受浏览器 [CORS 规则](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) 限制：服务端需要允许 `Origin: null`、相关请求方法及认证头；无法访问时会显示原因，其他本地操作仍可使用。无需关闭浏览器安全策略。网页自动填充和扩展权限功能仍需插件入口。普通 HTTP 预览不会开启文件管理模式；重新加载插件后，旧的插件设置页应关闭再打开。
 
 AI 服务商可以从输入框的建议列表选择，也可以输入 `192.168.1.10:8000` 后按回车或移开焦点，自动保存为 `http://192.168.1.10:8000/v1`。域名默认使用 HTTPS；完整地址保留自定义路径，粘贴 `/chat/completions` 地址时自动提取 Base URL。相同地址不重复创建，新地址不继承其他服务商的 Key 或模型。
 
@@ -92,6 +94,8 @@ options/                 设置页：API / 阈值 / PDF 导入校对 / 备份
 data/templates.js        60 组同义词 + 全字段模板 + 档案工厂/升级
 data/local-store.js      Schema v2、迁移、字段/值/经历、备份与公共字段接口
 data/providers.js        服务商统一解析、IP/URL 规范化与地址去重
+data/ai-client.js        插件后台与文件页共用的模型查询和 AI 解析
+options/standalone.js    file:// 运行时和独立 IndexedDB 适配
 options/data-management.js 备份预览、公共字段包和重复经历编辑
 tests/                   基础、数据层与 Playwright 浏览器测试
 libs/pdfjs/              pdf.js 3.11.174（vendor，离线可用）

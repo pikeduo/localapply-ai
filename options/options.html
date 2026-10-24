@@ -9,6 +9,7 @@
   <div class="wrap">
     <h1>网申自动填写助手 · 设置</h1>
     <p id="initializationError" class="init-error" role="alert" hidden></p>
+    <p id="standaloneNotice" class="standalone-notice" role="status" hidden>当前为本地文件管理模式：配置和资料保存在此浏览器的独立 IndexedDB，与插件数据互不自动同步。可通过 JSON 备份交换资料（备份不含 API 配置/Key）。获取模型、测试连接和 AI 解析需要服务端允许文件页的跨域请求；网页自动填充需从插件入口使用。</p>
     <div id="toast" class="toast"></div>
 
     <section class="card">
@@ -133,6 +134,9 @@
   <script src="../libs/pdfjs/pdf.min.js"></script>
   <script src="../data/templates.js"></script>
   <script src="../data/providers.js"></script>
+  <script src="../data/local-store.js"></script>
+  <script src="../data/ai-client.js"></script>
+  <script src="standalone.js"></script>
   <script src="../common.js"></script>
   <script src="data-management.js"></script>
   <script src="options.js"></script>

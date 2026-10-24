@@ -15,6 +15,14 @@ async function serve() {
   const modelApi = { status: 200, data: { data: [{ id: 'synthetic-local' }, { id: 'synthetic-other' }, { id: 'synthetic-local' }] }, hold: false };
   const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
+    // 文件页必须由服务端明确允许 Origin: null；测试不关闭浏览器 CORS 防护。
+    if (req.headers.origin === 'null' && modelApi.allowCors !== false) {
+      res.setHeader('Access-Control-Allow-Origin', 'null');
+      res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+    }
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
     if (pathname === '/v1/models' && req.method === 'GET') {
       modelRequests.push({ authorization: req.headers.authorization, method: req.method });
       // 保留一次请求用于验证切换服务商后迟到响应不会污染新列表。
@@ -25,7 +33,7 @@ async function serve() {
     if (pathname === '/v1/chat/completions' && req.method === 'POST') {
       let body = ''; for await (const chunk of req) body += chunk;
       calls.push({ authorization: req.headers.authorization, model: JSON.parse(body).model });
-      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: '正常' } }] })); return;
+      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ choices: [{ message: { content: modelApi.chatContent || '正常' } }] })); return;
     }
     if (!/^\/test-pages\/[a-z-]+\.html$/.test(pathname)) { res.writeHead(404); res.end(); return; }
     try { const body = await fs.readFile(path.join(ROOT, pathname)); res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(body); }
@@ -36,11 +44,11 @@ async function serve() {
 }
 
 // 允许使用用户指定的现有 Chromium；默认采用 Playwright 配套浏览器，不自动下载。
-async function launch(profile) {
+async function launch(profile, withExtension = true) {
   const context = await chromium.launchPersistentContext(profile, { headless: true,
     ignoreDefaultArgs: ['--disable-extensions'], // 正式 Chrome 的 CDP 加载也需要实际启用扩展系统。
     ...(process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : { channel: 'chromium' }),
-    args: ['--disable-extensions-except=' + ROOT, '--load-extension=' + ROOT],
+    args: withExtension ? ['--disable-extensions-except=' + ROOT, '--load-extension=' + ROOT] : [],
     timeout: 30000,
   });
   return context;
@@ -255,12 +263,14 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
     await t.test('扩展页面与夹具没有未捕获 JavaScript 错误', async () => {
       assert.deepEqual(pageErrors, []);
     });
-    await t.test('直接打开设置 HTML 时说明正确入口，不显示底部英文异常', async () => {
+    await t.test('直接打开设置 HTML 时启用独立文件管理模式', async () => {
       const preview = await context.newPage();
       await preview.goto(require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href);
-      await preview.locator('#initializationError').waitFor({ state: 'visible' });
-      assert.match(await preview.locator('#initializationError').textContent(), /扩展选项/);
-      assert.equal(await preview.locator('#provider').isDisabled(), true);
+      await preview.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      assert.equal(await preview.locator('#standaloneNotice').isVisible(), true);
+      assert.equal(await preview.locator('#initializationError').isVisible(), false);
+      assert.equal(await preview.locator('#provider').isDisabled(), false);
+      assert.equal((await preview.evaluate(() => getState())).profiles[0].fields.find((field) => field.key === 'name').value, '');
       assert.ok(!(await preview.locator('body').textContent()).includes('Cannot read properties'));
       await preview.close();
     });
@@ -269,6 +279,105 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
     if (context) await context.close();
     await new Promise((resolve) => server.close(resolve));
     // 删除前验证路径始终属于本次创建的独立测试根，绝不按端口强杀进程。
+    assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep));
+    await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
+test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发写入', async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'file-profile-'));
+  const { server, base, modelApi, modelRequests } = await serve();
+  const fileUrl = require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+  let context;
+  let page;
+  // 文件页复用 common.js 的入口，测试不注入 Chrome API 或内存存储替身。
+  const call = async (type, payload = {}) => {
+    const response = await page.evaluate(({ type, payload }) => sendMessage(type, payload), { type, payload });
+    assert.equal(response.ok, true, response.error); return response;
+  };
+  try {
+    context = await launch(profile, false);
+    page = await context.newPage(); await page.goto(fileUrl);
+    await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+    await t.test('无扩展接口时仍能设置并在真实 CORS 下获取模型及测试连接', async () => {
+      assert.equal(await page.evaluate(() => !!globalThis.chrome?.runtime?.id), false);
+      assert.equal(await page.locator('#standaloneNotice').isVisible(), true);
+      assert.equal(await page.locator('#provider').isDisabled(), false);
+      await page.locator('#provider').fill(base); await page.locator('#provider').press('Enter');
+      await page.locator('#apiKey').fill('fake-file-only-key'); await page.locator('#apiKey').press('Tab');
+      await page.locator('#btnFetchModels').click();
+      await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取 2 个模型'));
+      assert.equal(modelRequests.at(-1).authorization, 'Bearer fake-file-only-key');
+      await page.locator('#modelSelect').selectOption('synthetic-local');
+      await page.locator('#btnTestKey').click();
+      await page.waitForFunction(() => document.getElementById('testResult').textContent.includes('连接正常'));
+    });
+    await t.test('本地文件 PDF 通过读取、视觉假接口、校对确认入库，原文件不持久化', async () => {
+      modelApi.chatContent = JSON.stringify({ name: '合成文件姓名', school: '合成文件学院', graduation: '2029-06', skills: ['合成技能'] });
+      await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
+      await page.locator('#btnExtract').click();
+      await page.waitForFunction(() => document.querySelector('#pdfStatus .ok, #pdfStatus .err'));
+      assert.equal(await page.locator('#pdfStatus .err').count(), 0, await page.locator('#pdfStatus').textContent());
+      await page.locator('#btnImport').click();
+      await page.locator('#importRow').waitFor({ state: 'hidden' });
+      const { database } = await call('localapply:read');
+      assert.ok(database.fieldValues.some((row) => row.value === '合成文件姓名' && row.source === 'pdf-confirmed'));
+      assert.ok(!JSON.stringify(database).includes('data:image'));
+      modelApi.chatContent = '正常';
+    });
+    await t.test('文件页重复经历和完整备份可操作，默认不导出 API 配置', async () => {
+      await page.locator('#entryTitle').fill('合成文件教育'); await page.locator('#btnAddEntry').click();
+      await page.locator('#entriesList .card').first().waitFor();
+      const downloadEvent = page.waitForEvent('download'); await page.locator('#btnBackup').click();
+      const download = await downloadEvent; const text = await fs.readFile(await download.path(), 'utf8');
+      assert.ok(text.includes('合成文件教育')); assert.ok(!text.includes('fake-file-only-key'));
+      await page.locator('#backupFile').setInputFiles({ name: 'file-backup.json', mimeType: 'application/json', buffer: Buffer.from(text) });
+      await page.locator('#btnApplyRestore').waitFor({ state: 'visible' }); await page.locator('#btnApplyRestore').click();
+      await page.waitForFunction(() => document.getElementById('restorePreview').textContent.includes('导入完成'));
+    });
+    await t.test('多个文件页同时写不同字段，Web Lock 防止覆盖', async () => {
+      const other = await context.newPage(); await other.goto(fileUrl);
+      await other.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      const firstBase = await page.evaluate(() => getState());
+      const secondBase = await other.evaluate(() => getState());
+      const first = structuredClone(firstBase);
+      const second = structuredClone(secondBase);
+      first.profiles[0].fields.find((field) => field.key === 'phone').value = '13800000000';
+      second.profiles[0].fields.find((field) => field.key === 'email').value = 'file-synthetic@example.test';
+      // 直接提交两份从同一版本读取的投影，复用生产中的冲突检查。
+      await Promise.all([
+        call('localapply:saveLegacy', { base: firstBase, state: first }),
+        other.evaluate(async ({ base, state }) => {
+          const response = await sendMessage('localapply:saveLegacy', { base, state });
+          if (!response.ok) throw new Error(response.error);
+        }, { base: secondBase, state: second }),
+      ]);
+      const { database } = await call('localapply:read');
+      assert.ok(database.fieldValues.some((row) => row.value === '13800000000'));
+      assert.ok(database.fieldValues.some((row) => row.value === 'file-synthetic@example.test'));
+      await other.close();
+    });
+    await t.test('服务端不允许文件来源时只提示网络/CORS，不禁用资料管理', async () => {
+      modelApi.allowCors = false;
+      await page.locator('#btnFetchModels').click();
+      await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('CORS'));
+      assert.equal(await page.locator('#btnAddEntry').isDisabled(), false);
+      assert.equal(await page.locator('#btnBackup').isDisabled(), false);
+      modelApi.allowCors = true;
+    });
+    const before = await call('wsa:getState');
+    await context.close(); context = await launch(profile, false);
+    page = await context.newPage(); await page.goto(fileUrl);
+    await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+    await t.test('关闭浏览器后重开文件页，IndexedDB 资料和配置保持不变', async () => {
+      const after = await call('wsa:getState'); assert.deepEqual(after.state, before.state);
+      assert.equal(after.state.settings.model, 'synthetic-local');
+      assert.ok(Object.values(after.state.settings.apiKeys).includes('fake-file-only-key'));
+    });
+  } finally {
+    if (context) await context.close();
+    await new Promise((resolve) => server.close(resolve));
     assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep));
     await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
   }

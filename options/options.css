@@ -20,6 +20,8 @@ body {
 .wrap { max-width: 860px; margin: 0 auto; }
 /* 初始化失败时持续说明打开方法，避免用户操作尚未连接到后台的控件。 */
 .init-error { padding: 12px 16px; border: 1px solid #ffccc7; border-radius: 10px; background: #fff1f0; color: var(--err); overflow-wrap: anywhere; }
+/* 文件模式可正常操作，持续说明独立存储和浏览器权限边界。 */
+.standalone-notice { padding: 12px 16px; border: 1px solid #c7d5ff; border-radius: 10px; background: var(--brand-weak); color: var(--ink); }
 h1 { font-size: 20px; margin: 0 0 18px; }
 h2 { font-size: 15px; margin: 0 0 12px; color: var(--brand); }
 .card {

@@ -65,8 +65,12 @@ function maskValue(value, sensitive, privacyMask, revealed) {
   return '••••';
 }
 
-// 先确认扩展运行环境；普通网页预览无法访问扩展存储和后台。
+// 文件设置页使用独立运行时；扩展页仍只通过受限后台消息访问私有存储。
 function sendMessage(type, payload) {
+  if (globalThis.location?.protocol === 'file:') {
+    if (globalThis.LocalApplyStandalone?.enabled) return globalThis.LocalApplyStandalone.request(type, payload);
+    return Promise.resolve({ ok: false, error: '本地文件管理组件未加载。请保留完整项目目录中的 data 和 options 文件，刷新此页后重试。' });
+  }
   return new Promise((resolve) => {
     const runtime = globalThis.chrome && globalThis.chrome.runtime;
     if (!runtime || !runtime.id || typeof runtime.sendMessage !== 'function') {

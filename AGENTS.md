@@ -7,6 +7,8 @@
 - 本阶段按用户最新要求采用 `chrome.storage.local`，保持无构建的原生 JS；阶段零的 IndexedDB/Vite/Vue 工程化方案后置。
 - `data/local-store.js` 为规范数据入口，`background.js` 持有唯一 repository 实例。页面禁止绕开后台直接写数据库；内容脚本只能请求阈值/开关等安全投影。
 - `localapply.database` 是 Schema v2 个人库；`localapply.apiSettings` 是独立 API 设置。`wangshenAutofill` 仅为只读迁移源，不得清理。`localapply.recovery` 保留最近一次导入前的个人库，不含 API 设置。
+- 用户后续授权 file:// 设置页独立操作：options/standalone.js 复用同一 repository，将存储适配到按文件目录隔离的 IndexedDB，多页写入由 Web Lock 串行。它不访问/同步扩展私有数据，仅允许文件协议启用；不得将此回退推广到任意 HTTP 页面。
+- data/ai-client.js 为后台和文件页共用的 AI 管线，配置通过读取函数注入。文件 API 请求遵守 CORS，不能使用关闭浏览器安全策略的方式绕过；页面必须说明独立存储边界。
 - API 设置中的 customProviders 保存按地址建立的服务商，providerModels 按服务商保存模型；data/providers.js 统一解析和规范化地址。新增端点不得继承上一家的 Key/模型，默认备份也不得夹带这些 API 配置。
 - 模型列表只在设置页主动获取，wsa:listModels 仅接受可信扩展页面调用。列表不持久化，切换服务商/Key 后使旧响应失效；没有明确选择时不可回退预设第一个模型发请求。
 - 公共 FieldDefinition 只允许 fieldId/label/type/group/aliases/options/description/version。个人值位于 fieldValues，重复经历由 entries.entryId 关联。
