@@ -114,6 +114,7 @@ test('独立运行时在扩展/网页上下文不打开任何文件数据库', (
   }
 });
 
+// 完整 URL 的根路径与 /v1 必须区分，省略协议的便捷输入仍自动补齐。
 test('服务商地址规范化支持 IPv4/IPv6、本地域名和完整接口，拒绝危险地址', () => {
   const { context } = sandbox(); vm.runInContext(source('data/providers.js'), context);
   const providers = context.LocalApplyProviders;
@@ -121,18 +122,23 @@ test('服务商地址规范化支持 IPv4/IPv6、本地域名和完整接口，�
     ['192.168.1.10:8000', 'http://192.168.1.10:8000/v1'], ['[::1]:11434', 'http://[::1]:11434/v1'],
     ['localhost:11434/v1/', 'http://localhost:11434/v1'], ['api.example.test', 'https://api.example.test/v1'],
     ['https://api.example.test/custom/v1/chat/completions', 'https://api.example.test/custom/v1'],
+    ['http://127.0.0.1:9000/', 'http://127.0.0.1:9000'], ['https://api.example.test', 'https://api.example.test'],
+    ['http://127.0.0.1:9000/responses', 'http://127.0.0.1:9000'],
   ]) assert.equal(providers.normalizeBase(input), expected);
   for (const input of ['javascript:alert(1)', 'file:///tmp/x', 'https://name:password@example.test/v1', 'https://example.test/v1?key=private', '999.999.1.1:80']) {
     assert.throws(() => providers.normalizeBase(input), input);
   }
   assert.equal(providers.find({}, 'DeepSeek'), 'deepseek'); assert.equal(providers.find({}, 'qwen'), 'qwen');
-  assert.equal(providers.find({}, 'http://localhost:11434'), 'ollama');
+  assert.equal(providers.find({}, 'localhost:11434'), 'ollama');
+  assert.equal(providers.find({}, 'http://localhost:11434'), null);
 });
 
+// 根入口不会匹配已保存的 /v1 服务商，从而避免隐式继承另一端点的密钥。
 test('自定义地址精确解析，未知服务商不回退到其他端点', () => {
   const { context } = sandbox(); vm.runInContext(source('data/providers.js'), context);
   const settings = { provider: 'custom.unit', customProviders: { 'custom.unit': { name: '测试服务', baseUrl: 'http://127.0.0.1:9000/v1' } } };
   assert.equal(context.LocalApplyProviders.find(settings, '127.0.0.1:9000'), 'custom.unit');
+  assert.equal(context.LocalApplyProviders.find(settings, 'http://127.0.0.1:9000/'), null);
   assert.equal(context.LocalApplyProviders.resolve(settings).baseUrl, 'http://127.0.0.1:9000/v1');
   assert.throws(() => context.LocalApplyProviders.resolve({ provider: 'missing' }), /不存在/);
 });
@@ -174,6 +180,86 @@ function modelListingFixture(provider = 'custom.models') {
     customProviders: { 'custom.models': { name: '合成模型服务', baseUrl: 'http://127.0.0.1:9000/v1' } } };
   return sandbox('background.js', { wangshenAutofill: initial });
 }
+
+// 为 Responses 测试准备独立根入口，保留生产读取密钥和配置的路径。
+async function responsesFixture() {
+  const env = modelListingFixture(); await env.context.getState();
+  const api = env.storage['localapply.apiSettings'];
+  api.customProviders['custom.models'] = { name: '合成 Responses', baseUrl: 'http://127.0.0.1:9000', protocol: 'responses' };
+  api.model = 'gpt-6.1-sol';
+  return env;
+}
+
+// 标准终态夹具同时包含推理条目，避免客户端误把思考内容作为简历正文。
+function responseResult(text = '正常') {
+  return { status: 'completed', output: [{ type: 'reasoning', summary: [{ text: '不能当作正文' }] },
+    { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] };
+}
+
+// 根路径、密钥与输入附件必须原样对应，协议适配不能产生第二次联网调用。
+test('Responses 使用根路径、当前 Key 和原文件/图片输入，关闭存储并适配 Sol 推理预算', async () => {
+  const { context } = await responsesFixture(); const calls = [];
+  context.fetch = async (url, req) => { calls.push({ url, req }); return new Response(JSON.stringify(req.method === 'GET' ? { data: [{ id: 'gpt-6.1-sol' }] } : responseResult()), { headers: { 'Content-Type': 'application/json' } }); };
+  const out = await context.callGLM({ disableThinking: true, maxTokens: 128, messages: [
+    { role: 'system', content: '合成系统指令' }, { role: 'user', content: [
+      { type: 'text', text: '合成正文' }, { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,YQ==' } },
+      { type: 'file', file: { filename: 'probe.pdf', file_data: 'data:application/pdf;base64,Yg==' } },
+    ] },
+  ] });
+  assert.equal(calls.length, 1); assert.equal(calls[0].url, 'http://127.0.0.1:9000/responses');
+  assert.equal(calls[0].req.headers.Authorization, 'Bearer fake-models-key'); assert.equal(calls[0].req.redirect, 'error');
+  const body = JSON.parse(calls[0].req.body);
+  assert.equal(body.model, 'gpt-6.1-sol'); assert.equal(body.instructions, '合成系统指令');
+  assert.equal(body.store, false); assert.equal(body.stream, true); assert.equal(body.max_output_tokens, 2048);
+  assert.equal(body.reasoning.effort, 'low'); assert.equal(body.temperature, undefined);
+  assert.deepEqual(body.input[0].content, [{ type: 'input_text', text: '合成正文' },
+    { type: 'input_image', image_url: 'data:image/jpeg;base64,YQ==' },
+    { type: 'input_file', filename: 'probe.pdf', file_data: 'data:application/pdf;base64,Yg==' }]);
+  assert.equal(out.content, '正常'); assert.equal(out.finishReason, 'stop');
+  await context.listAvailableModels('custom.models');
+  assert.equal(calls[1].url, 'http://127.0.0.1:9000/models'); assert.equal(calls[1].req.method, 'GET');
+});
+
+// 将中文终态按字节拆开，并让连接保持打开，验证完成事件即可释放流。
+test('Responses SSE 跨块解码中文并等待终态，不依赖连接关闭或 delta 猜测成功', async () => {
+  const { context } = await responsesFixture(); let cancelled = false;
+  const wire = ': ping\r\n\r\ndata: {"type":"response.output_text.delta","delta":"不作为终态"}\r\n\r\n'
+    + 'event: response.completed\r\ndata: ' + JSON.stringify({ type: 'response.completed', response: responseResult('中文终态') }) + '\r\n\r\n';
+  const bytes = new TextEncoder().encode(wire);
+  context.fetch = async () => new Response(new ReadableStream({ start(controller) {
+    for (let i = 0; i < bytes.length; i += 3) controller.enqueue(bytes.slice(i, i + 3));
+  }, cancel() { cancelled = true; } }), { headers: { 'Content-Type': 'text/event-stream' } });
+  assert.equal((await context.callGLM({ messages: [{ role: 'user', content: '合成请求' }] })).content, '中文终态');
+  assert.equal(cancelled, true);
+});
+
+// 中断、错误、超限和不完整响应均不得成为“能力通过”，错误正文不展示给用户。
+test('Responses 拒绝断流和服务端错误，限制流大小并识别输出截断', async () => {
+  const { context } = await responsesFixture();
+  for (const wire of ['data: [DONE]\n\n', 'data: {"type":"response.failed","error":{"message":"private-server-secret"}}\n\n']) {
+    context.fetch = async () => new Response(wire, { headers: { 'Content-Type': 'text/event-stream' } });
+    await assert.rejects(context.callGLM({ messages: [] }), (error) => !error.message.includes('private-server-secret') && /提前结束|返回失败/.test(error.message));
+  }
+  context.fetch = async () => new Response('x'.repeat(2 * 1024 * 1024 + 1), { headers: { 'Content-Type': 'text/event-stream' } });
+  await assert.rejects(context.callGLM({ messages: [] }), /大小限制/);
+  context.fetch = async () => new Response(JSON.stringify({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] }));
+  await assert.rejects(context.callGLM({ messages: [] }), (error) => error.code === 'OUTPUT_LIMIT');
+  const partial = responseResult('部分输出'); partial.status = 'incomplete'; partial.incomplete_details = { reason: 'max_output_tokens' };
+  context.fetch = async () => new Response(JSON.stringify(partial));
+  assert.equal((await context.callGLM({ messages: [] })).finishReason, 'length');
+  context.fetch = async () => new Response('private-invalid-json');
+  await assert.rejects(context.callGLM({ messages: [] }), (error) => /有效 JSON/.test(error.message) && !error.message.includes('private-invalid-json'));
+});
+
+// 取消信号必须中断正在读取的流，协议分支不能绕过既有取消机制。
+test('Responses 读取期间可取消，外部错误内容不会回显', async () => {
+  const { context } = await responsesFixture(); const external = new AbortController();
+  context.fetch = async (url, req) => new Response(new ReadableStream({ start(controller) {
+    req.signal.addEventListener('abort', () => { const error = new Error('private-abort'); error.name = 'AbortError'; controller.error(error); });
+    external.abort();
+  } }), { headers: { 'Content-Type': 'text/event-stream' } });
+  await assert.rejects(context.callGLM({ messages: [], signal: external.signal }), /已取消解析/);
+});
 
 test('模型列表解析去重排序，仅接受有效 ID，空列表与异常格式区分', () => {
   const { context } = sandbox(); vm.runInContext(source('data/providers.js'), context);

@@ -33,7 +33,7 @@
     }
 
     const jobs = new Map();
-    // 请求可显式取消，超时覆盖响应体读取，错误不回显服务商原文或个人资料。
+    // 根据显式协议发送一次请求；不自动换协议重试，超时覆盖 JSON/SSE 读取且不回显错误正文。
     async function callGLM(req) {
       const settings = (await getState()).settings;
       const provider = getProvider(settings);
@@ -44,6 +44,7 @@
       if (req.expectedContext && req.expectedContext !== await capabilities.context(settings, model)) throw aiError('服务商、模型或 Key 已变化，请重新检测能力并预览。');
       const baseUrl = (provider.baseUrl || '').replace(/\/+$/, '');
       if (!baseUrl) throw aiError('请先填写服务商接口地址。');
+      const responses = provider.protocol === 'responses';
       const timeoutMs = req.timeoutMs || DEFAULT_TIMEOUT_MS;
       const controller = new AbortController();
       const cancel = () => controller.abort();
@@ -51,9 +52,9 @@
       if (req.signal?.aborted) controller.abort();
       const timer = setTimeout(cancel, timeoutMs);
       try {
-        const response = await fetch(baseUrl + '/chat/completions', { method: 'POST', redirect: 'error',
+        const response = await fetch(baseUrl + (responses ? '/responses' : '/chat/completions'), { method: 'POST', redirect: 'error',
           headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: 'Bearer ' + key } : {}) },
-          body: JSON.stringify({ model, messages: req.messages, temperature: req.temperature ?? 0.2, max_tokens: req.maxTokens, stream: false,
+          body: JSON.stringify(responses ? global.LocalApplyResponses.request(req, model) : { model, messages: req.messages, temperature: req.temperature ?? 0.2, max_tokens: req.maxTokens, stream: false,
             // DeepSeek 默认开启思考，短识别探针/连通测试需关闭，避免预算耗尽而没有最终答案。
             ...(req.disableThinking && new URL(baseUrl).hostname === 'api.deepseek.com' ? { thinking: { type: 'disabled' } } : {}),
             ...(req.fileInput && new URL(baseUrl).hostname === 'openrouter.ai' ? { plugins: [{ id: 'file-parser', pdf: { engine: 'native' } }] } : {}) }),
@@ -64,6 +65,7 @@
           if (response.status >= 500) throw serverError(response, '调用模型');
           const error = aiError('AI 接口返回 HTTP ' + response.status); error.code = 'HTTP_' + response.status; throw error;
         }
+        if (responses) return { ...await global.LocalApplyResponses.read(response), model };
         let data;
         try { data = await response.json(); }
         catch (error) { if (error.name === 'AbortError') throw error; throw aiError('AI 回复不是有效 JSON'); }

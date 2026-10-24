@@ -13,6 +13,7 @@
 - 用户后续授权 file:// 设置页独立操作：options/standalone.js 复用同一 repository，将存储适配到按文件目录隔离的 IndexedDB，多页写入由 Web Lock 串行。它不访问/同步扩展私有数据，仅允许文件协议启用；不得将此回退推广到任意 HTTP 页面。
 - data/ai-client.js 为后台和文件页共用的 AI 管线，配置通过读取函数注入。文件 API 请求遵守 CORS，不能使用关闭浏览器安全策略的方式绕过；页面必须说明独立存储边界。
 - API 设置中的 customProviders 保存按地址建立的服务商，providerModels 按服务商保存模型；data/providers.js 统一解析和规范化地址。新增端点不得继承上一家的 Key/模型，默认备份也不得夹带这些 API 配置。
+- 完整 HTTP(S) URL 必须保留用户的根路径；只有省略协议的 IP/域名默认补 /v1，已有存储地址不自动改写。customProviders.protocol 可选 chat-completions/responses，旧配置默认前者；用户显式选择，不自动跨路径/协议重试。data/responses.js 转换文本/图片/文件并有界读取 JSON/SSE 终态；store:false，能力及临时模型列表按协议隔离。切换协议不自动联网。
 - 模型列表只在设置页主动获取，wsa:listModels 仅接受可信扩展页面调用。主模型/视觉模型必须使用完整原生下拉，已选值及手动输入不得过滤列表。近期列表只在当前标签页 sessionStorage 缓存 30 分钟，按页面目录/服务商/端点/密钥存储版本隔离，不进数据库/备份，刷新不得自动联网。没有明确选择时不可回退预设第一个模型。
 - DeepSeek 官方 deepseek-flash 支持图片，不能笼统标为纯文本；当前 Files API 列出图片格式，PDF/DOCX 可通过已有完整页面图路径处理。能力仍须实测。针对官方 api.deepseek.com，短探针/连接测试/结构化抽取显式关闭默认思考；探针至少 512 token，截断输出应为 unknown，禁止判成 unsupported。
 - 公共 FieldDefinition 只允许 fieldId/label/type/group/aliases/options/description/version。个人值位于 fieldValues，重复经历由 entries.entryId 关联。
@@ -45,3 +46,5 @@
 后续修正已验收：基础 58 项、浏览器 37 项通过；图像 PDF/DOCX 像素保留、原文件字节、能力拦截及旧填表回归均通过。模型优先识别及能力实测新增 docx-preview/html2canvas 本地渲染资源；普通用户仍不需安装依赖。详见最新阶段二记录。
 
 2026-10-25：可选口令、直接 Key 输入与拖拽自动预览验收完成，基础 63 项、浏览器 43 项通过。覆盖无口令重启、旧锁定 Key 替换、取消口令、并发/中断恢复、拖入 PDF/DOCX 不调用模型及旧填表回归。
+
+2026-10-25：根路径及可选 Responses 协议通过基础 70 项、浏览器 45 项测试。合成服务覆盖两种入口的 SSE、附件识别、确认导入、协议隔离与重启；真实 sub2api 的带 Key 请求仍待用户验证，不能把模拟接口通过视为实际 502 已修复。

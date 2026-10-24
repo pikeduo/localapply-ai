@@ -29,6 +29,18 @@ function fixture(initial = {}) {
 
 // 执行规范命令，方便测试检查返回 ID。
 async function command(repo, action, payload, expectedRevision) { return repo.command({ action, payload, expectedRevision }); }
+
+// 协议字段是 API 设置的兼容扩展，重启保留且备份不携带；未知协议必须拒绝。
+test('自定义 Responses 协议独立保存、重启恢复并排除于资料备份', async () => {
+  const env = fixture(); const base = await env.repo.readLegacy(); const next = structuredClone(base);
+  next.settings.customProviders = { 'custom.protocol': { name: 'protocol-test', baseUrl: 'http://127.0.0.1:9800', protocol: 'responses' } };
+  await env.repo.saveLegacy(base, next);
+  assert.equal((await env.restart().readLegacy()).settings.customProviders['custom.protocol'].protocol, 'responses');
+  assert.ok(!JSON.stringify(await env.repo.exportBackup()).includes('protocol-test'));
+  const latest = await env.repo.readLegacy(); const bad = structuredClone(latest);
+  bad.settings.customProviders['custom.protocol'].protocol = 'unsupported';
+  await assert.rejects(env.repo.saveLegacy(latest, bad), /接口协议无效/);
+});
 // 从数据库读取某个个人值，不误用重复经历。
 function value(db, profileId, fieldId, entryId = null) { return db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === fieldId && row.entryId === entryId)?.value; }
 // 创建仅含元数据的公共定义，测试文本均为虚构。

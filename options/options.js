@@ -25,6 +25,7 @@ async function init() {
   providerPicker = createProviderPicker(applyProviderInput);
   refreshProviderUI();
   $('#customBase').addEventListener('change', () => applyProviderInput($('#customBase').value));
+  $('#apiProtocol').addEventListener('change', changeApiProtocol);
   initCredentials();
   initCapabilities();
   $('#btnFetchModels').addEventListener('click', fetchAvailableModels);
@@ -99,7 +100,7 @@ async function init() {
   renderTargetProfiles();
 }
 
-// 切换时还原对应 Key/模型，并刷新全量服务商及当前接口的排查地址。
+// 切换时还原 Key/模型/协议，并展示实际请求地址，根路径不再被隐式改写。
 function refreshProviderUI() {
   const p = LocalApplyProviders.resolve(state.settings);
   const providerId = p.providerId;
@@ -117,14 +118,26 @@ function refreshProviderUI() {
   $('#customBaseRow').style.display = '';
   $('#customBase').readOnly = !p.custom && providerId !== 'ollama';
   $('#customBase').value = p.baseUrl;
+  $('#apiProtocolRow').hidden = !state.settings.customProviders[providerId];
+  $('#apiProtocol').value = p.protocol;
+  $('#chatEndpoint').textContent = (p.baseUrl || '').replace(/\/+$/, '') + (p.protocol === 'responses' ? '/responses' : '/chat/completions');
   resetModelCatalog();
 }
 
-// 临时缓存按端点及密钥存储版本隔离，不缓存 Key 本身，也不跨账户套用模型列表。
+// 用户显式选择协议，不自动试发请求；协议切换使旧能力和草稿路由失效。
+async function changeApiProtocol() {
+  const provider = state.settings.customProviders[state.settings.provider];
+  if (!provider) return;
+  provider.protocol = $('#apiProtocol').value;
+  refreshProviderUI();
+  if (await save() === false) { state = await getState(); refreshProviderUI(); }
+}
+
+// 临时缓存按端点、协议及密钥版本隔离，不缓存 Key 本身。
 function modelCatalogKey() {
   const p = LocalApplyProviders.resolve(state.settings);
   const vault = state.settings.vault || {};
-  return 'localapply.models:' + JSON.stringify([new URL('.', location.href).href, p.providerId, p.baseUrl, vault.revision || 0, vault.localRevision || 0]);
+  return 'localapply.models:' + JSON.stringify([new URL('.', location.href).href, p.providerId, p.baseUrl, p.protocol, vault.revision || 0, vault.localRevision || 0]);
 }
 // 缓存只活在当前标签页会话中，读取异常或过期时回到主动获取入口。
 function readModelCatalog() {

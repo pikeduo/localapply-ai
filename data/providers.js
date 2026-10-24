@@ -2,11 +2,12 @@
 (function (global) {
   'use strict';
 
-  // 接受 IP:端口、域名或完整兼容地址；根路径补 /v1，完整聊天端点去掉后缀。
+  // 完整 URL 保留根路径；只有省略协议的 IP/域名自动补 /v1，避免改写反代入口。
   function normalizeBase(raw) {
     let text = String(raw || '').trim();
     if (!text || /\s/.test(text)) throw new Error('请输入有效的 IP 或 API 接口地址');
-    if (!/^[a-z][a-z\d+.-]*:\/\//i.test(text)) {
+    const explicitUrl = /^[a-z][a-z\d+.-]*:\/\//i.test(text);
+    if (!explicitUrl) {
       const local = /^(localhost|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-f:]+\])(?::\d+)?(?:\/|$)/i.test(text);
       text = (local ? 'http://' : 'https://') + text;
     }
@@ -18,7 +19,7 @@
     if (!url.hostname.includes('.') && url.hostname !== 'localhost' && !url.hostname.startsWith('[') && !/^https?:\/\//i.test(raw)) {
       throw new Error('请选择已有服务商，或输入 IP:端口 / 完整接口地址');
     }
-    const pathname = url.pathname.replace(/\/+$/, '').replace(/\/chat\/completions$/i, '') || '/v1';
+    const pathname = url.pathname.replace(/\/+$/, '').replace(/\/(?:chat\/completions|responses)$/i, '') || (explicitUrl ? '' : '/v1');
     return url.origin + pathname;
   }
 
@@ -31,11 +32,14 @@
       }))];
   }
 
-  // 后台与 UI 使用同一个解析规则，未知服务商明确报错，避免凭据误发到默认服务商。
+  // 后台与 UI 使用同一个地址/协议配置；旧记录默认聊天协议，未知协议不能偷偷回退。
   function resolve(settings) {
     const provider = entries(settings).find((item) => item.providerId === (settings.provider || 'zhipu'));
     if (!provider) throw new Error('服务商配置不存在，请重新选择');
+    const protocol = provider.protocol || 'chat-completions';
+    if (!['chat-completions', 'responses'].includes(protocol)) throw new Error('接口协议不受支持，请重新选择');
     return { ...provider, baseUrl: provider.providerId === 'custom' ? settings.customBase || '' : provider.baseUrl,
+      protocol,
       custom: provider.custom || provider.providerId === 'custom', requiresKey: provider.requiresKey !== false && provider.providerId !== 'custom' };
   }
 

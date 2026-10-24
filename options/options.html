@@ -24,10 +24,16 @@
           <div id="providerList" class="provider-list" role="listbox" aria-label="全部服务商" hidden></div>
         </div>
       </div>
-      <p class="muted">支持 DeepSeek、Qwen、Kimi、智谱、OpenAI、硅基流动、OpenRouter 和 Ollama。输入 IP 或接口地址后按回车或移开焦点，自动保存为自定义服务商；仅根地址自动补 /v1。</p>
+      <p class="muted">支持 DeepSeek、Qwen、Kimi、智谱、OpenAI、硅基流动、OpenRouter 和 Ollama。输入 IP 或接口地址后按回车或移开焦点，自动保存为自定义服务商。完整 http(s) URL 保留原路径；仅省略协议的 IP/域名默认补 /v1。</p>
       <div class="row" id="customBaseRow" style="display:none">
         <label class="lbl">接口地址</label>
         <input type="text" id="customBase" placeholder="https://xx.com/v1（OpenAI 兼容，不含 /chat/completions）" />
+      </div>
+
+      <div class="row" id="apiProtocolRow" hidden>
+        <label class="lbl" for="apiProtocol">接口协议</label>
+        <select id="apiProtocol"><option value="chat-completions">Chat Completions（通用兼容）</option><option value="responses">Responses（Codex / sub2api）</option></select>
+        <span id="chatEndpoint" class="muted"></span>
       </div>
 
       <div class="row">
@@ -64,7 +70,7 @@
         <p>继续使用 file:// 时，请由 sub2api 管理员在现有配置的 cors.allowed_origins 中加入字符串 "null"，保留原有来源并重启服务；前置反代也须放行 OPTIONS、Authorization 和 Content-Type。</p>
         <p>401/403 请检查 Key、分组及访问权限；404/405 请核对接口前缀或版本。模型列表接口未开放时可手填管理员提供的模型 ID，但手填无法解决网络或跨域问题。</p>
         <p>502/503/504 表示接口链路或服务端故障。请按页面显示的请求编号查询反代与 sub2api 日志，并对照其他客户端实际使用的 Base URL、请求路径和协议；同一 Key 能在 Codex 客户端使用，不代表模型列表及聊天接口都已可用。</p>
-        <p>本插件调用 /chat/completions；请确认反代版本和 Key 所属分组支持此协议。只有 /responses 或 /messages 的接口尚不能直接使用。</p>
+        <p>自定义服务商可选择 Chat Completions 或 Responses，请与已验证可用客户端的协议一致。模型列表仍请求当前地址下的 /models；推理协议切换不能保证修复模型列表的 502。Anthropic /messages 尚不支持。</p>
       </details>
       <div class="row">
         <label class="lbl" for="modelSelect">主模型</label>
@@ -192,6 +198,7 @@
   <script src="../data/resume.js"></script>
   <script src="../data/local-store.js"></script>
   <script src="../data/model-capabilities.js"></script>
+  <script src="../data/responses.js"></script>
   <script src="../data/ai-client.js"></script>
   <script src="standalone.js"></script>
   <script src="../common.js"></script>

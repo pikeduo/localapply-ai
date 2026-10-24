@@ -33,6 +33,8 @@ Manifest V3 浏览器扩展（Edge / Chrome 通用，原生 JavaScript，运行�
 
 > Chrome 同理：`chrome://extensions` → 开发人员模式 → 加载已解压的扩展程序。
 
+自定义接口请填写与可用客户端一致的完整 Base URL。`http://地址:端口/` 会保留根路径，`http://地址:端口/v1` 会使用 `/v1`；旧配置不会自动更改。可选择 Chat Completions 或 Responses 协议（如 Codex/sub2api），界面显示实际调用地址。获取模型列表失败时，可手填服务端实际支持的模型 ID 后单独测试连接；列表、推理及文件能力须分别验证。新建地址后需重新保存 Key。
+
 设置页支持两种入口：从插件的「设置/扩展选项」进入时使用插件资料；直接双击 `options/options.html`（`file://`）进入时使用独立的本地文件管理模式，可配置 API、查询模型、读取 PDF/DOCX 并校对导入、编辑重复经历和备份恢复，无需安装扩展。两者不自动同步，也不共享 Key；通过 JSON 备份交换个人资料，API 配置分别填写。文件页数据保存在此浏览器、此文件目录对应的 IndexedDB，移动目录或更换浏览器前请导出备份。
 
 文件管理模式访问 API 受浏览器 [CORS 规则](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS) 限制：服务端需要允许 `Origin: null`、相关请求方法及认证头；无法访问时会显示原因，其他本地操作仍可使用。无需关闭浏览器安全策略。网页自动填充和扩展权限功能仍需插件入口。普通 HTTP 预览不会开启文件管理模式；重新加载插件后，旧的插件设置页应关闭再打开。

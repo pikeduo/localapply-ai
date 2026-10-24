@@ -51,8 +51,11 @@ test('图片、PDF、DOCX 分开实测；原文件优先，不支持文件时才
   assert.equal(report.results[0].image, 'supported'); assert.equal(report.results[0].docx, 'unsupported');
   assert.equal((await env.client.route('docx')).mode, 'vision');
 });
-test('鉴权/网络失败标记未知，结果与端点、Key、型号隔离并按时过期', async () => {
+// 已通过的能力不可跨协议复用，切回原配置才可使用原结果。
+test('鉴权/网络失败标记未知，结果与端点、协议、Key、型号隔离并按时过期', async () => {
   const env = fixture(); await env.client.probe(probe());
+  env.settings.customProviders['custom.unit'].protocol = 'responses'; await assert.rejects(env.client.route('pdf'), /尚未通过/);
+  delete env.settings.customProviders['custom.unit'].protocol;
   env.settings.apiKeys['custom.unit'] = 'changed-key'; await assert.rejects(env.client.route('pdf'), /尚未通过/);
   env.settings.apiKeys['custom.unit'] = 'fake-test-key'; env.settings.model = 'other-model'; await assert.rejects(env.client.route('pdf'), /尚未通过/);
   env.settings.model = 'main-model'; env.advance(); await assert.rejects(env.client.route('pdf'), /尚未通过/);

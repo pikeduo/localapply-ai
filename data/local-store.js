@@ -114,7 +114,7 @@
     check(typeof value.autoThreshold === 'number' && value.autoThreshold >= 0.5 && value.autoThreshold <= 1, '阈值错误');
     check(typeof value.privacyMask === 'boolean' && typeof value.autoFloatbar === 'boolean', '设置格式错误');
   }
-  // API 配置独立保存；旧凭据只在用户首次设置口令时迁入保险库。
+  // API 配置独立保存；自定义协议为可选字段，兼容旧配置且不进入个人资料备份。
   function apiSettings(value) {
     keys(value, API_FIELDS, 'API 设置');
     for (const key of ['provider', 'model', 'visionModel', 'customBase']) string(value[key] || '', key, 2000, true);
@@ -123,7 +123,8 @@
     for (const key of ['customProviders', 'providerModels']) check(object(value[key] || {}), key + ' 格式错误');
     for (const [providerId, provider] of Object.entries(value.customProviders || {})) {
       check(/^custom\.[a-z\d-]+$/i.test(providerId), '自定义服务商 ID 错误');
-      keys(provider, ['name', 'baseUrl'], '自定义服务商'); string(provider.name, '服务商名称'); string(provider.baseUrl, '接口地址', 2000);
+      keys(provider, ['name', 'baseUrl', 'protocol'], '自定义服务商'); string(provider.name, '服务商名称'); string(provider.baseUrl, '接口地址', 2000);
+      check(provider.protocol === undefined || ['chat-completions', 'responses'].includes(provider.protocol), '接口协议无效');
       const url = new URL(provider.baseUrl);
       check(['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash, '接口地址无效');
     }

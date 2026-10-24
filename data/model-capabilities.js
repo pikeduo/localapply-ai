@@ -5,10 +5,10 @@
   function create(readSettings, call) {
     const records = new Map();
     const TTL = 30 * 60 * 1000;
-    // 凭据只参与内存中的摘要匹配，不出现在 UI、日志或缓存键明文中。
+    // 协议也参与能力作用域；换协议后必须重测，凭据仅进入内存摘要。
     async function context(settings, model) {
       const provider = global.LocalApplyProviders.resolve(settings);
-      const bytes = new TextEncoder().encode(JSON.stringify([provider.providerId, provider.baseUrl, model, settings.apiKeys?.[provider.providerId] || '']));
+      const bytes = new TextEncoder().encode(JSON.stringify([provider.providerId, provider.baseUrl, provider.protocol, model, settings.apiKeys?.[provider.providerId] || '']));
       return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (n) => n.toString(16).padStart(2, '0')).join('');
     }
     // 仅验证输入封套；识别成功必须由模型回复中准确读出图片里的随机数字证明。

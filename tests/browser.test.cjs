@@ -8,7 +8,7 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
-// 本地夹具服务仅绑定 loopback，并限制路径属于 test-pages。
+// 本地夹具仅绑定 loopback；两种 AI 协议只返回合成响应，页面限制在 test-pages。
 async function serve() {
   const calls = [];
   const modelRequests = [];
@@ -23,11 +23,26 @@ async function serve() {
       res.setHeader('Access-Control-Allow-Private-Network', 'true');
     }
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
-    if (pathname === '/v1/models' && req.method === 'GET') {
-      modelRequests.push({ authorization: req.headers.authorization, method: req.method });
+    if (['/v1/models', '/models'].includes(pathname) && req.method === 'GET') {
+      modelRequests.push({ authorization: req.headers.authorization, method: req.method, pathname });
       // 保留一次请求用于验证切换服务商后迟到响应不会污染新列表。
       const respond = () => { if (res.writableEnded) return; res.writeHead(modelApi.status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(modelApi.data)); };
       if (modelApi.hold) { modelApi.release = respond; modelApi.onRequest(); } else respond();
+      return;
+    }
+    if (pathname === '/responses' && req.method === 'POST') {
+      let body = ''; for await (const chunk of req) body += chunk;
+      const request = JSON.parse(body); const content = request.input?.at(-1)?.content;
+      const probe = Array.isArray(content) && content.some((part) => part.type === 'input_text' && part.text.includes('读取附件图片中唯一的8位数字'));
+      const file = Array.isArray(content) && content.find((part) => part.type === 'input_file');
+      const inputType = file ? file.filename.split('.').at(-1) : 'image';
+      calls.push({ authorization: req.headers.authorization, model: request.model, probe, inputType, protocol: 'responses', pathname,
+        store: request.store, stream: request.stream, imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'input_image').length : 0 });
+      if (probe && inputType !== 'image') { res.writeHead(400); res.end('{}'); return; }
+      const response = { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text',
+        text: probe ? '73185204' : modelApi.chatContent || '正常' }] }] };
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.end('event: response.completed\ndata: ' + JSON.stringify({ type: 'response.completed', response }) + '\n\n');
       return;
     }
     if (pathname === '/v1/chat/completions' && req.method === 'POST') {
@@ -141,6 +156,66 @@ async function detectModel(page) {
   assert.match(await page.locator('#capabilityStatus').textContent(), /图片 识别通过/);
 }
 
+// 两种真实入口均验证根路径 Responses、文件能力、确认导入及整个浏览器重启。
+for (const withExtension of [true, false]) {
+  test(`Responses 根入口：${withExtension ? '扩展后台' : '独立文件页'}的选择、识别和重启`, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'responses-'));
+    const api = await serve(); let context;
+    api.modelApi.data = { data: [{ id: 'gpt-6.1-sol' }] };
+    try {
+      context = await launch(profile, withExtension);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html`
+        : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      let page = await context.newPage(); await page.goto(url);
+      await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      await page.locator('#provider').fill(api.base + '/'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+      assert.equal(await page.locator('#customBase').inputValue(), api.base);
+      await page.locator('#apiKey').fill('synthetic-responses-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
+      await page.locator('#apiProtocol').selectOption('responses'); await page.evaluate(() => flushSaves());
+      assert.equal(await page.locator('#chatEndpoint').textContent(), api.base + '/responses');
+      await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取'));
+      assert.equal(api.modelRequests.at(-1).pathname, '/models');
+      await page.locator('#modelSelect').selectOption('gpt-6.1-sol');
+      await page.locator('#btnTestKey').click(); await page.waitForFunction(() => document.getElementById('testResult').textContent.includes('连接正常'));
+      assert.equal(api.calls.at(-1).protocol, 'responses'); assert.equal(api.calls.at(-1).store, false); assert.equal(api.calls.at(-1).stream, true);
+      assert.equal(api.calls.at(-1).authorization, 'Bearer synthetic-responses-key');
+      await detectModel(page);
+      api.modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成 Responses 姓名', evidence: '合成 Responses 姓名', page: 1 } } });
+      await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
+      await page.locator('#sendResume').waitFor({ state: 'visible' }); await page.locator('#sendResume').click();
+      await page.locator('#importRow').waitFor({ state: 'visible' });
+      assert.ok((await page.locator('#pdfReview').textContent()).includes('姓名'));
+      assert.equal(await page.evaluate(async () => (await sendMessage('localapply:read')).database.fieldValues.some((row) => row.value === '合成 Responses 姓名')), false);
+      await page.locator('#selectAllResume').click(); await page.locator('#btnImport').click();
+      await page.locator('#importRow').waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(async () => (await sendMessage('localapply:read')).database.fieldValues.some((row) => row.value === '合成 Responses 姓名')), true);
+      assert.equal(api.calls.at(-1).imageCount, 1);
+      const requests = api.calls.length;
+      await page.locator('#apiProtocol').selectOption('chat-completions'); await page.evaluate(() => flushSaves());
+      assert.equal((await page.evaluate(() => sendMessage('wsa:resumeRoute', { format: 'pdf' }))).ok, false);
+      await page.locator('#apiProtocol').selectOption('responses'); await page.evaluate(() => flushSaves());
+      assert.equal(api.calls.length, requests);
+      // 不同路径作为独立服务商，不能继承根入口的 Key/模型/协议。
+      await page.locator('#provider').fill(api.base + '/v1'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+      assert.equal(await page.locator('#apiProtocol').inputValue(), 'chat-completions');
+      assert.equal(await page.evaluate(() => !!state.settings.keyStatus[state.settings.provider]), false);
+      await page.locator('#provider').fill(api.base + '/'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+      await context.close(); context = await launch(profile, withExtension);
+      page = await context.newPage(); await page.goto(url); await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      assert.equal(await page.locator('#customBase').inputValue(), api.base);
+      assert.equal(await page.locator('#apiProtocol').inputValue(), 'responses');
+      assert.equal(await page.evaluate(() => !!state.settings.keyStatus[state.settings.provider]), true);
+      assert.equal(api.calls.length, requests);
+    } finally {
+      if (context) await context.close();
+      await new Promise((resolve) => api.server.close(resolve));
+      assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep));
+      await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
+}
+
 for (const withExtension of [true, false]) {
   test(`阶段二：${withExtension ? '扩展' : 'file://'} 简历审核、取消、密钥加密与重启`, async (t) => {
     const fixtures = require('./resume-fixtures.cjs');
@@ -187,7 +262,7 @@ for (const withExtension of [true, false]) {
       await t.test('首次可直接填写并保存 Key，无需设置或展开安全口令', async () => {
         assert.equal(await page.locator('#apiKey').isEditable(), true);
         assert.equal(await page.locator('#keyProtection').evaluate((details) => details.open), false);
-        await page.locator('#provider').fill(api.base); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+        await page.locator('#provider').fill(api.base + '/v1'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
         await page.locator('#apiKey').fill('synthetic-default-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
         const state = (await call('wsa:getState')).state; assert.equal(state.settings.vault.enabled, false);
         assert.equal(state.settings.keyStatus[state.settings.provider], true); assert.deepEqual(state.settings.apiKeys, {});
@@ -197,7 +272,7 @@ for (const withExtension of [true, false]) {
       await setupVault(page);
       // PDF 图像解码使用随包 WASM；仅允许本地 WebAssembly，不开放 JavaScript eval。
       assert.equal(await page.evaluate(async () => (await WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]))) instanceof WebAssembly.Module), true);
-      await page.locator('#provider').fill(api.base); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+      await page.locator('#provider').fill(api.base + '/v1'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
       await page.locator('#apiKey').fill('synthetic-stage2-key'); await page.locator('#apiKey').press('Tab'); await page.evaluate(() => flushCredentials());
       await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-local'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
       // 点击检测时由失焦触发 Key 保存，检测必须等待保存刷新后继续执行。
@@ -475,7 +550,7 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       const choose = async (text) => {
         await options.locator('#provider').fill(text); await options.locator('#provider').press('Enter'); await options.evaluate(() => flushSaves());
       };
-      await choose(base); await options.locator('#manualModel').check();
+      await choose(base + '/v1'); await options.locator('#manualModel').check();
       await options.locator('#model').fill(''); await options.locator('#model').press('Tab');
       await options.locator('#manualModel').uncheck();
       await options.locator('#btnFetchModels').click();
@@ -624,7 +699,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       assert.equal(await page.evaluate(() => !!globalThis.chrome?.runtime?.id), false);
       assert.equal(await page.locator('#standaloneNotice').isVisible(), true);
       assert.equal(await page.locator('#provider').isDisabled(), false);
-      await page.locator('#provider').fill(base); await page.locator('#provider').press('Enter');
+      await page.locator('#provider').fill(base + '/v1'); await page.locator('#provider').press('Enter');
       await checkProviderPicker(page);
       await setupVault(page);
       await page.locator('#apiKey').fill('fake-file-only-key'); await page.locator('#apiKey').press('Tab');
