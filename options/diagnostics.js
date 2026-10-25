@@ -9,7 +9,8 @@
   $('logsRefresh').addEventListener('click', () => run(load)); $('diagnosticsPanel').addEventListener('toggle', () => { if ($('diagnosticsPanel').open) run(load); });
   $('logsExport').addEventListener('click', () => run(async () => { const result = await load(); const url = URL.createObjectURL(new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = 'localapply-diagnostics.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }));
   $('logsClear').addEventListener('click', () => run(async () => { if (!confirm('确认清空本机运行日志？此操作不影响资料和配置。')) return; const result = await sendMessage('diagnostics:clear', { confirmed: true }); if (!result.ok) throw new Error(result.error); await load(); }));
-  if (location.protocol === 'file:') { $('diagnosticsPanel').hidden = true; return; }
+  // 文件页保留诊断模块与原因提示，但不读取扩展日志或展示不可用的操作。
+  if (location.protocol === 'file:') { $('fileDiagnosticsNotice').hidden = false; $('diagnosticsPanel').querySelector('.row').hidden = true; $('logsOutput').hidden = true; return; }
   // 设置页运行错误统一交给后台脱敏；卡片已有同类处理，避免重复记录。
   function report(error) { sendMessage('diagnostics:uiError', { error: String(error?.message || error || ''), stack: String(error?.stack || '') }).catch(() => {}); }
   if (location.pathname === '/options/options.html') {

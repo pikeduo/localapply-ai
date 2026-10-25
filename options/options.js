@@ -371,10 +371,7 @@ function showInitializationError(error) {
   document.querySelectorAll('input, select, button').forEach((control) => { control.disabled = true; });
 }
 
-// 先初始化既有业务，再挂载工作台；文件解析和密钥机制沿用已验收实现。
+// 先初始化既有业务，再启用模块导航；原表单留在各自模块，不再移动成整页列表。
 init().then(async () => {
-  // 简历入口在首屏，既有设置与填表行为保留。
-  $('.wrap').insertBefore($('#resumeCenter'), $('#aiSettings'));
-  $('.wrap').insertBefore($('#pdfCard'), $('#aiSettings'));
   await initDataManagement(); await renderResumeCenter(); await initWorkspace();
 }).catch(showInitializationError);

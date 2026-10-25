@@ -2,6 +2,30 @@
 let workspaceDatabase = null;
 let workspaceEditing = null;
 let workspaceInitialized = false;
+// 路由只接受固定模块，概览旧链接兼容到我的简历，不接收任意页面地址。
+const workspacePages = {
+  pdfCard: ['导入简历', '选择或拖入 PDF / DOCX，预览后由你决定何时解析。'],
+  aiSettings: ['AI 与模型', '配置服务商、密钥和模型，仅在你主动操作时调用。'],
+  resumeCenter: ['我的简历', '查看资料概览，管理当前档案和独立经历。'],
+  fieldLibrary: ['字段库', '管理字段定义、分类和别名，个人内容独立保存。'],
+  privacySettings: ['数据与备份', '导出、恢复和迁移本地资料，导入前先预览差异。'],
+  diagnosticsPanel: ['诊断与关于', '查看本地运行与报错记录，导出脱敏日志协助排查。'],
+};
+// 兼容旧概览锚点及卡片编辑链接；未指定模块时默认进入导航第一项。
+function workspaceRoute() {
+  const hash = location.hash.slice(1); if (hash === 'workspaceOverview') return 'resumeCenter';
+  if (Object.hasOwn(workspacePages, hash)) return hash;
+  return !hash && new URLSearchParams(location.search).has('profile') ? 'resumeCenter' : 'pdfCard';
+}
+// 切换只隐藏其他模块，不重建表单、不清理文件预览或未保存的字段草稿。
+function showWorkspacePage(target, focus = false) {
+  const key = Object.hasOwn(workspacePages, target) ? target : 'pdfCard';
+  document.querySelectorAll('.workspace-page[data-workspace-page]').forEach((page) => { page.hidden = page.dataset.workspacePage !== key; });
+  document.querySelectorAll('.workspace-sidebar nav a').forEach((link) => { if (link.hash === '#' + key) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current'); });
+  document.getElementById('workspaceTitle').textContent = workspacePages[key][0]; document.getElementById('workspaceDescription').textContent = workspacePages[key][1];
+  document.querySelector('.skip-link').hash = key; document.body.dataset.workspaceActivePage = key;
+  if (focus) { window.scrollTo(0, 0); document.getElementById('workspaceContent').focus({ preventScroll: true }); }
+}
 // DOM 构造始终用文本，字段名、经历标题不得拼接到 HTML。
 function workspaceNode(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
 // 按字段类型创建编辑器；日期保留年/月精度，不能使用 date 输入框静默补日。
@@ -31,9 +55,6 @@ async function refreshWorkspace() {
   document.getElementById('overviewEntries').textContent = String(database.entries.filter((item) => item.profileId === profileId).length);
   document.getElementById('overviewRules').textContent = String(database.mappingRules.filter((item) => item.profileId === profileId).length);
   document.getElementById('managerWelcome').hidden = database.fieldValues.some((item) => item.profileId === profileId && LocalApplyProfileView.hasValue(item.value));
-  const settings = (await getState()).settings; const provider = LocalApplyProviders.resolve(settings);
-  const vault = settings.vault || {}; const saved = !!settings.keyStatus?.[settings.provider]; const locked = vault.enabled && !vault.unlocked && !vault.localProviders?.includes(settings.provider);
-  document.getElementById('workspaceMode').textContent = !navigator.onLine ? '当前离线 · 本地资料仍可用' : !settings.model || provider.requiresKey !== false && !saved ? '仅本地使用 · AI 配置可跳过' : 'AI 可选 · ' + provider.name + ' · ' + (locked ? '密钥已锁定' : '按需调用');
   renderFieldLibrary();
 }
 // 当前档案删除与全局删除明确分开；公共内置定义只能从个人展示中移除。
@@ -82,15 +103,20 @@ function cancelFieldEdit() { workspaceEditing = null; document.getElementById('f
 async function locateWorkspace() {
   const params = new URLSearchParams(location.search); const profileId = params.get('profile');
   if (profileId && workspaceDatabase.profiles.some((item) => item.profileId === profileId)) { const next = await getState(); next.activeProfileId = profileId; await saveState(next); document.getElementById('entryProfile').value = profileId; await reloadDataState(); }
-  const key = params.get('section'); if (key?.startsWith('group:')) { document.getElementById('centerGroup').value = key.slice(6); document.getElementById('centerGroup').dispatchEvent(new Event('change')); }
-  else if (key?.startsWith('entry:')) { const entry = [...document.querySelectorAll('[data-entry-id]')].find((item) => item.dataset.entryId === key.slice(6)); if (entry) { entry.classList.add('is-target'); entry.scrollIntoView({ block: 'center' }); } }
-  if (!key && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: 'start' });
+  const key = params.get('section'); if (workspaceRoute() === 'resumeCenter' && key?.startsWith('group:')) { document.getElementById('centerGroup').value = key.slice(6); document.getElementById('centerGroup').dispatchEvent(new Event('change')); }
+  else if (workspaceRoute() === 'resumeCenter' && key?.startsWith('entry:')) { const entry = [...document.querySelectorAll('[data-entry-id]')].find((item) => item.dataset.entryId === key.slice(6)); if (entry) { entry.classList.add('is-target'); entry.scrollIntoView({ block: 'center' }); } }
 }
 // 工作台导航、字段定义和刷新入口只挂载一次，沿用旧设置页的初始化顺序。
 async function initWorkspace() {
   if (workspaceInitialized) return; workspaceInitialized = true;
-  document.querySelector('.wrap').insertBefore(document.getElementById('fieldLibrary'), document.getElementById('pdfCard'));
-  document.querySelectorAll('.workspace-sidebar nav a').forEach((link) => link.addEventListener('click', () => { document.querySelectorAll('.workspace-sidebar nav a').forEach((item) => item.removeAttribute('aria-current')); link.setAttribute('aria-current', 'location'); if (link.hash === '#diagnosticsPanel') document.getElementById('diagnosticsPanel').open = true; }));
+  // 导航和引导链接共用入口；从导入页检测能力时显示 AI 模块，避免结果藏在其他页面。
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest('a[href^="#"]'); const detecting = event.target.closest('#btnDetectImport');
+    if ((!link && !detecting) || event.defaultPrevented || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const key = detecting ? 'aiSettings' : link.hash.slice(1); if (!Object.hasOwn(workspacePages, key)) return;
+    event.preventDefault(); if (location.hash !== '#' + key) history.pushState(null, '', '#' + key); showWorkspacePage(key, true);
+  });
+  window.addEventListener('hashchange', () => showWorkspacePage(workspaceRoute(), true));
   document.getElementById('fieldSearch').addEventListener('input', renderFieldLibrary);
   document.getElementById('fieldForm').addEventListener('input', () => { document.getElementById('fieldForm').dataset.dirty = 'true'; }); document.getElementById('fieldCancel').addEventListener('click', cancelFieldEdit);
   document.getElementById('fieldForm').addEventListener('submit', async (event) => { event.preventDefault(); const button = document.getElementById('fieldSave'); button.disabled = true; try {
@@ -103,7 +129,6 @@ async function initWorkspace() {
   document.getElementById('centerGroup').addEventListener('change', () => { const group = document.getElementById('centerGroup').value; const heading = [...document.querySelectorAll('.center-group-heading')].find((item) => item.dataset.group === group); if (heading) { heading.scrollIntoView({ block: 'center' }); heading.classList.add('is-target'); } });
   document.getElementById('centerRefresh').addEventListener('click', async () => { try { if (workspaceDirty() && !confirm('存在未保存编辑，确认丢弃并刷新本地资料？')) return; cancelFieldEdit(); await flushSaves(); await reloadDataState(); document.getElementById('centerStatus').textContent = '已刷新本地资料。'; } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });
   document.getElementById('entryProfile').addEventListener('change', async () => { const profileId = document.getElementById('entryProfile').value; try { if (workspaceDirty() && !confirm('切换档案将丢弃未保存编辑，是否继续？')) { document.getElementById('entryProfile').value = workspaceDatabase.activeProfileId; return; } cancelFieldEdit(); const next = await getState(); next.activeProfileId = profileId; await saveState(next); await reloadDataState(); } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });
-  window.addEventListener('offline', () => refreshWorkspace()); window.addEventListener('online', () => refreshWorkspace());
   window.addEventListener('beforeunload', (event) => { if (workspaceDirty()) { event.preventDefault(); event.returnValue = ''; } });
-  await refreshWorkspace(); await locateWorkspace();
+  await refreshWorkspace(); showWorkspacePage(workspaceRoute()); await locateWorkspace(); document.body.dataset.workspaceReady = 'true';
 }

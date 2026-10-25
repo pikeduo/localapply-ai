@@ -127,6 +127,7 @@ test('新版阶段三：日期电话、覆盖确认、手填学习与选择性 A
       assert.ok((await frame.locator('#smartExcluded').textContent()).includes('同步更新在线简历')); await page.screenshot({path:path.join(testRoot,'stage3-v2-composites.png'),fullPage:true});
     });
     await t.test('AI 仅发送所选未知字段，取消中止请求并可再次使用', async () => {
+      await workspacePage(options, 'aiSettings');
       await options.locator('#provider').fill(api.base+'/v1'); await options.locator('#provider').press('Enter'); await options.evaluate(()=>flushSaves()); await options.locator('#apiKey').fill('synthetic-v2-key'); await options.locator('#saveKey').click(); await options.evaluate(()=>flushCredentials()); await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-field-model'); await options.locator('#model').press('Tab'); await options.evaluate(()=>flushSaves());
       await frame.locator('#smartAI').click(); await frame.waitForFunction(()=>document.getElementById('smartStatus').className==='err'); assert.equal(api.calls.length,0);
       const card = frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'是否接受调剂'})}); await card.locator('.smart-ai-check').check(); await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'});
@@ -272,8 +273,16 @@ async function selectUnknownAI(ui) {
   for (let index = 0; index < await checks.count(); index++) await checks.nth(index).check();
 }
 
+// 独立模块通过真实导航切换；旧用例不再依赖所有设置控件同时可见。
+async function workspacePage(page, target) {
+  await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+  await page.locator('.workspace-sidebar nav a[href="#' + target + '"]').click();
+  await page.locator('[data-workspace-page="' + target + '"]').waitFor({ state: 'visible' });
+}
+
 // 通过真实控件建立保险库，测试口令及 Key 全为合成数据。
 async function setupVault(page) {
+  await workspacePage(page, 'aiSettings');
   await page.locator('#keyProtection').evaluate((details) => { details.open = true; });
   await page.locator('#vaultPassword').fill('synthetic-password');
   await page.locator('#vaultConfirm').fill('synthetic-password');
@@ -319,6 +328,8 @@ async function checkProviderPicker(page) {
 
 // 测试模型只识别已知合成挑战；文件和图片仍由生产代码真实生成，其他业务调用不伪造。
 async function detectModel(page) {
+  const previous = await page.evaluate(() => document.body.dataset.workspaceActivePage);
+  await workspacePage(page, 'aiSettings');
   await page.evaluate(() => {
     const original = LocalApplyProbes.createProbe;
     LocalApplyProbes.createProbe = () => original('73185204');
@@ -326,6 +337,7 @@ async function detectModel(page) {
   await page.locator('#btnDetectCapabilities').click();
   await page.waitForFunction(() => !document.getElementById('btnDetectCapabilities').disabled);
   assert.match(await page.locator('#capabilityStatus').textContent(), /图片 识别通过/);
+  if (previous !== 'aiSettings') await workspacePage(page, previous);
 }
 
 // 两种真实入口均验证根路径 Responses、文件能力、确认导入及整个浏览器重启。
@@ -341,6 +353,7 @@ for (const withExtension of [true, false]) {
         : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
       let page = await context.newPage(); await page.goto(url);
       await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+      await workspacePage(page, 'aiSettings');
       await page.locator('#provider').fill(api.base + '/'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
       assert.equal(await page.locator('#customBase').inputValue(), api.base);
       await page.locator('#apiKey').fill('synthetic-responses-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
@@ -354,6 +367,7 @@ for (const withExtension of [true, false]) {
       assert.equal(api.calls.at(-1).authorization, 'Bearer synthetic-responses-key');
       await detectModel(page);
       api.modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成 Responses 姓名', evidence: '合成 Responses 姓名', page: 1 } } });
+      await workspacePage(page, 'pdfCard');
       await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
       await page.locator('#sendResume').waitFor({ state: 'visible' }); await page.locator('#sendResume').click();
       await page.locator('#importRow').waitFor({ state: 'visible' });
@@ -366,6 +380,7 @@ for (const withExtension of [true, false]) {
       assert.equal(await page.evaluate(async () => (await sendMessage('localapply:read')).database.fieldValues.some((row) => row.value === '合成 Responses 姓名')), true);
       assert.equal(api.calls.at(-1).imageCount, 1);
       const requests = api.calls.length;
+      await workspacePage(page, 'aiSettings');
       await page.locator('#apiProtocol').selectOption('chat-completions'); await page.evaluate(() => flushSaves());
       assert.equal((await page.evaluate(() => sendMessage('wsa:resumeRoute', { format: 'pdf' }))).ok, false);
       await page.locator('#apiProtocol').selectOption('responses'); await page.evaluate(() => flushSaves());
@@ -406,6 +421,7 @@ for (const withExtension of [true, false]) {
     };
     // 真实上传并本地预览，证明明确发送前没有聊天请求。
     const prepare = async (name, buffer) => {
+      await workspacePage(page, 'pdfCard');
       const count = api.calls.length;
       await page.locator('#pdfFile').setInputFiles({ name, mimeType: name.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer });
       await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
@@ -436,6 +452,7 @@ for (const withExtension of [true, false]) {
       page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url);
       await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
       await t.test('首次可直接填写并保存 Key，无需设置或展开安全口令', async () => {
+        await workspacePage(page, 'aiSettings');
         assert.equal(await page.locator('#apiKey').isEditable(), true);
         assert.equal(await page.locator('#keyProtection').evaluate((details) => details.open), false);
         await page.locator('#provider').fill(api.base + '/v1'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
@@ -470,6 +487,7 @@ for (const withExtension of [true, false]) {
         assert.deepEqual((await call('wsa:getState')).state.settings.apiKeys, {});
       });
       await t.test('拖入 PDF/DOCX 自动展开页面预览，取消/错误文件不调用模型', async () => {
+        await workspacePage(page, 'pdfCard');
         const count = api.calls.length; const before = (await call('localapply:read')).database;
         for (const [name, buffer] of [['drag-resume.pdf', fixtures.pdf()], ['drag-resume.docx', fixtures.docx()]]) {
           await page.evaluate(({ name, bytes }) => {
@@ -514,12 +532,14 @@ for (const withExtension of [true, false]) {
         assert.equal(db.fieldValues.find((r) => r.fieldId === 'builtin.name' && r.entryId === null).value, 'Confirmed Person');
       });
       await t.test('真实文本 PDF 与第二档案隔离，基本信息可在中心编辑', async () => {
+        await workspacePage(page, 'resumeCenter');
         await page.locator('#newProfileName').fill('第二份简历'); await page.locator('#createResumeProfile').click();
         await page.waitForFunction((id) => document.getElementById('targetProfile').value !== id, primary);
         await prepare('resume.pdf', fixtures.pdf()); await analyze(); await confirm();
         const db = (await call('localapply:read')).database; const second = db.activeProfileId;
         assert.equal(db.entries.filter((e) => e.profileId === primary).length, 5); assert.equal(db.entries.filter((e) => e.profileId === second).length, 5);
         assert.equal(db.fieldValues.find((v) => v.profileId === second && v.fieldId === 'builtin.name' && v.entryId === null).value, 'Test Person');
+        await workspacePage(page, 'resumeCenter');
         await page.locator('#resumeCenter details').evaluate((details) => { details.open = true; });
         await page.getByRole('textbox', { name: '简历中心 · 姓名', exact: true }).fill('Center edit');
         await page.getByRole('textbox', { name: '简历中心 · 姓名', exact: true }).press('Tab');
@@ -527,6 +547,7 @@ for (const withExtension of [true, false]) {
         assert.equal((await call('localapply:read')).database.fieldValues.find((v) => v.profileId === second && v.fieldId === 'builtin.name' && v.entryId === null).evidence, undefined);
       });
       await t.test('畸形文档、无效 AI 和取消进行中的请求均不写入资料', async () => {
+        await workspacePage(page, 'pdfCard');
         const before = (await call('localapply:read')).database;
         await page.locator('#pdfFile').setInputFiles({ name: 'bad.docx', mimeType: 'application/octet-stream', buffer: Buffer.from('not a zip') });
         await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('读取失败'));
@@ -570,14 +591,17 @@ for (const withExtension of [true, false]) {
         const route = (await call('wsa:resumeRoute', { format: 'pdf' })).route; const count = api.calls.length;
         const oldPath = await page.evaluate(async (route) => sendMessage('wsa:aiExtractResume', { payload: { requestId: crypto.randomUUID(), type: 'pdf', mode: route.mode, routeToken: route.token, text: '不能通过文字入口解析简历' } }), route);
         assert.equal(oldPath.ok, false); assert.equal(api.calls.length, count);
+        await workspacePage(page, 'aiSettings');
         await page.locator('#manualModel').check();
         await page.locator('#model').fill('unprobed-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
         await prepare('blocked.pdf', fixtures.pdf()); await page.locator('#sendResume').click();
         await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('尚未通过'));
         assert.equal(api.calls.length, count); await page.locator('#cancelResume').click();
+        await workspacePage(page, 'aiSettings');
         await page.locator('#model').fill('synthetic-local'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
       });
       await t.test('模型忽略附件但返回 HTTP 200 时也禁止发送真实简历', async () => {
+        await workspacePage(page, 'aiSettings');
         api.modelApi.probeAnswer = '支持图片和文件';
         await page.locator('#btnDetectCapabilities').click(); await page.waitForFunction(() => !document.getElementById('btnDetectCapabilities').disabled);
         assert.match(await page.locator('#capabilityStatus').textContent(), /识别未通过/);
@@ -591,6 +615,7 @@ for (const withExtension of [true, false]) {
       await context.close(); context = await launch(profile, withExtension);
       page = await context.newPage(); await page.goto(url); await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
       await t.test('整个浏览器重启后资料不变、保险库锁定且可再次解锁', async () => {
+        await workspacePage(page, 'aiSettings');
         assert.deepEqual((await call('localapply:read')).database, before);
         const s = (await call('wsa:getState')).state.settings; assert.equal(s.vault.unlocked, false); assert.equal(s.keyStatus[s.provider], true);
         await page.locator('#keyProtection').evaluate((details) => { details.open = true; });
@@ -605,6 +630,7 @@ for (const withExtension of [true, false]) {
         assert.equal((await call('wsa:getState')).state.settings.vault.enabled, false);
         await context.close(); context = await launch(profile, withExtension);
         page = await context.newPage(); await page.goto(url); await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+        await workspacePage(page, 'aiSettings');
         assert.equal(await page.locator('#apiKey').isEditable(), true);
         assert.equal((await call('wsa:getState')).state.settings.vault.enabled, false);
         await page.locator('#btnFetchModels').click(); await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('已获取'));
@@ -677,6 +703,7 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       assert.ok(!db.fieldValues.some((row) => row.value === '合成动态值'));
     });
     await t.test('重复经历管理 UI 保存两段教育与项目', async () => {
+      await workspacePage(options, 'resumeCenter');
       for (const kind of ['education', 'project']) {
         await options.locator('#entryKind').selectOption(kind);
         for (let index = 0; index < 2; index++) {
@@ -690,6 +717,7 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       await options.waitForFunction(() => document.getElementById('entriesList').textContent.includes('合成测试学院'));
     });
     await t.test('服务商输入支持 DeepSeek/Qwen 和 IP 自动创建，Key/模型隔离且本地接口可调用', async () => {
+      await workspacePage(options, 'aiSettings');
       // 回车提交使用真实 UI 事件；等待本页保存队列完成。
       const choose = async (text) => {
         await options.locator('#provider').fill(text); await options.locator('#provider').press('Enter');
@@ -813,6 +841,7 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       }
     });
     await t.test('真实备份下载、校验预览和恢复，无 API Key/原文件', async () => {
+      await workspacePage(options, 'privacySettings');
       const downloadEvent = options.waitForEvent('download'); await options.locator('#btnBackup').click();
       const download = await downloadEvent; const text = await fs.readFile(await download.path(), 'utf8');
       assert.ok(!text.includes('fake-browser-only-key')); assert.ok(!text.includes('apiKeys'));
@@ -915,6 +944,7 @@ test('阶段三：授权、智能字段学习、真实框架、规则管理与�
       for (const [fieldId, value] of [['builtin.degree',degree], ['builtin.school',school]]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId, entryId: entry.result, value } } });
     }
     for (const [label, type, value, choices] of [['可到岗日期','date','2027-01-12',[]], ['毕业月份','date','2028-06',[]], ['应聘身份','select','应届生',['应届生','社会招聘']], ['具备实习经历','boolean',true,[]], ['可出差城市','multiSelect',['合成甲城','合成乙城'],['合成甲城','合成乙城']], ['意向方向','select','技术',['技术','运营']]]) await rpc(options, 'localapply:command', { request: { action: 'createField', payload: { profileId, definition: { label, type, group: '求职', options: choices }, value } } });
+    await workspacePage(options, 'aiSettings');
     await options.locator('#provider').fill(api.base + '/v1'); await options.locator('#provider').press('Enter'); await options.evaluate(() => flushSaves());
     await options.locator('#apiKey').fill('synthetic-phase3-key'); await options.locator('#saveKey').click(); await options.evaluate(() => flushCredentials());
     await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-field-model'); await options.locator('#model').press('Tab'); await options.evaluate(() => flushSaves());
@@ -1057,6 +1087,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
     page = await context.newPage(); await page.goto(fileUrl);
     await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
     await t.test('无扩展接口时仍能设置并在真实 CORS 下获取模型及测试连接', async () => {
+      await workspacePage(page, 'aiSettings');
       assert.equal(await page.evaluate(() => !!globalThis.chrome?.runtime?.id), false);
       assert.equal(await page.locator('#standaloneNotice').isVisible(), true);
       assert.equal(await page.locator('#provider').isDisabled(), false);
@@ -1085,6 +1116,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
     });
     await t.test('本地文件 PDF 通过读取、视觉假接口、校对确认入库，原文件不持久化', async () => {
       await detectModel(page);
+      await workspacePage(page, 'pdfCard');
       modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成文件姓名', evidence: '合成文件姓名', page: 1 } } });
       await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
       await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
@@ -1103,8 +1135,10 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       modelApi.chatContent = '正常';
     });
     await t.test('文件页重复经历和完整备份可操作，默认不导出 API 配置', async () => {
+      await workspacePage(page, 'resumeCenter');
       await page.locator('#entryTitle').fill('合成文件教育'); await page.locator('#btnAddEntry').click();
       await page.locator('#entriesList .card').first().waitFor();
+      await workspacePage(page, 'privacySettings');
       const downloadEvent = page.waitForEvent('download'); await page.locator('#btnBackup').click();
       const download = await downloadEvent; const text = await fs.readFile(await download.path(), 'utf8');
       assert.ok(text.includes('合成文件教育')); assert.ok(!text.includes('fake-file-only-key'));
@@ -1135,6 +1169,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       await other.close();
     });
     await t.test('服务端不允许文件来源时只提示网络/CORS，不禁用资料管理', async () => {
+      await workspacePage(page, 'aiSettings');
       modelApi.allowCors = false;
       await page.locator('#btnFetchModels').click();
       await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('CORS'));
@@ -1229,6 +1264,7 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
       const backup = (await rpc(options,'localapply:exportBackup')).backup; assert.ok(!JSON.stringify(backup).includes('page.presence'));
     });
     await t.test('AI 识别保留为可选操作，采用来源后可直接填写未知字段', async () => {
+      await workspacePage(options, 'aiSettings');
       await options.locator('#provider').fill(api.base + '/v1'); await options.locator('#provider').press('Enter'); await options.evaluate(() => flushSaves());
       await options.locator('#apiKey').fill('synthetic-direct-fill-key'); await options.locator('#saveKey').click(); await options.evaluate(() => flushCredentials());
       await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-field-model'); await options.locator('#model').press('Tab'); await options.evaluate(() => flushSaves());
@@ -1307,9 +1343,11 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
       assert.equal(await page.locator('#name').inputValue(), ''); assert.equal(api.calls.length, 0); const opened = context.waitForEvent('page'); await frame.locator('#welcomeSkipAI').click(); const editor = await opened; await editor.waitForLoadState(); assert.ok(editor.url().includes('options/options.html?profile=')); assert.ok(editor.url().endsWith('#resumeCenter')); await editor.close();
     });
     await t.test('工作台新增类型化字段及值，保存前不入库，无 Key 可用', async () => {
+      await workspacePage(options, 'fieldLibrary');
       await options.locator('#fieldCreate').evaluate((element) => { element.open = true; }); await options.locator('#fieldLabel').fill('合成是否调剂'); await options.locator('#fieldType').selectOption('boolean');
       assert.ok(!(await rpc(options, 'localapply:read')).database.fieldDefinitions.some((item) => item.label === '合成是否调剂')); await options.locator('#fieldSave').click(); await options.waitForFunction(() => document.getElementById('fieldStatus').textContent.includes('已保存'));
       const db = (await rpc(options, 'localapply:read')).database; fieldId = db.fieldDefinitions.find((item) => item.label === '合成是否调剂').fieldId; assert.equal(db.fieldValues.find((item) => item.fieldId === fieldId).value, null);
+      await workspacePage(options, 'resumeCenter');
       await options.getByLabel('简历中心 · 合成是否调剂', { exact: true }).selectOption('false'); await options.waitForFunction(() => document.getElementById('centerStatus').textContent.includes('已保存')); await options.evaluate(() => flushSaves()); assert.equal(await value(fieldId), false);
       for (const [id, content] of [['builtin.name','合成阶段四姓名'],['builtin.phone','13800000000'],['builtin.skills','合成中文技能：DOM 与测试']]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: id, value: content } } });
       for (let index = 0; index < 2; index++) { const entryId = (await rpc(options, 'localapply:command', { request: { action: 'createEntry', payload: { profileId, kind: 'education', title: '同名合成教育' } } })).result; if (!index) schoolId = entryId; await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, entryId, fieldId: 'builtin.school', value: '合成学院' + index } } }); }
@@ -1347,8 +1385,9 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
       await frame.locator('#autoTab').focus(); await page.keyboard.press('ArrowRight'); assert.equal(await frame.locator('#resumeTab').getAttribute('aria-selected'), 'true'); await page.keyboard.press('Escape'); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 0); await open(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), null);
     });
     await t.test('工作台字段修改和删除有确认，未保存编辑不能被刷新覆盖', async () => {
+      await workspacePage(options, 'fieldLibrary');
       await options.locator('#fieldSearch').fill('合成是否调剂'); const row = options.locator('.library-row').filter({ hasText: '合成是否调剂' }); await row.getByRole('button', { name: '编辑定义', exact: true }).click(); await options.locator('#fieldLabel').fill('合成调剂修改名');
-      options.once('dialog', (dialog) => dialog.dismiss()); await options.locator('#centerRefresh').click(); assert.equal(await options.locator('#fieldLabel').inputValue(), '合成调剂修改名');
+      await workspacePage(options, 'resumeCenter'); options.once('dialog', (dialog) => dialog.dismiss()); await options.locator('#centerRefresh').click(); assert.equal(await options.locator('#fieldLabel').inputValue(), '合成调剂修改名'); await workspacePage(options, 'fieldLibrary');
       options.once('dialog', (dialog) => dialog.accept()); await options.locator('#fieldSave').click(); await options.waitForFunction(() => [...document.querySelectorAll('.center-field')].some((item) => item.textContent.includes('合成调剂修改名'))); assert.equal(await value(fieldId), false);
       await options.locator('#fieldSearch').fill('合成调剂修改名'); const updated = options.locator('.library-row').filter({ hasText: '合成调剂修改名' }); options.once('dialog', (dialog) => { assert.ok(dialog.message().includes('1 个档案')); dialog.dismiss(); }); await updated.getByRole('button', { name: '彻底删除字段', exact: true }).click(); assert.equal(await value(fieldId), false);
       options.once('dialog', (dialog) => dialog.accept()); await updated.getByRole('button', { name: '彻底删除字段', exact: true }).click(); await options.waitForFunction(() => document.getElementById('fieldStatus').textContent.includes('已删除')); assert.equal(await value(fieldId), undefined);
@@ -1360,6 +1399,7 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
       assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => __submitCount), 0); assert.deepEqual(errors, []);
     });
     await t.test('经历新增修改与删除按稳定 ID 生效，取消删除保留所有值', async () => {
+      await workspacePage(options, 'resumeCenter');
       await options.locator('#entryKind').selectOption('project'); await options.locator('#entryTitle').fill('合成阶段四项目'); await options.locator('#btnAddEntry').click();
       const project = options.locator('#entriesList .entry-card').filter({ hasText: '合成阶段四项目' }); await project.waitFor(); const entryId = await project.getAttribute('data-entry-id');
       await project.getByLabel('经历字段', { exact: true }).selectOption('builtin.skills'); await project.getByLabel('经历字段值', { exact: true }).fill('合成项目成果'); await project.getByRole('button', { name: '保存字段', exact: true }).click(); await options.waitForFunction((id) => [...document.querySelectorAll('[data-entry-id]')].find((item) => item.dataset.entryId === id)?.textContent.includes('合成项目成果'), entryId);
@@ -1389,3 +1429,50 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
     });
   } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
 });
+
+// 两种入口验证真实独立模块路由，不通过修改 hidden 或强制点击绕过导航。
+for (const withExtension of [true, false]) {
+  test(`工作台模块导航：${withExtension ? '扩展' : 'file://'}顺序、隔离、草稿和地址恢复`, { timeout: 45000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'workspace-navigation-')); const api = await serve(); let context;
+    const errors = [];
+    try {
+      context = await launch(profile, withExtension);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url);
+      await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+      assert.deepEqual(await page.locator('.workspace-sidebar nav a').allTextContents(), ['导入简历','AI 与模型','我的简历','字段库','数据与备份','诊断与关于']);
+      assert.equal(await page.locator('.workspace-page:visible').count(), 1); assert.equal(await page.locator('#pdfCard').isVisible(), true);
+      assert.equal(await page.locator('#workspaceMode').count(), 0); assert.equal(await page.locator('.workspace-sidebar small').count(), 0);
+      assert.equal(await page.locator('#workspaceOverview').isVisible(), false); assert.equal(await page.locator('#provider').isVisible(), false);
+      await page.screenshot({ path: path.join(testRoot, `navigation-import-${withExtension ? 'extension' : 'file'}.png`) });
+      const fixtures = require('./resume-fixtures.cjs');
+      await page.locator('#pdfFile').setInputFiles({ name: 'navigation.pdf', mimeType: 'application/pdf', buffer: fixtures.pdf() });
+      await page.locator('#sourcePreview img').first().waitFor({ state: 'visible' });
+      await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
+      await workspacePage(page, 'aiSettings'); assert.equal(await page.locator('#sourcePreview img').isVisible(), false);
+      for (const key of ['resumeCenter','fieldLibrary','privacySettings','diagnosticsPanel']) {
+        await workspacePage(page, key); assert.equal(await page.locator('.workspace-page:visible').count(), 1);
+        assert.equal(await page.locator('.workspace-sidebar nav a[aria-current="page"]').getAttribute('href'), '#' + key);
+        assert.equal(await page.locator('#workspaceOverview').isVisible(), key === 'resumeCenter');
+      }
+      if (!withExtension) { assert.equal(await page.locator('#fileDiagnosticsNotice').isVisible(), true); assert.equal(await page.locator('#logsRefresh').isVisible(), false); }
+      else { await page.locator('#logsRefresh').click(); await page.waitForFunction(() => document.getElementById('logsOutput').textContent.length > 0); }
+      await workspacePage(page, 'pdfCard'); assert.equal(await page.locator('#sourcePreview img').isVisible(), true); assert.match(await page.locator('#resumeFileInfo').textContent(), /navigation.pdf/);
+      await workspacePage(page, 'fieldLibrary'); await page.locator('#fieldCreate summary').click(); await page.locator('#fieldLabel').fill('合成导航草稿');
+      await workspacePage(page, 'resumeCenter'); assert.equal(await page.locator('#workspaceOverview').isVisible(), true);
+      assert.equal(await page.locator('#workspaceOverview').evaluate((element) => element.closest('[data-workspace-page]').dataset.workspacePage), 'resumeCenter');
+      await page.screenshot({ path: path.join(testRoot, `navigation-resume-${withExtension ? 'extension' : 'file'}.png`) });
+      await page.goBack(); await page.locator('#fieldLibrary').waitFor({ state: 'visible' }); assert.equal(await page.locator('#fieldLabel').inputValue(), '合成导航草稿');
+      await page.goForward(); await page.locator('#resumeCenter').waitFor({ state: 'visible' });
+      await workspacePage(page, 'fieldLibrary'); await page.locator('#fieldCancel').click();
+      const aiLink = page.locator('.workspace-sidebar nav a[href="#aiSettings"]'); await aiLink.focus(); await aiLink.press('Enter'); await page.locator('#aiSettings').waitFor({ state: 'visible' });
+      await page.reload(); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true'); assert.equal(await page.locator('#aiSettings').isVisible(), true);
+      await page.goto(url + '#workspaceOverview'); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true'); assert.equal(await page.locator('#resumeCenter').isVisible(), true);
+      await page.goto(url + '#invalid-module'); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true'); assert.equal(await page.locator('#pdfCard').isVisible(), true);
+      await page.locator('#btnDetectImport').click(); await page.locator('#aiSettings').waitFor({ state: 'visible' }); await page.waitForFunction(() => !document.getElementById('btnDetectCapabilities').disabled); assert.match(await page.locator('#capabilityStatus').textContent(), /检测未完成/);
+      await page.setViewportSize({ width: 390, height: 844 }); await workspacePage(page, 'privacySettings'); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      assert.equal(api.calls.length, 0); assert.equal(api.modelRequests.length, 0); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
