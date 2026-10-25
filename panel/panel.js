@@ -1,4 +1,4 @@
-// 悬浮卡片只协调档案与简历预览；填写仍复用阶段三的确认/验证业务。
+// 悬浮卡片协调档案与简历预览；按钮直接填入本地匹配，仍复用阶段三的回读验证。
 (function (global) {
   'use strict';
   const $ = (id) => document.getElementById(id); let database; let shown = false;
@@ -10,7 +10,7 @@
   async function refresh() {
     const context = await sendMessage('panel:context'); if (!context.ok) throw new Error(context.error);
     global.LocalApplyPanelContext = { id: context.tabId };
-    $('panelStatus').textContent = context.presence?.kind === 'application' ? '已检测到网申表单。确认扫描后可匹配并预览填写。' : '当前页面暂未识别为网申表单，可手动授权扫描。';
+    $('panelStatus').textContent = context.presence?.kind === 'application' ? '已检测到网申表单，点击即可自动填写。' : '当前页面暂未识别为网申表单，可点击自动填写或仅扫描字段。';
     const result = await sendMessage('localapply:read'); if (!result.ok) throw new Error(result.error); database = result.database;
     $('profileSel').replaceChildren(...database.profiles.map((profile) => new Option(profile.name, profile.profileId))); $('profileSel').value = database.activeProfileId;
     if (shown) renderResume();

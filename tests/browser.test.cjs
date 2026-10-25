@@ -1020,15 +1020,19 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
     await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height > 300);
     const frame = await panelLoaded;
     assert.ok(frame, '悬浮扩展 iframe 应已加载'); await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
-    await t.test('右上角两页卡片加载，确认扫描及单项填写成功', async () => {
+    await t.test('点击即扫描并批量填写，单项填写也无需授权或核对', async () => {
       assert.equal(await frame.locator('.panel-tabs button').count(), 2);
-      await frame.locator('#smartPageConsent').check(); await frame.locator('#smartScan').click();
-      const card = frame.locator('.smart-row').filter({ has: frame.getByRole('heading', { name: '姓名 · 已匹配', exact: true }) });
-      await card.waitFor(); await card.getByText('单项填写预览', { exact: true }).click();
+      assert.equal(await frame.locator('#smartPageConsent,#smartFillConsent,#smartFillReview').count(), 0);
       assert.equal(await page.locator('#applicant-name').inputValue(), '');
-      await frame.locator('#smartFillConsent').check(); await frame.locator('#smartFillConfirm').click();
+      await frame.getByRole('button', { name: '自动填写此页面', exact: true }).click();
       await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('填写完成'));
       assert.equal(await page.locator('#applicant-name').inputValue(), '合成卡片姓名'); assert.equal(await page.evaluate(() => __submitCount), 0);
+      assert.equal(await page.locator('#applicant-phone').inputValue(), '13800000000'); assert.equal(await page.locator('#preferred-contact').inputValue(), ''); assert.equal(api.calls.length, 0);
+      await page.locator('#applicant-name').fill('');
+      const card = frame.locator('.smart-row').filter({ has: frame.getByRole('heading', { name: '姓名 · 填写成功', exact: true }) });
+      await card.getByRole('button', { name: '单项填写', exact: true }).click();
+      await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      assert.equal(await page.locator('#applicant-name').inputValue(), '合成卡片姓名');
       await page.screenshot({ path: path.join(testRoot,'floating-autofill.png'), fullPage: false });
     });
     await t.test('简历预览按当前档案展示，联系方式默认遮挡', async () => {
@@ -1058,6 +1062,38 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
       const downloadPromise = page.waitForEvent('download'); await frame.locator('#logsExport').click(); const download = await downloadPromise;
       assert.equal(download.suggestedFilename(), 'localapply-diagnostics.json');
       const backup = (await rpc(options,'localapply:exportBackup')).backup; assert.ok(!JSON.stringify(backup).includes('page.presence'));
+    });
+    await t.test('AI 识别保留为可选操作，采用来源后可直接填写未知字段', async () => {
+      await options.locator('#provider').fill(api.base + '/v1'); await options.locator('#provider').press('Enter'); await options.evaluate(() => flushSaves());
+      await options.locator('#apiKey').fill('synthetic-direct-fill-key'); await options.locator('#saveKey').click(); await options.evaluate(() => flushCredentials());
+      await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-field-model'); await options.locator('#model').press('Tab'); await options.evaluate(() => flushSaves());
+      // Mock 只返回已发送的字段和来源引用，不能生成个人实际值。
+      api.modelApi.fieldReply = (payload) => JSON.stringify({ suggestions: [{ scanId: payload.fields.find((field) => field.label === '便捷联系号码').scanId, existingFieldId: 'builtin.phone', definition: null, sourceRef: payload.sources.find((source) => source.fieldId === 'builtin.phone' && source.hasValue).ref, confidence: 0.99 }] });
+      await frame.locator('#autoTab').click(); await frame.locator('#smartAI').click();
+      await frame.waitForFunction(() => !document.getElementById('smartAIReview').hidden || document.getElementById('smartStatus').className === 'err');
+      assert.equal(await frame.locator('#smartAIReview').isVisible(), true, await frame.locator('#smartStatus').textContent());
+      assert.equal(api.calls.length, 0); assert.equal(await page.locator('#preferred-contact').inputValue(), '');
+      await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click();
+      await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('AI 返回 1'));
+      assert.equal(await page.locator('#preferred-contact').inputValue(), '');
+      const card = frame.locator('.smart-row').filter({ has: frame.locator('h4').filter({ hasText: '便捷联系号码' }) });
+      await card.locator('.smart-apply-suggestion').click(); await card.getByRole('button', { name: '单项填写', exact: true }).click();
+      await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      assert.equal(await page.locator('#preferred-contact').inputValue(), '13800000000'); assert.equal(api.calls.length, 1); assert.equal(await page.evaluate(() => __submitCount), 0);
+    });
+    await t.test('旧界面的扫描与填写确认流程继续兼容', async () => {
+      const sidebar = await context.newPage(); await sidebar.goto(`chrome-extension://${extensionId}/sidepanel/sidepanel.html`);
+      await sidebar.locator('#profileSel option').first().waitFor({ state: 'attached' }); await sidebar.locator('#tabSmartBtn').click(); await page.bringToFront();
+      await sidebar.locator('#smartScan').click(); await sidebar.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('请先勾选授权'));
+      await sidebar.locator('#smartPageConsent').check(); await sidebar.locator('#smartScan').click();
+      const card = sidebar.locator('.smart-row').filter({ has: sidebar.getByRole('heading', { name: '姓名 · 已匹配', exact: true }) });
+      await card.waitFor(); await sidebar.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      await page.locator('#applicant-name').fill(''); await card.getByRole('button', { name: '单项填写预览', exact: true }).click();
+      assert.equal(await page.locator('#applicant-name').inputValue(), ''); await sidebar.locator('#smartFillConfirm').click();
+      await sidebar.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('勾选确认')); assert.equal(await page.locator('#applicant-name').inputValue(), '');
+      await sidebar.locator('#smartFillConsent').check(); await sidebar.locator('#smartFillConfirm').click();
+      await sidebar.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('填写完成'));
+      assert.equal(await page.locator('#applicant-name').inputValue(), '合成卡片姓名'); await sidebar.close();
     });
     await t.test('关闭与导航撤销卡片令牌，登录页不显示网申提示', async () => {
       const token = new URL(frame.url()).searchParams.get('token'); await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').style.display === 'none');

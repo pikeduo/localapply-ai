@@ -1,20 +1,19 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>LocalApply AI 填写助手</title><link rel="stylesheet" href="../sidepanel/sidepanel.css"><link rel="stylesheet" href="panel.css"></head>
-<body><header class="panel-header"><div class="panel-brand"><img src="../icons/icon32.png" alt=""><strong>LocalApply AI</strong><span>本地优先</span></div><div><button id="panelSettings" class="icon-btn" title="设置与资料编辑" aria-label="设置与资料编辑">⚙</button><button id="panelClose" class="icon-btn" title="关闭卡片" aria-label="关闭卡片">×</button></div></header>
+<body data-fill-mode="direct"><header class="panel-header"><div class="panel-brand"><img src="../icons/icon32.png" alt=""><strong>LocalApply AI</strong><span>本地优先</span></div><div><button id="panelSettings" class="icon-btn" title="设置与资料编辑" aria-label="设置与资料编辑">⚙</button><button id="panelClose" class="icon-btn" title="关闭卡片" aria-label="关闭卡片">×</button></div></header>
 <nav class="panel-tabs"><button id="autoTab" class="active">⚡ 自动填充</button><button id="resumeTab">▤ 简历预览</button></nav>
 <div class="panel-profile"><label for="profileSel">当前档案</label><select id="profileSel" aria-label="当前档案"></select></div>
 <p id="panelStatus" class="muted" role="status"></p><main id="autoView">    <section id="tab-smart">
       <div class="card">
         <h3>当前招聘页面</h3>
-        <label><input type="checkbox" id="smartPageConsent" /> 我授权扫描当前招聘页的表单标签及结构</label>
-        <p class="muted">扫描不读取密码、验证码或已有输入值。网页已填内容仅在点击“读取此字段”时读取。</p>
-        <div class="smart-actions"><button id="smartScan" class="btn">授权并扫描当前页</button><button id="smartRefresh" class="btn ghost">刷新结果</button><button id="smartRevoke" class="btn ghost">撤销页面授权</button></div>
+        <p class="muted">点击即扫描并填写已匹配的本地资料，无需逐项核对。未知字段可使用 AI 识别；不会提交申请。</p>
+        <div class="smart-actions"><button id="smartFillAll" class="btn">自动填写此页面</button><button id="smartScan" class="btn ghost">仅扫描字段</button></div>
         <p id="smartStatus" role="status"></p>
-        <div class="smart-actions"><button id="smartAI" class="btn ghost">检测到未知字段，是否使用 AI 识别？</button><button id="smartFillAll" class="btn">一键填写预览</button><button id="smartRules" class="btn ghost">历史映射规则</button></div>
+        <div class="smart-actions"><button id="smartAI" class="btn ghost">AI 识别未知字段（可选）</button><button id="smartRefresh" class="btn ghost">刷新结果</button><button id="smartRevoke" class="btn ghost">清除扫描结果</button><button id="smartRules" class="btn ghost">历史映射规则</button></div>
+        <label><input id="smartRememberAfter" type="checkbox" /> 填写验证成功后记住映射</label>
       </div>
       <div id="smartAIReview" class="card" hidden><h3>确认模型接收方与发送内容</h3><p id="smartRecipient"></p><p>仅发送以下脱敏元数据及本地来源引用，不发送实际值、完整简历或网页 HTML。</p><pre id="smartAIPayload"></pre><label><input type="checkbox" id="smartAIConsent" /> 我确认向该服务商发送上述内容（可能计费）</label><button id="smartAISend" class="btn">确认发送并识别</button><button id="smartAICancel" class="btn ghost">取消</button></div>
-      <div id="smartFillReview" class="card" hidden><h3>核对即将填入网页的资料</h3><pre id="smartFillPayload"></pre><label><input id="smartFillConsent" type="checkbox" /> 我已核对字段、来源和实际值，确认填写（不会提交申请）</label><label><input id="smartRememberAfter" type="checkbox" /> 填写验证成功后记住本次映射</label><div class="smart-actions"><button id="smartFillConfirm" class="btn">确认填写</button><button id="smartFillCancel" class="btn ghost">取消</button></div></div>
-      <h3>已匹配 / 待确认及缺少资料</h3><div id="smartMatched"></div>
+      <h3>已匹配 / 待处理及缺少资料</h3><div id="smartMatched"></div>
       <h3>未知字段</h3><div id="smartUnknown"></div>
       <section id="smartRulesPanel" class="card" hidden><h3>本地字段映射</h3><p class="muted">修改目标后必须重新填写验证。撤销仅针对本会话最近一次规则操作。</p><div class="smart-actions"><button id="smartUndo" class="btn ghost">撤销上次规则操作</button><button id="smartExportV3" class="btn ghost">导出兼容旧版 v3 的备份</button></div><div id="smartRuleList"></div></section>
     </section>
