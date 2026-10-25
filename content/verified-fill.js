@@ -2,11 +2,13 @@
 (function (global) {
   'use strict';
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const A = global.LocalApplyFieldAdapters;
 
   // 比较实际选中状态；避免下拉框显示文本变化但没有选中有效 option 的假成功。
   function accepted(item, expected) {
     const { el, members, field } = item;
     if (!el.isConnected || el.getAttribute('aria-invalid') === 'true' || el.validity?.valid === false) return false;
+    if (A.handles(item)) return A.accepted(item, expected);
     if (field.type === 'checkbox') {
       if (members.length === 1) return typeof expected === 'boolean' && el.checked === expected;
       return Array.isArray(expected) && JSON.stringify(members.filter((node) => node.checked).map((node) => node.value).sort()) === JSON.stringify([...expected].map(String).sort());
@@ -30,10 +32,24 @@
       : { status: 'failed', ok: false, reason: '网页未接受新值、校验失败或受控组件已回退' };
   }
 
-  // 精确选择 radio/select/ARIA option，不使用包含匹配操作高风险选项。
-  async function fill(item, value) {
+  // 写入前仅读取该项的实际状态，非空冲突返回差异；覆盖许可绑定用户刚核对的旧值。
+  function conflict(item, value, options) {
+    const before = global.LocalApplyPageScanner.readValue(item);
+    const occupied = Array.isArray(before) ? before.length > 0 : before !== '' && before !== null && before !== undefined && before !== false && !(item.field.type === 'combobox' && /^(请选择|请选择一项|Select|Please select)$/i.test(before));
+    if (options.overwrite && JSON.stringify(before) !== JSON.stringify(options.expectedCurrent)) return { status: 'needs_confirmation', ok: false, reason: '网页内容在确认后已变化，请重新核对差异', conflict: { before, after: value } };
+    if (!options.overwrite && occupied && !accepted(item, value)) return { status: 'needs_confirmation', ok: false, reason: '网页已有不同内容，已保留；核对差异后可单独允许覆盖', conflict: { before, after: value } };
+    return null;
+  }
+
+  // 精确选择已有选项；复合日期/电话走适配器，任何路径都不得自动覆盖不同的现有值。
+  async function fill(item, value, options = {}) {
     const { el, members, field } = item;
-    if (field.type === 'combobox') {
+    if (A.handles(item)) { const next = A.plan(item, value); if (next.error) return next.error; }
+    const blocked = conflict(item, value, options); if (blocked) return blocked;
+    if (accepted(item, value)) return verify(item, value);
+    if (A.handles(item)) {
+      const result = await A.fill(item, value); if (!result.ok) return { status: result.status || 'failed', ...result };
+    } else if (field.type === 'combobox') {
       const menu = el.getRootNode().getElementById?.(el.getAttribute('aria-controls') || el.getAttribute('aria-owns'));
       const candidates = [...(menu?.querySelectorAll('[role="option"]') || [])].filter((option) => option.textContent.trim() === String(value) || option.getAttribute('data-value') === String(value));
       if (candidates.length !== 1 || candidates[0].matches('button,input,a,[role="button"]') || candidates[0].querySelector('button,input,a,[role="button"]')) return { status: 'unsupported', ok: false, reason: '自定义下拉无唯一安全选项，请在网页手动选择' };

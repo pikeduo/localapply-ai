@@ -2,7 +2,8 @@
 (function (global) {
   'use strict';
   const kinds = ['education', 'internship', 'employment', 'project'];
-  const types = ['text', 'textarea', 'number', 'email', 'tel', 'url', 'date', 'month', 'select', 'radio', 'checkbox', 'combobox', 'contenteditable'];
+  const types = ['text', 'textarea', 'number', 'email', 'tel', 'url', 'date', 'month', 'datetime-local', 'select', 'radio', 'checkbox', 'combobox', 'contenteditable'];
+  const layouts = ['date:year-month', 'date:year-month-day', 'phone:country-number', 'address:province-city-district'];
 
   // 只处理短元数据，不接受 HTML、地址、Key、邮箱、手机号或长数字作为模型上下文。
   function redact(value, max = 80) {
@@ -17,7 +18,7 @@
   function features(field) {
     return { label: redact(field.label), type: types.includes(field.type) ? field.type : 'text', group: redact(field.group),
       kind: kinds.includes(field.kind) ? field.kind : '', degree: ['first', 'undergrad', 'master', 'doctor', 'highest'].includes(field.degree) ? field.degree : '',
-      index: Number.isInteger(field.index) && field.index >= 0 ? Math.min(field.index, 100) : 0 };
+      index: Number.isInteger(field.index) && field.index >= 0 ? Math.min(field.index, 100) : 0, ...(field.layout ? { layout: field.layout } : {}) };
   }
 
   // 双种子散列只用作索引；命中后仍逐属性比较，不能只相信散列相同。
@@ -29,13 +30,14 @@
 
   // 仅允许经过白名单和脱敏的扫描元数据跨消息边界，绝不接受 value/html 属性。
   function validateField(field) {
-    const allowed = ['scanId', 'semanticId', 'label', 'name', 'type', 'placeholder', 'options', 'group', 'kind', 'degree', 'index'];
+    const allowed = ['scanId', 'semanticId', 'label', 'name', 'type', 'placeholder', 'options', 'group', 'kind', 'degree', 'index', 'layout'];
     if (!field || Object.keys(field).some((key) => !allowed.includes(key)) || typeof field.scanId !== 'string'
       || !/^scan\.[\w.-]{1,100}$/.test(field.scanId) || !types.includes(field.type)) throw new Error('扫描字段格式错误');
     for (const key of ['label', 'name', 'placeholder', 'group']) {
       if (typeof field[key] !== 'string' || field[key] !== redact(field[key])) throw new Error('扫描元数据未脱敏或超限');
     }
-    if (field.semanticId !== semanticId(field) || JSON.stringify(features(field)) !== JSON.stringify({ label: field.label, type: field.type, group: field.group, kind: field.kind, degree: field.degree, index: field.index })) throw new Error('扫描语义指纹错误');
+    if (field.layout !== undefined && !layouts.includes(field.layout)) throw new Error('扫描复合结构格式错误');
+    if (field.semanticId !== semanticId(field) || JSON.stringify(features(field)) !== JSON.stringify({ label: field.label, type: field.type, group: field.group, kind: field.kind, degree: field.degree, index: field.index, ...(field.layout ? { layout: field.layout } : {}) })) throw new Error('扫描语义指纹错误');
     if (!Array.isArray(field.options) || field.options.length > 100 || field.options.some((option) => !option || Object.keys(option).sort().join() !== 'text,value'
       || typeof option.text !== 'string' || typeof option.value !== 'string' || option.text !== redact(option.text) || option.value !== redact(option.value))) throw new Error('扫描选项格式错误');
     return field;

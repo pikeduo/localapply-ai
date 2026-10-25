@@ -8,6 +8,160 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// v2 阶段三回归只使用合成复合控件；先确认子控件和网站操作不会生成个人字段。
+test('新版阶段三：复合控件误识别回归', { timeout: 60000 }, async () => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'composites-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`);
+    await options.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/phase3-composites.html');
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    const view = await rpc(options, 'learning:scanPage', { tabId, confirmed: true });
+    const labels = view.rows.map((row) => row.field.label);
+    assert.ok(!labels.includes('月'), '“月”必须归入毕业时间，而非未知字段');
+    assert.ok(!labels.includes('+86'), '“+86”必须归入电话组件');
+    assert.ok(!labels.includes('同步更新在线简历'), '网站操作复选框不属于个人资料');
+    assert.equal(labels.filter((label) => label === '毕业时间').length, 1);
+    assert.equal(labels.filter((label) => label === '手机号').length, 1);
+    assert.equal(api.calls.length, 0);
+  } finally {
+    if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve));
+    await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
+// 新版阶段三增量验收复用真实后台、存储和填写器，模型只连接 loopback Mock。
+test('新版阶段三：日期电话、覆盖确认、手填学习与选择性 AI', { timeout: 120000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'phase3-v2-')); const api = await serve(); let context; let options; let page; let worker; let extensionId; let view; let profileId;
+  // 当前文档重扫仅取元数据，调用后建立新的字段/版本边界。
+  const scan = async () => { const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url()); view = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); return view; };
+  // 所有单项操作都使用后台返回的会话，测试不直接调用内容脚本内部函数。
+  const send = async (type, payload = {}) => { const out = await rpc(options, 'learning:' + type, { sessionId: view.sessionId, ...payload }); if (out.rows) view = out; return out; };
+  const row = (label) => { const found = view.rows.find((item) => item.field.label === label); assert.ok(found, label); return found; };
+  // 修改本地合成值后刷新来源，不沿用过期版本令牌。
+  const setValue = async (fieldId, value) => { await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId, entryId: null, value } } }); if (view) await send('session'); };
+  // 显式选择来源模拟人工配对；复合控件的写入和验证仍走实际页面事件。
+  const fill = async (label, fieldId) => { const scanId = row(label).field.scanId; if (fieldId) await send('select', { scanId, fieldId }); await send('fill', { scanId, confirmed: true }); return row(label); };
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); ({ worker, extensionId } = await extension(context));
+    options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+    profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    for (const [fieldId, value] of [['builtin.name','合成复合姓名'], ['builtin.phone','+8613800000000'], ['builtin.birthDate','2028-02-29'], ['builtin.graduationDate','2028-06']]) await setValue(fieldId, value);
+    page = await context.newPage(); await page.goto(api.base + '/test-pages/phase3-composites.html'); await scan();
+    await t.test('分类只产生主字段，排除日期/地址子项、国码、安全和网站操作', async () => {
+      const labels = view.rows.map((item) => item.field.label);
+      for (const label of ['月','年','日','+86','同步更新在线简历','密码','短信验证码','我已阅读并同意隐私协议']) assert.ok(!labels.includes(label), label);
+      assert.equal(row('毕业时间').field.layout, 'date:year-month'); assert.equal(row('手机号').field.layout, 'phone:country-number'); assert.equal(row('现居地址').field.layout, 'address:province-city-district');
+      assert.ok(view.excluded.some((item) => item.category === 'site_action')); assert.ok(view.excluded.some((item) => item.category === 'security_control'));
+      assert.equal(api.calls.length, 0);
+    });
+    await t.test('本地姓名和国码电话写入验证，无 AI 且不重复号码', async () => {
+      assert.equal((await fill('姓名')).status, 'success'); assert.equal((await fill('手机号')).status, 'success');
+      assert.equal(await page.locator('#phone').inputValue(), '13800000000'); assert.equal(await page.locator('#country').inputValue(), '+86');
+      assert.equal(api.calls.length, 0); assert.equal(await page.locator('#sync-resume').isChecked(), false); assert.equal(await page.locator('#agreement').isChecked(), false);
+      await send('remember', { scanId: row('手机号').field.scanId, confirmed: true });
+    });
+    await t.test('国际国码精确拆分，不支持的国家和缺失区号保持待确认', async () => {
+      await page.locator('#phone').fill(''); await setValue('builtin.phone', '+44 2070000000'); assert.equal((await fill('手机号')).status, 'success');
+      assert.equal(await page.locator('#country').inputValue(), '+44'); assert.equal(await page.locator('#phone').inputValue(), '2070000000');
+      await page.locator('#phone').fill(''); await setValue('builtin.phone', '+81 9012345678'); assert.equal((await fill('手机号')).status, 'needs_confirmation'); assert.equal(await page.locator('#phone').inputValue(), '');
+      await setValue('builtin.phone', '+8613800000000');
+    });
+    await t.test('年月合并写入，原生日期和文本日期包含真实闰年、格式与精度校验', async () => {
+      assert.equal((await fill('毕业时间')).status, 'success'); assert.equal(await page.locator('#grad-year').inputValue(), '2028'); assert.equal(await page.locator('#grad-month').inputValue(), '06');
+      assert.equal((await fill('出生日期')).status, 'success'); assert.equal(await page.locator('#native-date').inputValue(), '2028-02-29');
+      assert.equal((await fill('入学时间', 'builtin.birthDate')).status, 'success'); assert.equal(await page.locator('#native-month').inputValue(), '2028-02');
+      assert.equal((await fill('日期说明', 'builtin.birthDate')).status, 'success'); assert.equal(await page.locator('#text-date').inputValue(), '2028/02/29');
+    });
+    await t.test('拆分年月日缺日时不补一日，完整日期可填写并验证全部子项', async () => {
+      assert.equal((await fill('可到岗日期', 'builtin.graduationDate')).status, 'needs_confirmation');
+      for (const id of ['arrival-year','arrival-month','arrival-day']) assert.equal(await page.locator('#' + id).inputValue(), '');
+      assert.equal((await fill('可到岗日期', 'builtin.birthDate')).status, 'success');
+      assert.equal(await page.locator('#arrival-year').inputValue(), '2028'); assert.equal(await page.locator('#arrival-month').inputValue(), '2'); assert.equal(await page.locator('#arrival-day').inputValue(), '29');
+    });
+    await t.test('绑定日历弹层可跨年选择并更新组件状态，未知弹层明确不支持', async () => {
+      await page.locator('#calendar-date').click(); await send('session'); assert.equal(view.rows.filter((item)=>item.field.label==='日历日期').length,1);
+      assert.equal((await fill('日历日期', 'builtin.birthDate')).status, 'success'); assert.equal(await page.locator('#calendar-state').textContent(), '2028-02-29');
+      assert.equal(await page.locator('#calendar-year').inputValue(), '2028'); assert.equal(await page.locator('#calendar-month').inputValue(), '2');
+      // 通过合成页面钩子模拟不可关联的旧组件，真实写入仍由适配器执行。
+      await page.evaluate(() => { document.getElementById('calendar-date').value = ''; document.getElementById('calendar-date').setAttribute('aria-controls', 'missing-calendar'); });
+      assert.equal((await fill('日历日期', 'builtin.birthDate')).status, 'unsupported');
+    });
+    await t.test('日期超出范围或非法闰日不会写入，时间区间保留开始结束语义', async () => {
+      await page.evaluate(() => { document.getElementById('native-date').value = ''; document.getElementById('native-date').min = '2028-03-01'; });
+      assert.equal((await fill('出生日期')).status, 'failed'); assert.equal(await page.locator('#native-date').inputValue(), '');
+      await page.evaluate(() => { document.getElementById('native-date').removeAttribute('min'); }); await setValue('builtin.birthDate','2027-02-29');
+      assert.equal((await fill('出生日期')).status, 'needs_confirmation'); await setValue('builtin.birthDate','2028-02-29');
+      await page.evaluate(() => { const block = document.createElement('fieldset'); block.innerHTML = '<legend>项目经历</legend><div class="form-item"><span class="label">开始时间</span><input placeholder="年"><input placeholder="月"></div><div class="form-item"><span class="label">结束时间</span><input placeholder="年"><input placeholder="月"></div>'; document.getElementById('application').append(block); });
+      await send('session'); assert.equal(row('开始时间').field.type, 'month'); assert.equal(row('结束时间').field.type, 'month'); assert.notEqual(row('开始时间').field.semanticId, row('结束时间').field.semanticId);
+    });
+    await t.test('分级地址精确写入，缺少结构边界不猜测', async () => {
+      const created = await rpc(options,'localapply:command',{request:{action:'createField',payload:{profileId,definition:{label:'合成结构地址',type:'text',group:'其他'},value:'合成省 / 合成市 / 合成区'}}}); await send('session');
+      assert.equal((await fill('现居地址',created.result)).status,'success'); assert.equal(await page.locator('#city').inputValue(),'合成市');
+    });
+    await t.test('不同非空值默认保留，覆盖令牌防伪造并绑定最新网页旧值', async () => {
+      await page.locator('#name').fill('合成网页原值'); let conflict = await fill('姓名'); assert.equal(conflict.status,'needs_confirmation'); assert.equal(await page.locator('#name').inputValue(),'合成网页原值');
+      const denied = await options.evaluate(({ sessionId, scanId }) => chrome.runtime.sendMessage({type:'learning:fill',sessionId,scanId,confirmed:true,overwriteToken:'forged'}),{sessionId:view.sessionId,scanId:conflict.field.scanId}); assert.equal(denied.ok,false);
+      await page.locator('#name').fill('合成网页再次修改'); await send('fill',{scanId:conflict.field.scanId,confirmed:true,overwriteToken:conflict.conflict.token}); assert.equal(row('姓名').status,'needs_confirmation'); assert.equal(await page.locator('#name').inputValue(),'合成网页再次修改');
+      conflict = row('姓名'); await send('fill',{scanId:conflict.field.scanId,confirmed:true,overwriteToken:conflict.conflict.token}); assert.equal(row('姓名').status,'success'); assert.equal(await page.locator('#name').inputValue(),'合成复合姓名');
+    });
+    await t.test('手填新字段确认后保存；原网页值验证成功后学习，刷新直接复用', async () => {
+      const revision = (await rpc(options,'localapply:read')).database.revision; await page.locator('#unknown').fill('合成手填新增资料'); await page.locator('#unknown').blur();
+      assert.equal((await rpc(options,'localapply:read')).database.revision,revision); const scanId = row('资格附加说明').field.scanId;
+      const read = await send('readField',{scanId}); const preview = await send('previewValue',{scanId,definition:{label:'资格附加说明',type:'text',group:'其他',aliases:[],options:[]},value:read.value,source:'web-confirmed'});
+      assert.equal((await rpc(options,'localapply:read')).database.revision,revision); await send('commitValue',{scanId,token:preview.token,confirmed:true});
+      assert.equal((await fill('资格附加说明')).status,'success'); await send('remember',{scanId,confirmed:true});
+      await page.reload(); await scan(); assert.equal(row('资格附加说明').source,'memory'); assert.equal(row('资格附加说明').value,'合成手填新增资料');
+      assert.equal((await fill('资格附加说明')).status,'success'); assert.equal(await page.locator('#unknown').inputValue(),'合成手填新增资料'); assert.equal(api.calls.length,0);
+    });
+    let frame;
+    await t.test('卡片展示排除原因及覆盖差异，只有确认此项后覆盖', async () => {
+      await page.locator('#wsa-floatbar-host').waitFor(); const loaded = page.waitForEvent('framenavigated',{predicate:(item)=>item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)}); await page.locator('#wsa-floatbar-host').click(); frame = await loaded;
+      await frame.locator('#profileSel option').first().waitFor({state:'attached'}); await page.locator('#name').fill('合成卡片冲突'); await frame.locator('#smartFillAll').click(); await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('填写完成'));
+      assert.equal(await page.locator('#name').inputValue(),'合成卡片冲突'); const card = frame.locator('.smart-row').filter({has:frame.getByRole('heading',{name:'姓名 · 待处理',exact:true})});
+      await card.locator('.smart-overwrite summary').click(); await card.getByRole('button',{name:'确认覆盖此项'}).click(); assert.equal(await page.locator('#name').inputValue(),'合成卡片冲突');
+      await card.locator('.smart-overwrite-consent').check(); await card.getByRole('button',{name:'确认覆盖此项'}).click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false'); assert.equal(await page.locator('#name').inputValue(),'合成复合姓名');
+      assert.ok((await frame.locator('#smartExcluded').textContent()).includes('同步更新在线简历')); await page.screenshot({path:path.join(testRoot,'stage3-v2-composites.png'),fullPage:true});
+    });
+    await t.test('AI 仅发送所选未知字段，取消中止请求并可再次使用', async () => {
+      await options.locator('#provider').fill(api.base+'/v1'); await options.locator('#provider').press('Enter'); await options.evaluate(()=>flushSaves()); await options.locator('#apiKey').fill('synthetic-v2-key'); await options.locator('#saveKey').click(); await options.evaluate(()=>flushCredentials()); await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-field-model'); await options.locator('#model').press('Tab'); await options.evaluate(()=>flushSaves());
+      await frame.locator('#smartAI').click(); await frame.waitForFunction(()=>document.getElementById('smartStatus').className==='err'); assert.equal(api.calls.length,0);
+      const card = frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'是否接受调剂'})}); await card.locator('.smart-ai-check').check(); await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'});
+      const payload = JSON.parse(await frame.locator('#smartAIPayload').textContent()); assert.deepEqual(payload.fields.map((field)=>field.label),['是否接受调剂']); assert.ok(!JSON.stringify(payload).includes('合成手填新增资料'));
+      api.modelApi.fieldHold = true; const started = new Promise((resolve)=>{api.modelApi.onField=resolve;}); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await started;
+      await frame.locator('#smartAICancel').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false'); assert.ok((await frame.locator('#smartStatus').textContent()).includes('取消'));
+      api.modelApi.releaseField(); api.modelApi.fieldHold = false; await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'}); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('AI 返回 0'));
+      assert.equal(await page.locator('#other-unknown').inputValue(),''); assert.equal(await page.evaluate(()=>__submitCount),0);
+    });
+    await t.test('AI 待人工选择及忽略建议不自动采用，用户确认后才移入忽略列表', async () => {
+      const card=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'是否接受调剂'})});
+      for (const action of ['needs_user_choice','skip_non_resume_control']) {
+        api.modelApi.fieldReply=(payload)=>JSON.stringify({suggestions:[{scanId:payload.fields[0].scanId,existingFieldId:null,definition:null,sourceRef:null,confidence:0.1,action}]});
+        await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'}); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+        assert.equal(await card.count(),1); assert.equal(await page.locator('#other-unknown').inputValue(),'');
+        if(action==='needs_user_choice') { assert.ok((await card.textContent()).includes('AI 无法确定')); assert.equal(await card.locator('.smart-apply-suggestion').count(),0); }
+      }
+      await card.getByRole('button',{name:'确认本次忽略',exact:true}).click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false'); assert.equal(await card.count(),0); assert.ok((await frame.locator('#smartExcluded').textContent()).includes('是否接受调剂'));
+    });
+    await t.test('页面导航释放运行中的 AI 和未确认候选，不产生迟到保存', async () => {
+      await frame.locator('#smartExcluded summary').click(); await frame.getByRole('button',{name:'恢复此字段',exact:true}).click();
+      const card=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'是否接受调剂'})}); await card.locator('.smart-ai-check').check(); await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'});
+      api.modelApi.fieldHold=true; const started=new Promise((resolve)=>{api.modelApi.onField=resolve;}); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await started;
+      const oldSession=await frame.locator('#tab-smart').getAttribute('data-session-id'); const before=(await rpc(options,'localapply:read')).database.revision; await page.reload();
+      const old=await options.evaluate((sessionId)=>chrome.runtime.sendMessage({type:'learning:session',sessionId}),oldSession); assert.equal(old.ok,false); api.modelApi.releaseField(); api.modelApi.fieldHold=false; assert.equal((await rpc(options,'localapply:read')).database.revision,before);
+    });
+    await t.test('完整浏览器重启保留复合规则和个人字段，备份含结构不含 Key', async () => {
+      await context.close(); context = await launch(profile); ({worker,extensionId}=await extension(context)); options=await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.locator('#entryProfile option').first().waitFor({state:'attached'}); page=await context.newPage(); await page.goto(api.base+'/test-pages/phase3-composites.html'); await scan();
+      assert.equal(row('手机号').source,'memory'); assert.equal(row('资格附加说明').source,'memory'); assert.equal((await fill('手机号')).status,'success'); assert.equal((await fill('资格附加说明')).status,'success');
+      const backup=(await rpc(options,'localapply:exportBackup')).backup; assert.ok(JSON.stringify(backup).includes('phone:country-number')); assert.ok(!JSON.stringify(backup).includes('synthetic-v2-key'));
+      await page.screenshot({path:path.join(testRoot,'stage3-v2-restarted.png'),fullPage:true});
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
+});
+
 // 本地夹具仅绑定 loopback；两种 AI 协议只返回合成响应，页面限制在 test-pages。
 async function serve() {
   const calls = [];
@@ -51,9 +205,10 @@ async function serve() {
       const request = JSON.parse(body);
       if (request.messages?.[0]?.content?.includes('你是网申字段语义分类器')) {
         calls.push({ fieldAI: true, payload: JSON.parse(request.messages[1].content), system: request.messages[0].content });
-        const status = modelApi.fieldStatus || 200; res.writeHead(status, { 'Content-Type': 'application/json' });
-        const content = modelApi.fieldReply ? modelApi.fieldReply(JSON.parse(request.messages[1].content)) : '{"suggestions":[]}';
-        res.end(JSON.stringify({ choices: [{ message: { content } }] })); return;
+        // 挂起字段响应验证真正取消与恢复，晚到的 Mock 响应不得产生保存或建议。
+        const respond = () => { if (res.destroyed) return; const status = modelApi.fieldStatus || 200; res.writeHead(status, { 'Content-Type': 'application/json' });
+          const content = modelApi.fieldReply ? modelApi.fieldReply(JSON.parse(request.messages[1].content)) : '{"suggestions":[]}'; res.end(JSON.stringify({ choices: [{ message: { content } }] })); };
+        if (modelApi.fieldHold) { modelApi.releaseField=respond; modelApi.onField?.(); } else respond(); return;
       }
       const content = request.messages?.at(-1)?.content;
       const probe = Array.isArray(content) && content.some((part) => part.type === 'text' && part.text.includes('读取附件图片中唯一的8位数字'));
@@ -109,6 +264,12 @@ async function rpc(page, type, payload = {}) {
   const response = await page.evaluate(({ type, payload }) => chrome.runtime.sendMessage({ type, ...payload }), { type, payload });
   assert.equal(response.ok, true, response.error);
   return response;
+}
+
+// v2 要求逐项选择发送字段；历史 Mock 用例显式勾选候选，保留原有错误/安全断言。
+async function selectUnknownAI(ui) {
+  const checks = ui.locator('.smart-ai-check');
+  for (let index = 0; index < await checks.count(); index++) await checks.nth(index).check();
 }
 
 // 通过真实控件建立保险库，测试口令及 Key 全为合成数据。
@@ -200,6 +361,8 @@ for (const withExtension of [true, false]) {
       assert.equal(await page.evaluate(async () => (await sendMessage('localapply:read')).database.fieldValues.some((row) => row.value === '合成 Responses 姓名')), false);
       await page.locator('#selectAllResume').click(); await page.locator('#btnImport').click();
       await page.locator('#importRow').waitFor({ state: 'hidden' });
+      // 草稿先隐藏、资料投影随后刷新；必须等确认导入整条异步操作结束再切换协议。
+      await page.waitForFunction(() => !document.getElementById('btnImport').disabled);
       assert.equal(await page.evaluate(async () => (await sendMessage('localapply:read')).database.fieldValues.some((row) => row.value === '合成 Responses 姓名')), true);
       assert.equal(api.calls.at(-1).imageCount, 1);
       const requests = api.calls.length;
@@ -212,6 +375,8 @@ for (const withExtension of [true, false]) {
       assert.equal(await page.locator('#apiProtocol').inputValue(), 'chat-completions');
       assert.equal(await page.evaluate(() => !!state.settings.keyStatus[state.settings.provider]), false);
       await page.locator('#provider').fill(api.base + '/'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+      // 重启前直接核对后台存储，避免仅凭输入框显示就假定协议已保存。
+      assert.equal(await page.evaluate(async () => { const saved=(await sendMessage('wsa:getState')).state.settings; return saved.customProviders[saved.provider].protocol; }), 'responses');
       await context.close(); context = await launch(profile, withExtension);
       page = await context.newPage(); await page.goto(url); await page.locator('#entryProfile option').first().waitFor({ state: 'attached' });
       assert.equal(await page.locator('#customBase').inputValue(), api.base);
@@ -737,7 +902,7 @@ test('阶段三：授权、智能字段学习、真实框架、规则管理与�
   const ready = () => sidebar.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
   const scan = async () => { const old = await sidebar.locator('#tab-smart').getAttribute('data-session-id'); await page.bringToFront(); await sidebar.locator('#smartPageConsent').check(); await sidebar.locator('#smartScan').click(); await sidebar.waitForFunction((id) => document.getElementById('tab-smart').dataset.sessionId !== id && document.querySelectorAll('.smart-row').length > 0 && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', old); };
   // 模型调用始终先展示 payload，再通过复选框确认发送。
-  const recognize = async () => { const oldToken = await sidebar.locator('#smartAIReview').getAttribute('data-token'); await sidebar.locator('#smartAI').click(); await sidebar.waitForFunction((token) => document.getElementById('smartAIReview').dataset.token !== token && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', oldToken); await sidebar.locator('#smartAIConsent').check(); await sidebar.locator('#smartAISend').click(); };
+  const recognize = async () => { await selectUnknownAI(sidebar); const oldToken = await sidebar.locator('#smartAIReview').getAttribute('data-token'); await sidebar.locator('#smartAI').click(); await sidebar.waitForFunction((token) => document.getElementById('smartAIReview').dataset.token !== token && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', oldToken); await sidebar.locator('#smartAIConsent').check(); await sidebar.locator('#smartAISend').click(); };
   try {
     context = await launch(profile); context.setDefaultTimeout(10000); ({ extensionId } = await extension(context));
     context.on('page', (newPage) => { newPage.on('pageerror', (error) => pageErrors.push(error.message)); newPage.on('console', (message) => { if (message.text().includes('synthetic-phase3-key')) leaks.push('发现凭据输出'); }); });
@@ -773,7 +938,7 @@ test('阶段三：授权、智能字段学习、真实框架、规则管理与�
       assert.equal(await card('便捷联系号码').getAttribute('data-status'), 'needs_confirmation');
     });
     await t.test('AI 预览接收方和脱敏字段；未勾选确认不联网，输入值不在 payload 中', async () => {
-      api.modelApi.fieldReply = goodReply; await sidebar.locator('#smartAI').click(); await sidebar.locator('#smartAIReview').waitFor({ state: 'visible' });
+      api.modelApi.fieldReply = goodReply; await selectUnknownAI(sidebar); await sidebar.locator('#smartAI').click(); await sidebar.locator('#smartAIReview').waitFor({ state: 'visible' });
       const payload = await sidebar.locator('#smartAIPayload').textContent(); for (const value of ['13800000000','合成阶段三姓名','合成本科学院','synthetic-phase3-key','must-not-read']) assert.ok(!payload.includes(value), value);
       await sidebar.locator('#smartAISend').click(); assert.equal(api.calls.length, 0);
       await sidebar.locator('#smartAIReview').screenshot({ path: path.join(testRoot, 'stage3-ai-preview.png') });
@@ -856,7 +1021,7 @@ test('阶段三：授权、智能字段学习、真实框架、规则管理与�
     });
     await t.test('密钥锁定时手动扫描、规则和本地填写继续可用', async () => {
       await setupVault(options); await options.locator('#vaultLock').click(); await options.waitForFunction(async () => !(await getState()).settings.vault.unlocked);
-      await scan(); assert.ok(await sidebar.locator('.smart-row').count() > 0); await sidebar.locator('#smartAI').click(); await sidebar.waitForFunction(() => /锁定/.test(document.getElementById('smartStatus').textContent));
+      await scan(); assert.ok(await sidebar.locator('.smart-row').count() > 0); await selectUnknownAI(sidebar); await sidebar.locator('#smartAI').click(); await sidebar.waitForFunction(() => /锁定/.test(document.getElementById('smartStatus').textContent));
       await card('姓名 ·').first().getByText('单项填写预览', { exact: true }).click(); await sidebar.locator('#smartFillConsent').check(); await sidebar.locator('#smartFillConfirm').click(); await sidebar.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('填写完成'));
       assert.equal(await page.locator('#applicant-name').inputValue(), '合成阶段三姓名');
     });
@@ -1069,7 +1234,7 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
       await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-field-model'); await options.locator('#model').press('Tab'); await options.evaluate(() => flushSaves());
       // Mock 只返回已发送的字段和来源引用，不能生成个人实际值。
       api.modelApi.fieldReply = (payload) => JSON.stringify({ suggestions: [{ scanId: payload.fields.find((field) => field.label === '便捷联系号码').scanId, existingFieldId: 'builtin.phone', definition: null, sourceRef: payload.sources.find((source) => source.fieldId === 'builtin.phone' && source.hasValue).ref, confidence: 0.99 }] });
-      await frame.locator('#autoTab').click(); await frame.locator('#smartAI').click();
+      await frame.locator('#autoTab').click(); await frame.locator('.smart-row').filter({ has: frame.locator('h4').filter({ hasText: '便捷联系号码' }) }).locator('.smart-ai-check').check(); await frame.locator('#smartAI').click();
       await frame.waitForFunction(() => !document.getElementById('smartAIReview').hidden || document.getElementById('smartStatus').className === 'err');
       assert.equal(await frame.locator('#smartAIReview').isVisible(), true, await frame.locator('#smartStatus').textContent());
       assert.equal(api.calls.length, 0); assert.equal(await page.locator('#preferred-contact').inputValue(), '');

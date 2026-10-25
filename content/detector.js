@@ -419,7 +419,8 @@
             const record = globalThis.LocalApplyPageScanner.record(msg.scanId, msg.documentId, msg.semanticId);
             if (msg.type === 'learning:read') { sendResponse({ ok: true, value: globalThis.LocalApplyPageScanner.readValue(record) }); return; }
             filling = true;
-            try { const result = await globalThis.LocalApplyVerifiedFill[msg.type === 'learning:fill' ? 'fill' : 'verify'](record, msg.value); sendResponse({ ok: true, result }); }
+            // 覆盖只接受后台差异令牌核验后的许可，并在页面再次比较原值防止确认后变化。
+            try { const result = await globalThis.LocalApplyVerifiedFill[msg.type === 'learning:fill' ? 'fill' : 'verify'](record, msg.value, { overwrite: msg.overwrite === true, expectedCurrent: msg.expectedCurrent }); sendResponse({ ok: true, result }); }
             finally { filling = false; }
             return;
           }

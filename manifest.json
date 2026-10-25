@@ -55,6 +55,7 @@
       "js": [
         "data/templates.js",
         "data/field-matching.js",
+        "content/field-adapters.js",
         "content/field-scanner.js",
         "content/detector.js",
         "content/filler.js",

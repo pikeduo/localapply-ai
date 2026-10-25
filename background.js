@@ -237,6 +237,8 @@ chrome.action?.onClicked?.addListener(async (tab) => {
   catch (error) { await diagnostics.append('panel.open', { level: 'ERROR', error }); await chrome.action.setTitle({ tabId: tab.id, title: error.message }); }
 });
 // 标签页导航及关闭立即丢弃卡片授权和限流状态。
-chrome.tabs?.onUpdated?.addListener((tabId, info) => { if (info.url || info.status === 'loading') floatingPanel.invalidate(tabId).catch(() => {}); });
-chrome.tabs?.onRemoved?.addListener((tabId) => { presenceTimes.delete(tabId); floatingPanel.invalidate(tabId).catch(() => {}); });
+// 导航与关闭也清理字段学习的待确认值及进行中的模型任务。
+chrome.tabs?.onUpdated?.addListener((tabId, info) => { if (info.url || info.status === 'loading') { fieldLearning.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); } });
+// 只释放已关闭标签的会话，不删除已确认的资料或映射。
+chrome.tabs?.onRemoved?.addListener((tabId) => { presenceTimes.delete(tabId); fieldLearning.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => {});

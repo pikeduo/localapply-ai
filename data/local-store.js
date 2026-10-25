@@ -197,7 +197,8 @@
       check(rule.entryId === null || entries.get(rule.entryId)?.profileId === rule.profileId, '映射经历错误');
       check(!mappings.has(rule.mappingId), '重复映射 ID'); mappings.add(rule.mappingId);
       if (rule.semanticId !== undefined) {
-        keys(rule.features, ['label', 'type', 'group', 'kind', 'degree', 'index'], '映射结构');
+        // v3 可选复合结构参与指纹，防止普通电话/年月规则被误用于另一种布局。
+        keys(rule.features, ['label', 'type', 'group', 'kind', 'degree', 'index', 'layout'], '映射结构');
         global.FieldMatchingEngine.validateField({ scanId: 'scan.validation', semanticId: rule.semanticId, ...rule.features, name: '', placeholder: '', options: [] });
         check(rule.label === rule.features.label && typeof rule.confirmed === 'boolean' && typeof rule.enabled === 'boolean', '映射确认信息错误');
         check(Number.isInteger(rule.ruleVersion) && rule.ruleVersion >= 1, '映射版本错误');

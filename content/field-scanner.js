@@ -3,6 +3,7 @@
   'use strict';
   if (global.LocalApplyPageScanner) return;
   const M = global.FieldMatchingEngine;
+  const A = global.LocalApplyFieldAdapters;
   const documentId = crypto.randomUUID();
   const nodeIds = new WeakMap();
   const registry = new Map();
@@ -25,7 +26,7 @@
     const explicit = el.id ? root.querySelector('label[for="' + CSS.escape(el.id) + '"]')?.textContent : '';
     const wrap = el.closest('label')?.textContent;
     const nearby = el.closest('.form-item,.form-group,.field,.el-form-item,.ant-form-item')?.querySelector('label,.label,.el-form-item__label,.ant-form-item-label')?.textContent;
-    return M.redact(explicit || el.getAttribute('aria-label') || labelled.trim() || nearby || wrap || el.getAttribute('placeholder') || el.getAttribute('name'));
+    return M.redact(explicit || labelled.trim() || nearby || el.getAttribute('aria-label') || wrap || el.getAttribute('name') || el.getAttribute('placeholder'));
   }
 
   // 只读取分组标题，不读取经历内容；识别学历、经历种类及重复区块序号。
@@ -72,29 +73,39 @@
   function scan(authorize = false) {
     if (authorize) { granted = true; currentUrl = location.href; }
     if (!granted || location.href !== currentUrl) { granted = false; throw new Error('请先主动授权扫描当前招聘页面'); }
-    const found = controls().filter(allowed).slice(0, 500); const used = new Set(); const fields = [];
+    const all = controls().slice(0, 500); const excluded = [];
+    const found = all.filter((el) => {
+      const reason = A.exclusion(el, label(el));
+      if (reason) { excluded.push({ ...reason, label: reason.category === 'security_control' ? '安全控件' : label(el) }); return false; }
+      return allowed(el);
+    });
+    const compounds = A.groups(found, label); const used = new Set(); const fields = [];
     registry.clear();
     for (const el of found) {
       if (used.has(el)) continue;
+      const compound = compounds.get(el);
+      if (compound && compound.anchor !== el) continue;
+      if (compound) Object.values(compound.parts).forEach((part) => { used.add(part); if (part !== el) excluded.push({ category: 'compound_part', label: A.slot(part) || '国家区号', reason: '已归入“' + compound.label + '”复合字段' }); });
+      else if (A.country(el) || A.slot(el)) { excluded.push({ category: 'compound_part', label: A.slot(el) || '国家区号', reason: '未找到明确主字段，请在网页手动操作；不创建独立简历字段' }); continue; }
       const rawType = (el.getAttribute('type') || 'text').toLowerCase();
       const members = ['radio', 'checkbox'].includes(rawType) && el.name ? found.filter((node) => node.name === el.name && node.getAttribute('type') === rawType && node.closest('form,fieldset,[role="group"]') === el.closest('form,fieldset,[role="group"]')) : [el];
       members.forEach((member) => used.add(member));
-      const type = el.getAttribute('role') === 'combobox' ? 'combobox' : el.isContentEditable ? 'contenteditable'
-        : el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : ['email','tel','number','url','date','month','radio','checkbox'].includes(rawType) ? rawType : 'text';
-      let text = label(el);
+      const type = compound?.type || (el.getAttribute('role') === 'combobox' ? 'combobox' : el.isContentEditable ? 'contenteditable'
+        : el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : ['email','tel','number','url','date','month','datetime-local','radio','checkbox'].includes(rawType) ? rawType : 'text');
+      let text = compound?.label || label(el);
       if (members.length > 1) text = M.redact(el.closest('fieldset,[role="group"],.form-item,.form-group')?.querySelector('legend,:scope > label,.label')?.textContent || text);
       const field = { scanId: id(el), label: text, name: M.redact(el.getAttribute('name')), type,
-        placeholder: M.redact(el.getAttribute('placeholder')), options: options(el, members, type), ...context(el) };
+        placeholder: compound ? '' : M.redact(el.getAttribute('placeholder')), options: compound ? [] : options(el, members, type), ...context(el), ...(compound ? { layout: compound.layout } : {}) };
       if (!field.label || M.restricted(field) || /搜索|站内检索|订阅邮件/.test(field.label)) continue;
       field.semanticId = M.semanticId(field);
-      fields.push(field); registry.set(field.scanId, { el, members, field });
+      fields.push(field); registry.set(field.scanId, { el, members, field, compound });
     }
     // 指纹相同但有多份相同控件时不能任意合并成一条高置信规则。
     const counts = new Map();
     fields.forEach((field) => { const count = counts.get(field.semanticId) || 0; counts.set(field.semanticId, count + 1); if (count) field.index += count; field.semanticId = M.semanticId(field); });
     const login = !!document.querySelector('input[type="password"],input[autocomplete="one-time-code"],input[id*="captcha" i],input[name*="captcha" i],input[placeholder*="验证码"]') && fields.length <= 3 && !fields.some((field) => field.kind);
     if (login) { fields.length = 0; registry.clear(); }
-    return { documentId, origin: location.origin, fields, authorized: true, notice: login ? '登录/验证页面不执行智能填表，请进入招聘申请页' : '' };
+    return { documentId, origin: location.origin, fields, excluded, authorized: true, notice: login ? '登录/验证页面不执行智能填表，请进入招聘申请页' : '' };
   }
 
   // 每次值操作前重新核对授权、语义和节点引用，动态替换控件必须重新扫描确认。
@@ -109,6 +120,7 @@
 
   // 只有用户主动保存或核对填写时才读取该控件；不批量收集网页个人值。
   function readValue(item) {
+    if (item.compound) return A.read(item);
     if (item.field.type === 'radio') return item.members.find((el) => el.checked)?.value || '';
     if (item.field.type === 'checkbox') return item.members.length === 1 ? item.el.checked : item.members.filter((el) => el.checked).map((el) => el.value);
     if (item.field.type === 'combobox' && !('value' in item.el)) return item.el.textContent.trim();

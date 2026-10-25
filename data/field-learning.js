@@ -5,7 +5,11 @@
   const clone = (value) => JSON.parse(JSON.stringify(value));
   // 依赖通过参数传入，测试使用本地 Mock；浏览器中始终复用唯一 repository/AI 客户端。
   function create(repository, ai, browser) {
-    const sessions = new Map(); const queues = new Map(); let undo = null;
+    const sessions = new Map(); const queues = new Map(); const aiJobs = new Map(); let undo = null;
+    // 页面退出时立即释放待确认个人值、覆盖令牌及模型任务，不保留隐藏的输入历史。
+    function drop(id) { aiJobs.get(id)?.abort(); sessions.delete(id); }
+    // 顶层导航/关闭绑定页面时，终止该页所有扫描会话；其他页面资料不受影响。
+    function invalidate(tabId) { for (const [id, item] of sessions) if (item.tabId === tabId) drop(id); }
     // 可读错误不包含模型原文、凭据或网页值。
     function check(ok, message) { if (!ok) throw new Error(message); }
     // 标准内容脚本缺失时只注入当前已授权页面，不跨标签页广播个人资料。
@@ -14,7 +18,7 @@
       try { response = await browser.tabs.sendMessage(tabId, message); }
       catch (error) {
         if (!inject) throw new Error('页面未连接，请重新授权扫描');
-        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/floatbar.js'] });
+        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/floatbar.js'] });
         response = await browser.tabs.sendMessage(tabId, message);
       }
       check(response?.ok, response?.error || '页面操作失败'); return response;
@@ -33,9 +37,11 @@
     }
     // 获取并核对当前文档，导航/过期/切换档案后旧确认不能继续使用。
     async function session(id) {
-      const item = sessions.get(id); check(item && Date.now() - item.createdAt < 1800000, '扫描会话已过期，请重新授权扫描');
+      const item = sessions.get(id);
+      if (item && Date.now() - item.createdAt >= 1800000) drop(id);
+      check(sessions.has(id), '扫描会话已过期或页面已导航/关闭，请重新授权扫描');
       const tab = await browser.tabs.get(item.tabId);
-      check(tab.url === item.url, '页面已导航，请重新授权扫描');
+      if (tab.url !== item.url) { drop(id); throw new Error('页面已导航，请重新授权扫描'); }
       const db = await repository.read(); check(db.profiles.some((profile) => profile.profileId === item.profileId), '档案已删除');
       check(db.activeProfileId === item.profileId, '活动档案已变化，请重新授权扫描');
       return { item, db };
@@ -47,6 +53,7 @@
       item.fields = fields; item.rows = M.match(db, item.profileId, item.origin, fields);
       for (const row of item.rows) {
         const previous = old.find((value) => value.field.scanId === row.field.scanId && value.field.semanticId === row.field.semanticId);
+        if (previous?.ignored) row.ignored = true;
         const source = previous?.target && item.sources?.find((source) => source.fieldId === previous.target.fieldId && source.entryId === previous.target.entryId);
         const sameTarget = JSON.stringify(row.target) === JSON.stringify(previous?.target);
         const unchanged = source && JSON.stringify(source.value) === JSON.stringify(M.valueOf(db, item.profileId, previous.target)?.value)
@@ -54,6 +61,7 @@
         if (previous?.chosen && (item.revision === db.revision || unchanged)) {
           Object.assign(row, { target: previous.target, chosen: true, status: previous.status, reason: row.source === 'memory' ? '填写已验证，已记住本地网站映射' : previous.reason, source: row.source === 'memory' ? 'memory' : previous.source });
           if (previous.verification) row.verification = previous.verification;
+          if (previous.conflict) row.conflict = previous.conflict;
         }
         if (previous?.suggestion && !row.target) {
           const suggestion = previous.suggestion;
@@ -70,7 +78,7 @@
         rows: item.rows.map((row) => ({ ...row, value: row.target ? M.valueOf(db, item.profileId, row.target)?.value ?? null : null })),
         sources: item.sources, entries: db.entries.filter((entry) => entry.profileId === item.profileId).map(({ entryId, kind, order }) => ({ entryId, kind, order })),
         definitions: db.fieldDefinitions.filter((def) => item.sources.some((source) => source.fieldId === def.fieldId)),
-        canUndo: !!undo };
+        excluded: item.excluded || [], canUndo: !!undo };
     }
     // 再扫描只读取已经授权的同一文档，动态新增时清理旧建议/确认令牌。
     async function refresh(item, db) {
@@ -78,7 +86,7 @@
       check(response.snapshot.documentId === item.documentId, '页面已刷新，请重新授权扫描');
       response.snapshot.fields.forEach(M.validateField);
       if (JSON.stringify(response.snapshot.fields) !== JSON.stringify(item.fields)) { item.rows = []; item.aiPreview = null; item.valuePreview = null; }
-      rebuild(item, db, response.snapshot.fields); item.dirty = false;
+      rebuild(item, db, response.snapshot.fields); item.excluded = response.snapshot.excluded || []; item.dirty = false;
     }
     // 选择仅允许本档案来源，不能通过 AI/页面提供的 ID 读取其他人的值。
     function target(item, fieldId, entryId) {
@@ -111,9 +119,9 @@
         const response = await pageMessage(msg.tabId, { type: 'learning:scan', authorize: true, expectedUrl: tab.url }, true);
         const snapshot = response.snapshot; check(snapshot.origin === new URL(tab.url).origin && snapshot.fields.length <= 500, '页面来源或字段数量错误');
         snapshot.fields.forEach(M.validateField);
-        for (const [id, previous] of sessions) if (previous.tabId === msg.tabId || sessions.size >= 8) sessions.delete(id);
+        for (const [id, previous] of sessions) if (previous.tabId === msg.tabId || sessions.size >= 8) drop(id);
         const item = { sessionId: crypto.randomUUID(), createdAt: Date.now(), tabId: msg.tabId, url: tab.url, origin: snapshot.origin,
-          documentId: snapshot.documentId, profileId, fields: snapshot.fields, notice: snapshot.notice || '' };
+          documentId: snapshot.documentId, profileId, fields: snapshot.fields, excluded: snapshot.excluded || [], notice: snapshot.notice || '' };
         rebuild(item, db); sessions.set(item.sessionId, item); return view(item, db);
       }
       if (msg.type === 'learning:rules') { const db = await repository.read(); return { rules: db.mappingRules, definitions: db.fieldDefinitions, profiles: db.profiles, entries: db.entries, revision: db.revision, canUndo: !!undo }; }
@@ -133,14 +141,14 @@
         return { done: true };
       }
       const { item, db } = await session(msg.sessionId);
-      if (msg.type === 'learning:revoke') { await pageMessage(item.tabId, { type: 'learning:revoke' }); sessions.delete(item.sessionId); return {}; }
+      if (msg.type === 'learning:revoke') { await pageMessage(item.tabId, { type: 'learning:revoke' }); drop(item.sessionId); return {}; }
       if (msg.type === 'learning:session') { await refresh(item, db); return view(item, db); }
       check(item.revision === db.revision, '资料已变化，请重新扫描并预览');
       if (msg.type === 'learning:prepareAI') {
+        check(Array.isArray(msg.scanIds) && msg.scanIds.length > 0 && msg.scanIds.length <= 20 && new Set(msg.scanIds).size === msg.scanIds.length, '请勾选 1–20 个需要 AI 识别的未知字段');
+        const fields = msg.scanIds.map((scanId) => { const row = rowOf(item, scanId); check(!row.target && !row.ignored && row.status !== 'unsupported', '只能选择未忽略的未知字段使用 AI'); return row.field; });
         const settings = await repository.readAiSettings(); const provider = global.LocalApplyProviders.resolve(settings);
         check(settings.model, '请先配置模型；不配置 AI 仍可手动匹配');
-        const fields = item.rows.filter((row) => !row.target && row.status !== 'unsupported').slice(0, 20).map((row) => row.field);
-        check(fields.length, '当前没有需要 AI 识别的未知字段');
         const catalog = db.fieldDefinitions.filter((def) => item.sources.some((source) => source.fieldId === def.fieldId)).slice(0, 200)
           .map((def) => ({ fieldId: def.fieldId, label: M.redact(def.label), type: def.type, group: M.redact(def.group), aliases: def.aliases.slice(0, 20).map((alias) => M.redact(alias)), options: def.options.slice(0, 100).map((option) => M.redact(option)) }));
         const payload = { fields, catalog, sources: item.sources.filter((source) => catalog.some((def) => def.fieldId === source.fieldId))
@@ -153,7 +161,13 @@
         const preview = item.aiPreview; check(msg.confirmed === true && preview?.token === msg.token && Date.now() - preview.createdAt < 300000, '请先预览接收方和发送内容并确认');
         item.aiPreview = null;
         const settings = await repository.readAiSettings(); check(await aiContext(settings) === preview.context, 'API 配置已变化，请重新预览');
-        const out = await ai.callGLM({ model: settings.model, expectedContext: preview.context, messages: global.FieldSuggestions.messages(preview.payload), disableThinking: true, maxTokens: 5000, timeoutMs: 30000 });
+        // 取消不等待同会话队列；过期响应即便底层未及时中止也不得成为可采用建议。
+        check(sessions.get(item.sessionId) === item, '页面会话已撤销，请重新扫描');
+        const controller = new AbortController(); aiJobs.set(item.sessionId, controller);
+        let out;
+        try { out = await ai.callGLM({ model: settings.model, expectedContext: preview.context, messages: global.FieldSuggestions.messages(preview.payload), signal: controller.signal, disableThinking: true, maxTokens: 5000, timeoutMs: 30000 }); check(!controller.signal.aborted, '已取消字段识别'); }
+        catch (error) { if (controller.signal.aborted) throw new Error('已取消字段识别'); throw error; }
+        finally { if (aiJobs.get(item.sessionId) === controller) aiJobs.delete(item.sessionId); }
         check((await repository.read()).revision === preview.revision && await aiContext(await repository.readAiSettings()) === preview.context, '识别期间资料或 API 已变化，请重新扫描');
         let parsed; try { parsed = JSON.parse(out.content); } catch { throw new Error('AI 字段建议不是有效 JSON，请重试或手动选择'); }
         const suggestions = global.FieldSuggestions.validate(parsed, preview.payload);
@@ -161,6 +175,7 @@
         return { ...view(item, db), suggestionCount: suggestions.length };
       }
       const row = rowOf(item, msg.scanId);
+      if (msg.type === 'learning:ignore') { row.ignored = msg.ignored === true; item.aiPreview = null; return view(item, db); }
       if (msg.type === 'learning:select') {
         row.target = target(item, msg.fieldId, msg.entryId); row.chosen = true; delete row.verification;
         row.status = M.hasValue(M.valueOf(db, item.profileId, row.target)?.value) ? 'matched' : 'missing_value'; row.source = 'manual'; row.reason = '用户已选择本地来源，填写前仍需确认';
@@ -172,7 +187,12 @@
       }
       if (msg.type === 'learning:previewValue') {
         check(msg.definition || msg.fieldId, '请选择已有字段或填写新字段定义');
-        if (msg.definition) { global.FieldSuggestions.validate({ suggestions: [{ scanId: row.field.scanId, existingFieldId: null, definition: msg.definition, sourceRef: null, confidence: 0 }] }, { fields: [row.field], catalog: [], sources: [] }); }
+        if (msg.definition) {
+          global.FieldSuggestions.validate({ suggestions: [{ scanId: row.field.scanId, existingFieldId: null, definition: msg.definition, sourceRef: null, confidence: 0 }] }, { fields: [row.field], catalog: [], sources: [] });
+          // 当前档案已有相同定义时引导选择来源，避免把缺少值误当成缺少字段。
+          const normalize = global.WangshenTemplates.normalizeLabel;
+          check(!db.fieldDefinitions.some((def) => item.sources.some((source) => source.fieldId === def.fieldId) && def.type === msg.definition.type && [def.label, ...def.aliases].some((label) => normalize(label) === normalize(msg.definition.label))), '该字段定义已存在，请选择已有字段来源后补充值');
+        }
         const selected = msg.definition ? null : target(item, msg.fieldId, msg.entryId);
         let entryId = selected?.entryId || null;
         if (msg.definition && msg.entryId) { check(db.entries.some((entry) => entry.entryId === msg.entryId && entry.profileId === item.profileId), '新字段经历不属于当前档案'); entryId = msg.entryId; }
@@ -195,12 +215,16 @@
       if (msg.type === 'learning:fill') {
         check(msg.confirmed === true && row.target, '填写前必须核对本地来源并确认');
         const value = M.valueOf(db, item.profileId, row.target)?.value; check(M.hasValue(value), '本地没有该字段值，请先填写资料');
+        // 覆盖令牌只允许当前项、当前资料版本及五分钟内已展示的差异，不能用布尔开关绕过。
+        const overwrite = msg.overwriteToken !== undefined;
+        if (overwrite) check(row.conflict?.token === msg.overwriteToken && row.conflict.revision === db.revision && Date.now() - row.conflict.createdAt < 300000 && JSON.stringify(value) === JSON.stringify(row.conflict.after), '覆盖确认已失效，请重新填写并预览差异');
         row.status = 'filling';
         try {
-          const result = await pageMessage(item.tabId, { type: 'learning:fill', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId, value });
-          check(['success', 'failed', 'unsupported'].includes(result.result.status), '网页返回无效填写结果');
+          const result = await pageMessage(item.tabId, { type: 'learning:fill', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId, value, ...(overwrite ? { overwrite: true, expectedCurrent: row.conflict.before } : {}) });
+          check(['success', 'failed', 'unsupported', 'needs_confirmation'].includes(result.result.status), '网页返回无效填写结果');
           row.status = result.result.status; row.reason = result.result.reason || '事件派发后已跨延迟复读，网页未回退';
           row.chosen = true;
+          row.conflict = result.result.conflict ? { ...result.result.conflict, token: crypto.randomUUID(), revision: db.revision, createdAt: Date.now() } : null;
           row.verification = row.status === 'success' ? { target: clone(row.target), value: clone(value), verifiedAt: result.result.verifiedAt } : null;
         } catch (error) { row.status = 'failed'; row.reason = error.message; row.verification = null; }
         return view(item, db);
@@ -223,11 +247,12 @@
     function changed(sender, msg) { for (const item of sessions.values()) if (item.tabId === sender.tab?.id && item.documentId === msg.documentId) item.dirty = true; }
     // 同一会话串行执行，防止后台刷新替换正在填写的行对象或覆盖确认结果。
     async function dispatch(msg) {
+      if (msg.type === 'learning:cancelAI') { const { item } = await session(msg.sessionId); aiJobs.get(item.sessionId)?.abort(); item.aiPreview = null; return { cancelled: true }; }
       const key = msg.sessionId || 'management';
       const pending = (queues.get(key) || Promise.resolve()).catch(() => {}).then(() => handle(msg)); queues.set(key, pending);
       try { return await pending; } finally { if (queues.get(key) === pending) queues.delete(key); }
     }
-    return { handle: dispatch, changed };
+    return { handle: dispatch, changed, invalidate };
   }
   global.FieldLearning = { create };
 })(globalThis);

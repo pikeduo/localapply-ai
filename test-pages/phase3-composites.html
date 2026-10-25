@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成招聘申请 · 复合控件</title><style>body{font:16px/1.6 system-ui;max-width:850px;margin:20px auto}.form-item{padding:12px;border:1px solid #ddd;margin:12px}input,select{padding:7px}label{margin-right:10px}[hidden]{display:none!important}</style></head>
+<body><h1>合成招聘申请表</h1><form id="application">
+<div class="form-item"><label for="name">姓名</label><input id="name"></div>
+<div class="form-item"><label for="phone">手机号</label><select id="country" aria-label="+86"><option value="+86">中国大陆 (+86)</option><option value="+44">英国 (+44)</option><option value="+1">美国 (+1)</option></select><input id="phone" type="tel"></div>
+<div class="form-item"><span class="label">毕业时间</span><select id="grad-year" aria-label="年"><option value="">年</option><option value="2024">2024年</option><option value="2028">2028年</option></select><select id="grad-month" aria-label="月"><option value="">月</option><option value="02">2月</option><option value="06">6月</option><option value="12">12月</option></select></div>
+<div class="form-item"><span class="label">可到岗日期</span><input id="arrival-year" placeholder="年"><input id="arrival-month" placeholder="月"><input id="arrival-day" placeholder="日"></div>
+<div class="form-item"><label for="native-date">出生日期</label><input id="native-date" type="date"></div>
+<div class="form-item"><label for="native-month">入学时间</label><input id="native-month" type="month"></div>
+<div class="form-item"><label for="text-date">日期说明</label><input id="text-date" placeholder="YYYY/MM/DD"></div>
+<div class="form-item"><label for="calendar-date">日历日期</label><input id="calendar-date" readonly aria-haspopup="dialog" aria-controls="calendar"><div id="calendar" role="dialog" hidden><select aria-label="年" id="calendar-year"><option>2026</option><option>2028</option></select><select aria-label="月" id="calendar-month"><option>1</option><option>2</option><option>3</option></select><button type="button" id="calendar-day" aria-label="2026-01-29">29</button></div></div>
+<div class="form-item"><span class="label">现居地址</span><select id="province" aria-label="省"><option value="">省</option><option value="合成省">合成省</option></select><select id="city" aria-label="市"><option value="">市</option><option value="合成市">合成市</option></select><select id="district" aria-label="区"><option value="">区</option><option value="合成区">合成区</option></select></div>
+<div class="form-item"><label for="unknown">资格附加说明</label><input id="unknown"></div>
+<div class="form-item"><label for="other-unknown">是否接受调剂</label><input id="other-unknown"></div>
+<label><input id="sync-resume" type="checkbox">同步更新在线简历</label><label><input id="agreement" type="checkbox">我已阅读并同意隐私协议</label>
+<label for="password">密码</label><input id="password" type="password"><label for="captcha">短信验证码</label><input id="captcha" autocomplete="one-time-code">
+<button type="button" id="send-code">发送验证码</button><button type="submit">提交投递</button></form><output id="calendar-state"></output>
+<script>
+// 合成页面记录受控日历状态和提交次数，测试不会访问真实招聘服务。
+window.__submitCount=0;document.getElementById('application').addEventListener('submit',function(event){event.preventDefault();window.__submitCount++;});
+// 日历仅通过候选日期点击更新状态，直接修改输入框不能伪造选择成功。
+document.getElementById('calendar-date').addEventListener('click',function(){document.getElementById('calendar').hidden=false;});
+// 年月选择真实改变日期候选，测试要求跨年选择后再点击目标日。
+document.querySelectorAll('#calendar select').forEach(function(select){select.addEventListener('change',function(){document.getElementById('calendar-day').setAttribute('aria-label',document.getElementById('calendar-year').value+'-'+document.getElementById('calendar-month').value.padStart(2,'0')+'-29');});});
+document.querySelectorAll('#calendar button').forEach(function(button){button.addEventListener('click',function(){const value=button.getAttribute('aria-label');document.getElementById('calendar-date').value=value;document.getElementById('calendar-state').textContent=value;document.getElementById('calendar').hidden=true;});});
+</script></body></html>
