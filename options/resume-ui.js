@@ -148,17 +148,22 @@ async function confirmResume() {
   } catch (error) { $('#pdfStatus').textContent = '未导入：' + error.message + '。数据变化时请点击「刷新差异」后重新核对。'; }
   finally { $('#btnImport').disabled = false; $('#cancelResume').disabled = false; }
 }
-// 按分类和字段类型编辑；三方合并保留并发保护，手动编辑清除旧 AI 来源。
+// 每个分类包含完整标题和字段卡片；三方合并保留并发保护，手动编辑清除旧 AI 来源。
 async function renderResumeCenter() {
   const root = $('#basicFields'); root.replaceChildren();
   const fresh = await getState(); state = fresh;
   const profile = fresh.profiles.find((p) => p.id === $('#entryProfile').value);
-  if (!profile) return;
+  if (!profile) { renderResumeToc(); return; }
   const groups = [...new Set(profile.fields.filter((field) => !field.material).map((field) => field.group))];
   const selectedGroup = $('#centerGroup').value; $('#centerGroup').replaceChildren(new Option('全部分类', ''), ...groups.map((group) => new Option(group, group))); $('#centerGroup').value = selectedGroup;
-  let priorGroup;
+  let priorGroup; let fields;
   for (const field of profile.fields.filter((f) => !f.material).sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group))) {
-    if (priorGroup !== field.group) { const heading = document.createElement('h3'); heading.textContent = field.group; heading.dataset.group = field.group; heading.className = 'center-group-heading'; root.append(heading); priorGroup = field.group; }
+    if (!fields || priorGroup !== field.group) {
+      const section = document.createElement('section'); section.className = 'resume-group'; section.dataset.group = field.group;
+      const heading = document.createElement('h3'); heading.textContent = field.group; heading.dataset.group = field.group; heading.className = 'center-group-heading';
+      heading.id = 'resumeGroupHeading' + groups.indexOf(field.group); section.setAttribute('aria-labelledby', heading.id);
+      fields = document.createElement('div'); fields.className = 'basic-grid'; section.append(heading, fields); root.append(section); priorGroup = field.group;
+    }
     const label = document.createElement('label'); label.className = 'center-field';
     const text = document.createElement('span'); text.textContent = field.label;
     const def = { type: field.inputType, options: field.options || [] }; const input = workspaceControl(def, field.value);
@@ -177,7 +182,7 @@ async function renderResumeCenter() {
       } catch (error) { $('#centerStatus').textContent = '保存失败：' + error.message; }
     });
     const source = document.createElement('small'); source.textContent = '修改后离开输入框自动保存 · 保存失败保留输入';
-    label.append(text, input, source); root.append(label);
+    label.append(text, input, source); fields.append(label);
   }
   // 新建档案或重新导入后立即同步目录，避免继续指向上一份档案。
   renderResumeToc();

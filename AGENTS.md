@@ -36,7 +36,7 @@
 - 阶段四以 `data/profile-view.js` 生成界面投影，重复经历按 entryId 分区，不按标题合并；panel/ 通过后台授权的 layout/edit 命令拖动、折叠和定位内部简历中心。不得改为网页 postMessage 传输资料或令牌。关闭（含工具栏切换）中止本页 AI/临时候选；折叠保留会话。
 - options/workspace.js 复用后台命令和旧投影建立字段库/引导/概览；既有定义用 attachField 绑定空值，不能通过复制旧 UI 字段意外新建重复定义；editEntry 只改标题。表单加载禁用输入，未保存编辑在刷新/切档案前确认，实际值不得出现在日志/导航参数。
 - 工作台按最新要求仅显示当前导航模块，顺序为导入简历、AI 与模型、我的简历、字段库、数据与备份、诊断与关于；概览位于我的简历。URL 锚点恢复模块，切换不得清理预览或草稿；旧 #workspaceOverview 兼容到我的简历，卡片编辑深链接继续定位。界面不再显示右上角模型状态或侧栏 Fork 来源，仓库许可证/版权仍保留。UI 测试须先用真实导航显示相应模块，不得强制点击隐藏控件。
-- 设置页 `options/appearance.js` 只在按页面目录隔离的 localStorage 保存 light/dark 显示偏好，存储不可用仍能切换；不进入个人库或备份。右下角提供顶部/底部导航；简历目录按当前分类和 entryId 生成，定位须展开折叠区且不更改模块路由。
+- 设置页 `options/appearance.js` 只在按页面目录隔离的 localStorage 保存 light/dark 显示偏好，存储不可用仍能切换；不进入个人库或备份。右下角提供顶部/底部导航；简历目录按当前分类和 entryId 生成，定位完整分类卡片并展开全部字段，短区块居中、长区块顶对齐；滚动按视口中线同步目录和整卡高亮，目录自身滚动不能拉动正文或抢焦点，不更改模块路由。
 - data/floating-panel.js 将私有卡片令牌绑定标签、URL、文档及 30 分钟有效期，存于 chrome.storage.session。网页容器使用封闭 Shadow DOM + 独立扩展 iframe；后台逐请求验证令牌，禁止通过任意网页嵌入升级权限。关闭、导航及刷新撤销旧访问。
 - data/diagnostics.js 通过 chrome.storage.local 的独立 localapply.diagnostics 保存最多 400 条、最近七天的固定操作、数量、耗时、错误码/HTTP 状态和插件代码位置；禁止原始异常正文、URL、网页标签、资料值及 Key 入日志或备份。卡片及扩展设置页支持查看/导出/清空，file:// 不读取扩展日志。发行包必须包含 panel/。
 - options/resume-files.js 有界校验并保留 DOCX 图片/字体/版式，删除外部关系；document-renderer.js 在禁脚本、禁外网的临时 iframe 转图，不能遗漏图片后静默转纯文本。PDF/DOCX 最多 10 MiB、30 页/图，DOCX 解压最多 40 MiB/2,000 项，图片合计最多 16 MiB；取消/换文件释放资源，忽略迟到响应。

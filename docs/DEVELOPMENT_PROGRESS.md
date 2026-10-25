@@ -1,6 +1,6 @@
 # localapply-ai｜开发进度与阶段验收记录
 
-> **文档版本：** v2.3
+> **文档版本：** v2.4
 > **更新日期：** 2026-10-26
 > **对应计划：** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) **v2.0**（2026-10-25 起采用新版任务和阶段编号）
 > **项目：** `localapply-ai`（基于 [`xiaoxiaobaijiangjun/wangshen-autofill`](https://github.com/xiaoxiaobaijiangjun/wangshen-autofill) Fork）  
@@ -201,6 +201,10 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 
 2026-10-26 后续样式调整：快捷栏改为“顶部 → 明暗 → 底部”竖排，并增加页面底部留白。`node --test --test-timeout=120000 --test-name-pattern='设置快捷导航' tests/browser.test.cjs` 实测 **2/2**，0 失败/跳过，含真实按钮排列和窄窗边界；日志 `.browser-tests/settings-vertical.log`。
 
+**完整分类与滚动目录增补（2026-10-26，基线 `5addfdb`）：** 简历分类由平铺标题和字段改为独立卡片，包含完整标题、边框、底色和全部字段；目录定位并高亮整张卡片，先展开折叠区、清空搜索，短区块完整居中、长区块从顶部阅读。滚轮浏览按视口中线同步目录和整卡高亮，长区块标题滚出视口仍保持当前位置；目录自身滚动露出当前项，窗口缩小时同样生效，不移动输入焦点或改写资料。同名经历仍按 entryId 区分，模块路由、自动保存和 Schema v3 保留。
+
+新增扩展/file:// 两个 Playwright 用例，使用真实滚轮验证完整字段可见、长区块、焦点保留、目录内部滚动和窗口缩放。原快捷导航测试将“标题获得焦点”断言更新为“完整卡片获得焦点”，符合本次需求，未删除旧测试。首轮相关测试 **19 通过 / 3 失败**（`.browser-tests/resume-sections-e2e.log`），原因是靠近页底的短卡片顶对齐后，滚动同步误选最后一项；改为完整短卡片居中定位后专项 **4/4**（`resume-sections-repair.log`）。最终 `npm test` **106/106**；`node --test --test-timeout=120000 --test-name-pattern='简历模块导航|设置快捷导航|工作台模块导航|阶段四' tests/browser.test.cjs` **22/22**（43.88 秒），均 0 失败/跳过，本轮未重复完整 E2E。最终日志 `.browser-tests/resume-sections-unit-final.log`、`resume-sections-final.log`；截图 `resume-module-{light,dark}-{extension,file}.png`，均位于同目录、仅含合成资料。
+
 实际环境为 Windows、Node.js v24.17.0、Playwright 1.62.1 配套 Chromium；`npm test` **106/106**；`node --test --test-timeout=120000 --test-name-pattern='设置快捷导航|工作台模块导航|阶段四' tests/browser.test.cjs` **20/20**（52.90 秒），均 0 失败/跳过。截图等待颜色过渡后再次定向运行 `--test-name-pattern='设置快捷导航'` **2/2**（7.31 秒）；本轮未重复完整 E2E。日志为 `.browser-tests/settings-unit.log`、`settings-navigation.log`、`settings-navigation-final.log`；截图为 `workspace-{light,dark,narrow}-{extension,file}.png`（同目录，均为合成资料）。
 
 ### 阶段 5｜岗位识别与投递记录工作台（新增，未开始）
@@ -274,6 +278,7 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 | 导航增补首轮全套（旧用例导航补齐前启动） | 102 通过 / 4 失败 / 0 跳过，384.13 秒；3 个关联子项及父项失败 | `npm run test:e2e`；`navigation-e2e-final.log`；原因是旧测试操作隐藏的模型配置；下一行定向复验通过，未再次重复整套 | 是 |
 | 导航增补修复后复验 | 18/18，0 失败/跳过，34.13 秒 | `node --test --test-timeout=120000 --test-name-pattern='新版阶段三：日期电话\|工作台模块导航' tests/browser.test.cjs`；`navigation-repair.log` | 是 |
 | 设置快捷操作增补（2026-10-26） | 基础 106/106、相关浏览器 20/20；截图定向复验 2/2，均 0 失败/跳过 | 上述增补段记录命令及 `.browser-tests/settings-*.log`；未重复全套 E2E | 是 |
+| 完整分类与滚动目录（2026-10-26） | 最终基础 106/106、相关浏览器 22/22，均 0 失败/跳过；首轮失败和专项复验单列保留 | 阶段四增补段；`.browser-tests/resume-sections-unit-final.log`、`resume-sections-final.log` | 是 |
 | 真实第三方模型 | 待抽检 | 仅使用虚构简历 | 否 |
 | 真实招聘网站 | 待抽检 | 仅授权页面、人工提交 | 否 |
 | Chrome / Edge 发布验收 | 待开发 | 新版阶段 8 补录 | 否 |
@@ -352,5 +357,6 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 | 2026-10-25 | v2.1 | 完成计划 v2.0 阶段四悬浮布局、双标签、预览三操作、中文工作台与字段/经历维护；基础 106、完整浏览器 104 项通过；保留全部历史并停止于阶段四 | 本地实际测试；docs/阶段4界面与工作台验收.md |
 | 2026-10-25 | v2.2 | 按指定顺序切换六个独立模块，合并概览、移除两处界面文案，保留草稿与深链接；同步旧测试导航，基础 106、UI 定向 63、修复后定向 18 项通过；完整批次单列记录 | 本地实际测试；同一阶段四报告增补 |
 | 2026-10-26 | v2.3 | 增加顶部/底部快捷导航、持久化明暗切换和当前档案目录；基础 106、相关浏览器 20 项通过，截图定向复验 2 项通过；停止于阶段四 | 本地实际测试与截图；本文件阶段四增补 |
+| 2026-10-26 | v2.4 | 分类完整卡片、全字段定位及滚轮目录同步；修复页底短卡片误选与窗口缩小后的目录可见性，最终基础 106、相关浏览器 22 项通过 | 本地真实滚轮测试与明暗截图；本文件阶段四增补 |
 
 > **维护要求：** Codex 每次完成一个功能块、修复阻断性缺陷或结束阶段时，都应更新本文件。**以真实代码和实际运行记录为准，绝不虚构已完成项目或测试结果。**

@@ -2,6 +2,8 @@
 let workspaceDatabase = null;
 let workspaceEditing = null;
 let workspaceInitialized = false;
+let workspaceResumeSections = [];
+let workspaceResumeFrame = 0;
 // 路由只接受固定模块，概览旧链接兼容到我的简历，不接收任意页面地址。
 const workspacePages = {
   pdfCard: ['导入简历', '选择或拖入 PDF / DOCX，预览后由你决定何时解析。'],
@@ -25,6 +27,7 @@ function showWorkspacePage(target, focus = false) {
   document.getElementById('workspaceTitle').textContent = workspacePages[key][0]; document.getElementById('workspaceDescription').textContent = workspacePages[key][1];
   document.querySelector('.skip-link').hash = key; document.body.dataset.workspaceActivePage = key;
   if (focus) { window.scrollTo(0, 0); document.getElementById('workspaceContent').focus({ preventScroll: true }); }
+  scheduleResumePosition();
 }
 // DOM 构造始终用文本，字段名、经历标题不得拼接到 HTML。
 function workspaceNode(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
@@ -32,32 +35,75 @@ function workspaceNode(tag, text = '', className = '') { const element = documen
 function renderResumeToc() {
   const root = document.getElementById('resumeToc');
   const selected = root.querySelector('[aria-current="location"]')?.dataset.tocKey;
-  const items = [['overview', '资料概览'], ['center', '档案与资料']];
-  document.querySelectorAll('#basicFields .center-group-heading').forEach((heading) => items.push(['group:' + heading.dataset.group, heading.textContent]));
-  document.querySelectorAll('#entriesList .entry-card').forEach((entry) => items.push(['entry:' + entry.dataset.entryId, entry.querySelector('h3').textContent]));
-  items.push(['preferences', '填写偏好']);
-  root.replaceChildren(...items.map(([key, label]) => {
+  const items = [
+    { key: 'overview', label: '资料概览', target: document.getElementById('workspaceOverview') },
+    { key: 'center', label: '档案与资料', target: document.getElementById('resumeProfileControls') },
+  ];
+  document.querySelectorAll('#basicFields .resume-group').forEach((target) => items.push({ key: 'group:' + target.dataset.group, label: target.querySelector('h3').textContent, target }));
+  document.querySelectorAll('#entriesList .entry-card').forEach((target) => items.push({ key: 'entry:' + target.dataset.entryId, label: target.querySelector('h3').textContent, target }));
+  items.push({ key: 'preferences', label: '填写偏好', target: document.getElementById('fillingPreferences') });
+  workspaceResumeSections = items;
+  root.replaceChildren(...items.map(({ key, label }) => {
     const button = workspaceNode('button', label); button.type = 'button'; button.dataset.tocKey = key; button.title = label;
     if (selected === key) button.setAttribute('aria-current', 'location');
     return button;
   }));
+  scheduleResumePosition();
 }
-// 分类定位先展开折叠区并恢复被搜索隐藏的字段，不改变地址或丢弃表单草稿。
+// 活动状态覆盖完整卡片；只滚动目录自身，避免把正文拉回或抢走输入焦点。
+function markResumeSection(key) {
+  const root = document.getElementById('resumeToc');
+  workspaceResumeSections.forEach((section) => section.target.classList.toggle('is-target', section.key === key));
+  let active;
+  root.querySelectorAll('button').forEach((button) => {
+    if (button.dataset.tocKey === key) { active = button; if (!button.hasAttribute('aria-current')) button.setAttribute('aria-current', 'location'); }
+    else if (button.hasAttribute('aria-current')) button.removeAttribute('aria-current');
+  });
+  const container = root.closest('.resume-toc');
+  if (!active || getComputedStyle(container).position !== 'sticky') return;
+  const box = container.getBoundingClientRect(); const item = active.getBoundingClientRect();
+  if (item.top < box.top + 48) container.scrollTop -= box.top + 48 - item.top;
+  else if (item.bottom > box.bottom - 12) container.scrollTop += item.bottom - box.bottom + 12;
+}
+// 以视口中线判断正在阅读的完整区块；折叠和搜索隐藏项不参与判断。
+function updateResumePosition() {
+  workspaceResumeFrame = 0;
+  if (document.body.dataset.workspaceActivePage !== 'resumeCenter') return;
+  const visible = workspaceResumeSections.filter((section) => section.target.getClientRects().length);
+  if (!visible.length) return;
+  const readingLine = innerHeight / 2; let current = visible[0];
+  if (scrollY > 1) for (const section of visible) { if (section.target.getBoundingClientRect().top <= readingLine) current = section; else break; }
+  // 底部留白不能使最后一个短区块永远无法选中。
+  if (scrollY > 0 && scrollY + innerHeight >= document.documentElement.scrollHeight - 2) current = visible[visible.length - 1];
+  markResumeSection(current.key);
+}
+// 滚轮、尺寸变化与重新渲染合并到每帧最多一次检测，不写数据库或读取字段实际值。
+function scheduleResumePosition() {
+  if (!workspaceResumeFrame) workspaceResumeFrame = requestAnimationFrame(updateResumePosition);
+}
+// 搜索只影响显示；目录定位会清空筛选，恢复所选分类的全部字段。
+function filterResumeFields() {
+  const query = document.getElementById('centerSearch').value.trim().toLowerCase();
+  document.querySelectorAll('#basicFields .resume-group').forEach((section) => {
+    const fields = [...section.querySelectorAll('.center-field')];
+    fields.forEach((item) => { item.hidden = !item.textContent.toLowerCase().includes(query); });
+    section.hidden = fields.every((item) => item.hidden);
+  });
+  scheduleResumePosition();
+}
+// 短区块完整居中显示，长区块从顶部阅读；先展开并恢复全部字段，不改变路由或草稿。
 function locateResumeSection(key) {
-  let target;
-  if (key.startsWith('group:')) {
-    const group = key.slice(6); target = [...document.querySelectorAll('#basicFields .center-group-heading')].find((item) => item.dataset.group === group);
-    if (target) {
-      document.getElementById('centerGroup').value = group;
-      document.getElementById('centerSearch').value = ''; document.getElementById('centerSearch').dispatchEvent(new Event('input'));
-    }
-  } else if (key.startsWith('entry:')) target = [...document.querySelectorAll('#entriesList .entry-card')].find((item) => item.dataset.entryId === key.slice(6));
-  else target = document.getElementById({ overview: 'workspaceOverview', center: 'resumeCenter', preferences: 'fillingPreferences' }[key]);
+  const target = workspaceResumeSections.find((section) => section.key === key)?.target;
   if (!target) return;
+  if (key.startsWith('group:')) {
+    document.getElementById('centerGroup').value = key.slice(6);
+    document.getElementById('centerSearch').value = ''; filterResumeFields();
+  }
   for (let parent = target.parentElement; parent; parent = parent.parentElement) { if (parent.tagName === 'DETAILS') parent.open = true; }
-  document.querySelectorAll('.resume-main .is-target').forEach((item) => item.classList.remove('is-target'));
-  target.classList.add('is-target'); target.tabIndex = -1; target.focus({ preventScroll: true }); target.scrollIntoView({ block: 'start' });
-  document.querySelectorAll('#resumeToc button').forEach((button) => { if (button.dataset.tocKey === key) button.setAttribute('aria-current', 'location'); else button.removeAttribute('aria-current'); });
+  target.tabIndex = -1; target.focus({ preventScroll: true });
+  const bounds = target.getBoundingClientRect(); const inset = bounds.height <= innerHeight - 48 ? (innerHeight - bounds.height) / 2 : 24;
+  window.scrollTo({ top: Math.max(0, bounds.top + scrollY - inset), behavior: 'instant' });
+  markResumeSection(key); scheduleResumePosition();
 }
 // 按字段类型创建编辑器；日期保留年/月精度，不能使用 date 输入框静默补日。
 function workspaceControl(def, value) {
@@ -135,12 +181,16 @@ async function locateWorkspace() {
   const params = new URLSearchParams(location.search); const profileId = params.get('profile');
   if (profileId && workspaceDatabase.profiles.some((item) => item.profileId === profileId)) { const next = await getState(); next.activeProfileId = profileId; await saveState(next); document.getElementById('entryProfile').value = profileId; await reloadDataState(); }
   const key = params.get('section'); if (workspaceRoute() === 'resumeCenter' && key?.startsWith('group:')) { document.getElementById('centerGroup').value = key.slice(6); document.getElementById('centerGroup').dispatchEvent(new Event('change')); }
-  else if (workspaceRoute() === 'resumeCenter' && key?.startsWith('entry:')) { const entry = [...document.querySelectorAll('[data-entry-id]')].find((item) => item.dataset.entryId === key.slice(6)); if (entry) { entry.classList.add('is-target'); entry.scrollIntoView({ block: 'center' }); } }
+  else if (workspaceRoute() === 'resumeCenter' && key?.startsWith('entry:')) locateResumeSection(key);
 }
 // 工作台导航、字段定义和刷新入口只挂载一次，沿用旧设置页的初始化顺序。
 async function initWorkspace() {
   if (workspaceInitialized) return; workspaceInitialized = true;
   document.getElementById('resumeToc').addEventListener('click', (event) => { const button = event.target.closest('button[data-toc-key]'); if (button) locateResumeSection(button.dataset.tocKey); });
+  window.addEventListener('scroll', scheduleResumePosition, { passive: true });
+  window.addEventListener('resize', scheduleResumePosition);
+  document.getElementById('resumeCenter').addEventListener('toggle', scheduleResumePosition, true);
+  const resumeResize = new ResizeObserver(scheduleResumePosition); resumeResize.observe(document.querySelector('.resume-main'));
   // 导航和引导链接共用入口；从导入页检测能力时显示 AI 模块，避免结果藏在其他页面。
   document.addEventListener('click', (event) => {
     const link = event.target.closest('a[href^="#"]'); const detecting = event.target.closest('#btnDetectImport');
@@ -157,7 +207,7 @@ async function initWorkspace() {
     else await dataCommand('createField', { definition, profileId: document.getElementById('entryProfile').value, value: null }, workspaceDatabase.revision);
     cancelFieldEdit(); await reloadDataState(); document.getElementById('fieldStatus').textContent = '字段定义已保存，实际内容请在简历中心填写。';
   } catch (error) { document.getElementById('fieldStatus').textContent = '未保存：' + error.message; } finally { button.disabled = false; } });
-  document.getElementById('centerSearch').addEventListener('input', () => { const query = document.getElementById('centerSearch').value.trim().toLowerCase(); document.querySelectorAll('#basicFields .center-field').forEach((item) => { item.hidden = !item.textContent.toLowerCase().includes(query); }); });
+  document.getElementById('centerSearch').addEventListener('input', filterResumeFields);
   document.getElementById('centerGroup').addEventListener('change', () => locateResumeSection('group:' + document.getElementById('centerGroup').value));
   document.getElementById('centerRefresh').addEventListener('click', async () => { try { if (workspaceDirty() && !confirm('存在未保存编辑，确认丢弃并刷新本地资料？')) return; cancelFieldEdit(); await flushSaves(); await reloadDataState(); document.getElementById('centerStatus').textContent = '已刷新本地资料。'; } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });
   document.getElementById('entryProfile').addEventListener('change', async () => { const profileId = document.getElementById('entryProfile').value; try { if (workspaceDirty() && !confirm('切换档案将丢弃未保存编辑，是否继续？')) { document.getElementById('entryProfile').value = workspaceDatabase.activeProfileId; return; } cancelFieldEdit(); const next = await getState(); next.activeProfileId = profileId; await saveState(next); await reloadDataState(); } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });

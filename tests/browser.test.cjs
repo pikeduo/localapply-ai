@@ -1515,7 +1515,8 @@ for (const withExtension of [true, false]) {
       assert.equal(await page.locator('#basicFields').evaluate((element) => element.closest('details').open), true);
       assert.equal(await page.locator('#centerSearch').inputValue(), '');
       assert.equal(await group.getAttribute('aria-current'), 'location');
-      assert.equal(await page.locator('.center-group-heading.is-target').evaluate((element) => document.activeElement === element), true);
+      // 分类导航按新要求聚焦整张卡片，标题和字段必须处于同一个目标区块。
+      assert.equal(await page.locator('.resume-group.is-target').evaluate((element) => document.activeElement === element && element.contains(element.querySelector('.center-field'))), true);
       assert.equal(new URL(page.url()).hash, '#resumeCenter');
       await page.locator('#resumeToc button[data-toc-key="entry:' + entryIds[1] + '"]').click();
       assert.equal(await page.locator('#entriesList .is-target').getAttribute('data-entry-id'), entryIds[1]);
@@ -1554,6 +1555,70 @@ for (const withExtension of [true, false]) {
       await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0);
       await page.reload(); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
       assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark'); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 真实滚轮验证目录跟随完整区块；两种入口均不依赖模型或真实个人资料。
+for (const withExtension of [true, false]) {
+  test(`简历模块导航：${withExtension ? '扩展' : 'file://'}完整分类、滚轮同步与长区块`, { timeout: 60000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'resume-sections-')); let context;
+    const mode = withExtension ? 'extension' : 'file'; const errors = [];
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message));
+      await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' }); await page.setViewportSize({ width: 1440, height: 900 }); await page.goto(url);
+      await workspacePage(page, 'resumeCenter');
+      const seeded = await page.evaluate(async () => {
+        const profileId = (await dataRequest('localapply:read')).database.activeProfileId;
+        const first = (await dataCommand('createEntry', { profileId, kind: 'project', title: '合成滚动项目' })).result;
+        const second = (await dataCommand('createEntry', { profileId, kind: 'project', title: '合成滚动项目' })).result;
+        await dataCommand('setValue', { profileId, entryId: first, fieldId: 'builtin.skills', value: Array.from({ length: 40 }, (_, index) => '合成项目说明第' + index + '行').join('\n') });
+        return [first, second];
+      });
+      await page.locator('#centerRefresh').click(); await page.locator('#entriesList [data-entry-id="' + seeded[1] + '"]').waitFor();
+      const revision = (await page.evaluate(() => dataRequest('localapply:read'))).database.revision;
+      assert.equal(await page.locator('#basicFields > .resume-group').count(), await page.locator('#resumeToc button[data-toc-key^="group:"]').count());
+      assert.equal(await page.locator('#basicFields .center-field').evaluateAll((fields) => fields.every((field) => !!field.closest('.resume-group')?.querySelector('h3'))), true);
+      const group = page.locator('.resume-group[data-group="求职意向"]');
+      await page.locator('#resumeToc').getByRole('button', { name: '求职意向', exact: true }).click();
+      await page.waitForFunction(() => document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === 'group:求职意向');
+      const bounds = await group.boundingBox(); assert.ok(bounds.y >= 20 && bounds.y + bounds.height <= 880, '可容纳的分类必须连同全部字段一起进入视口');
+      assert.ok(await group.locator('.center-field').count() > 1); assert.equal(await group.locator('h3.is-target').count(), 0);
+      assert.equal(await group.evaluate((element) => element.classList.contains('is-target') && document.activeElement === element), true);
+      assert.equal(await group.locator('input,textarea,select').evaluateAll((fields) => fields.every((field) => { const rect = field.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; })), true);
+      await page.screenshot({ path: path.join(testRoot, `resume-module-light-${mode}.png`) });
+      await page.locator('#themeToggle').click(); await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(16, 23, 34)');
+      await page.screenshot({ path: path.join(testRoot, `resume-module-dark-${mode}.png`) });
+      // 鼠标置于正文边缘留白，避免长文本输入框自身吞掉滚轮事件。
+      const wheelTo = async (target, key) => {
+        const delta = await target.evaluate((element) => { const rect = element.getBoundingClientRect(); return rect.top - (rect.height <= innerHeight - 48 ? (innerHeight - rect.height) / 2 : 24); });
+        await page.mouse.move(225, 180); await page.mouse.wheel(0, delta);
+        await page.waitForFunction((key) => document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === key, key);
+      };
+      const first = page.locator('#entriesList [data-entry-id="' + seeded[0] + '"]');
+      const second = page.locator('#entriesList [data-entry-id="' + seeded[1] + '"]');
+      const focus = await page.evaluate(() => document.activeElement.id);
+      await wheelTo(first, 'entry:' + seeded[0]);
+      await page.mouse.wheel(0, 450); await page.waitForFunction((id) => document.querySelector('[data-entry-id="' + id + '"] h3').getBoundingClientRect().bottom < 0, seeded[0]);
+      assert.equal(await page.locator('#resumeToc [aria-current="location"]').getAttribute('data-toc-key'), 'entry:' + seeded[0]);
+      assert.equal(await first.evaluate((element) => element.classList.contains('is-target')), true);
+      assert.equal(await page.evaluate(() => document.activeElement.id), focus, '滚动同步不得抢走焦点');
+      await wheelTo(second, 'entry:' + seeded[1]);
+      assert.equal(await first.evaluate((element) => element.classList.contains('is-target')), false);
+      await page.setViewportSize({ width: 1440, height: 520 });
+      await wheelTo(page.locator('#fillingPreferences'), 'preferences');
+      const toc = await page.locator('.resume-toc').boundingBox(); const active = await page.locator('#resumeToc [aria-current="location"]').boundingBox();
+      assert.ok(active.y >= toc.y && active.y + active.height <= toc.y + toc.height, '目录自身滚动后仍显示当前条目');
+      // 当前条目未改变时缩小窗口，也要让目录重新露出该条目。
+      await page.setViewportSize({ width: 1440, height: 420 });
+      await page.waitForFunction(() => { const active = document.querySelector('#resumeToc [aria-current="location"]'); const box = document.querySelector('.resume-toc').getBoundingClientRect(); const item = active.getBoundingClientRect(); return active.dataset.tocKey === 'preferences' && item.top >= box.top && item.bottom <= box.bottom; });
+      await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0 && document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === 'overview');
+      await page.locator('#scrollBottom').click(); await page.waitForFunction(() => document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === 'preferences');
+      assert.equal(new URL(page.url()).hash, '#resumeCenter');
+      assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, revision); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
