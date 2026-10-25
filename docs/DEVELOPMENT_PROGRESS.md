@@ -199,6 +199,8 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 
 **设置页快捷操作增补（2026-10-26，基线 `c5a106b`）：** 右下角增加顶部/底部及明暗切换；主题默认跟随系统，主动选择后按设置目录在本机保存，刷新继续使用。我的简历增加当前分类和独立经历目录，支持展开、定位和高亮，同名经历按 ID 区分；增删、改名和切换档案同步更新。桌面目录固定跟随滚动，窄窗显示于内容顶部。扩展及 file:// 两种入口均可用；Schema、解析和密钥模块不变。
 
+2026-10-26 后续样式调整：快捷栏改为“顶部 → 明暗 → 底部”竖排，并增加页面底部留白。`node --test --test-timeout=120000 --test-name-pattern='设置快捷导航' tests/browser.test.cjs` 实测 **2/2**，0 失败/跳过，含真实按钮排列和窄窗边界；日志 `.browser-tests/settings-vertical.log`。
+
 实际环境为 Windows、Node.js v24.17.0、Playwright 1.62.1 配套 Chromium；`npm test` **106/106**；`node --test --test-timeout=120000 --test-name-pattern='设置快捷导航|工作台模块导航|阶段四' tests/browser.test.cjs` **20/20**（52.90 秒），均 0 失败/跳过。截图等待颜色过渡后再次定向运行 `--test-name-pattern='设置快捷导航'` **2/2**（7.31 秒）；本轮未重复完整 E2E。日志为 `.browser-tests/settings-unit.log`、`settings-navigation.log`、`settings-navigation-final.log`；截图为 `workspace-{light,dark,narrow}-{extension,file}.png`（同目录，均为合成资料）。
 
 ### 阶段 5｜岗位识别与投递记录工作台（新增，未开始）

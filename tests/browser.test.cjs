@@ -1533,6 +1533,10 @@ for (const withExtension of [true, false]) {
       await page.setViewportSize({ width: 390, height: 844 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       const tools = await page.locator('.workspace-tools').boundingBox(); assert.ok(tools.x >= 0 && tools.x + tools.width <= 390 && tools.y + tools.height <= 844);
+      // 用真实按钮位置验证竖向顺序，避免只检查样式声明而忽略实际布局。
+      const buttons = await page.locator('.workspace-tools button').evaluateAll((items) => items.map((item) => { const rect = item.getBoundingClientRect(); return { x: rect.x, y: rect.y, bottom: rect.bottom }; }));
+      assert.ok(tools.height > tools.width && buttons.every((button) => Math.abs(button.x - buttons[0].x) < 1));
+      assert.ok(buttons[0].bottom <= buttons[1].y && buttons[1].bottom <= buttons[2].y);
       await page.locator('#themeToggle').click(); await page.waitForFunction(() => getComputedStyle(document.querySelector('#centerRefresh')).backgroundColor === 'rgb(25, 35, 50)');
       await page.screenshot({ path: path.join(testRoot, `workspace-narrow-${mode}.png`) });
       // 经历管理后的目录跟随真实数据更新，同名条目与其他档案严格隔离。
