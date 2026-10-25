@@ -1,7 +1,7 @@
 // Service Worker：AI 请求代理（OpenAI 兼容，多服务商预设）、CSV 导出、初始数据、侧边栏开关。
 'use strict';
 
-importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js'); // 两种协议共用后台密钥与请求权限。
+importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/field-matching.js', 'data/field-suggestions.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js'); // 字段学习复用唯一仓库与加密凭据。
 
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local);
@@ -32,6 +32,7 @@ async function notifySettings() {
 
 // 扩展和文件管理页共享 AI 管线，后台只注入本扩展的配置读取器。
 const aiClient = LocalApplyAI.createClient(() => repository.readAiSettings());
+const fieldLearning = FieldLearning.create(repository, aiClient, chrome);
 // 解析视觉模型，保留原后台接口供消息路由和回归测试使用。
 function resolveVisionModel() { return aiClient.resolveVisionModel(); }
 // 生成兼容的 AI 错误。
@@ -88,9 +89,14 @@ function formatTs(ts) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
+      // 网页只能报告本页结构变化，不能借学习消息调用模型或读取个人资料。
+      if (msg?.type === 'learning:changed' && sender.id === chrome.runtime.id && sender.tab) {
+        fieldLearning.changed(sender, msg); sendResponse({ ok: true }); return;
+      }
       if (!['wsa:ping', 'wsa:openPanel', 'wsa:contentSettings'].includes(msg && msg.type) && !trustedPage(sender)) {
         throw new Error('此消息仅允许扩展管理页调用');
       }
+      if (msg?.type?.startsWith('learning:')) { sendResponse({ ok: true, ...await fieldLearning.handle(msg) }); return; }
       switch (msg && msg.type) {
         case 'wsa:ping':
           sendResponse({ ok: true, pong: true });

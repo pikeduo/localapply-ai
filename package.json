@@ -6,17 +6,20 @@
   "license": "MIT",
   "scripts": {
     "vendor:libs": "node tools/vendor-libs.cjs",
-    "test": "node --test --test-timeout=20000 tests/baseline.test.cjs tests/store.test.cjs tests/resume-files.test.cjs tests/model-capabilities.test.cjs",
+    "test": "node --test --test-timeout=20000 tests/baseline.test.cjs tests/store.test.cjs tests/resume-files.test.cjs tests/model-capabilities.test.cjs tests/field-learning.test.cjs",
     "test:e2e": "node --test --test-timeout=120000 tests/browser.test.cjs"
   },
   "devDependencies": {
+    "@vue/runtime-dom": "3.5.44",
     "docx-preview": "0.4.1",
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
     "html2canvas": "1.4.1",
     "mammoth": "1.13.0",
     "pdfjs-dist": "6.4.299",
-    "playwright": "1.62.1"
+    "playwright": "1.62.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "engines": {
     "node": ">=22.13"

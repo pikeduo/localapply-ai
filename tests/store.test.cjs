@@ -11,7 +11,7 @@ const { webcrypto } = require('node:crypto');
 function fixture(initial = {}) {
   const disk = structuredClone(initial);
   const context = vm.createContext({ crypto: webcrypto, console, URL, TextEncoder, TextDecoder, btoa, atob });
-  for (const name of ['data/templates.js', 'data/key-vault.js', 'data/resume.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
+  for (const name of ['data/templates.js', 'data/key-vault.js', 'data/resume.js', 'data/field-matching.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
   let failCountdown = null;
   const storage = {
     get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))),

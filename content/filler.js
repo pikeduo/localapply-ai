@@ -207,6 +207,7 @@
     return { picked: false };
   }
 
+  // 仅点击候选项叶节点，排除按钮/链接/提交动作和包裹它们的容器。
   function findOptions(el, want) {
     const scopes = [];
     const item = el.closest('[class*="form-item"], [class*="form-group"], [class*="field"], [class*="select"], li, td');
@@ -217,6 +218,8 @@
     for (const scope of scopes) {
       scope.querySelectorAll('li, [class*="option"], [class*="Option"], [class*="menu-item"], [class*="item"]').forEach((o) => {
         if (seen.has(o) || o.contains(el) || el.contains(o)) return;
+        if (o.matches('button,a,input,[role="button"]') || o.closest('button,a') || o.querySelector('button,a,input,[role="button"]')) return;
+        if (o.getAttribute('role') !== 'option' && !o.matches('li,[class*="option" i]') && !o.closest('[role="listbox"],[class*="dropdown" i],[class*="suggest" i]')) return;
         if (!isVisible(o)) return;
         const text = (o.textContent || '').trim();
         if (!text || text.length > 30) return;
@@ -231,9 +234,11 @@
     return out;
   }
 
+  // 复用框架事件路径，认证控件和提交动作即使调用者传错类型也禁止写入。
   async function fillElement(el, value, ctx) {
     ctx = ctx || {};
     if (!el) return { ok: false, reason: '元素不存在' };
+    if (/^(password|hidden|submit|reset|button|file)$/i.test(el.getAttribute('type') || '') || /password|captcha|one-time-code|验证码|密码/i.test([el.name, el.id, el.getAttribute('autocomplete'), el.getAttribute('aria-label')].join(' '))) return { ok: false, reason: '认证或动作控件不允许自动处理' };
     const kind = ctx.inputType || (el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'SELECT' ? 'select' : (el.getAttribute('type') || 'text').toLowerCase());
     if (value == null || value === '') return { ok: false, reason: '档案中该字段为空' };
     if (!ctx.radios && (kind === 'radio' || kind === 'checkbox')) {

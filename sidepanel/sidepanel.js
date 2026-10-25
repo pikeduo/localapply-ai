@@ -18,6 +18,7 @@ const main = {
   fill: $('#tab-fill'),
   ledger: $('#tab-ledger'),
   materials: $('#tab-materials'),
+  smart: $('#tab-smart'),
 };
 
 // ============ 保存 ============
@@ -166,7 +167,7 @@ async function injectContentScripts(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['data/templates.js', 'content/detector.js', 'content/filler.js', 'content/floatbar.js'],
+      files: ['data/templates.js', 'data/field-matching.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/floatbar.js'],
     });
     await new Promise((r) => setTimeout(r, 700)); // 等detector完成首次检测
     return true;
@@ -401,7 +402,7 @@ function renderFillTab() {
       <div class="pageinfo">
         <span class="badge">${escapeHtml(PLATFORM_NAMES[detection.platform] || detection.platform)}</span>
         <span class="pageurl" title="${escapeHtml(detection.url)}">${escapeHtml(detection.title || detection.url)}</span>
-        <button class="btn ghost" id="btnRedetect">↻重新检测</button>
+        <button class="btn ghost" id="btnRedetect">${detection.authorized ? '↻重新检测' : '授权扫描当前页'}</button>
       </div>
       <div class="muted">可自动填 <b>${c.auto}</b> 项 · 点选 <b>${c.manual}</b> 项 · 开放题 <b>${c.open}</b> 题</div>
     `;
@@ -430,7 +431,8 @@ function renderFillTab() {
   }
   root.appendChild(info);
   const bd = info.querySelector('#btnRedetect');
-  if (bd) bd.addEventListener('click', () => scheduleRefresh(0));
+  // 旧入口也由明确点击建立当前页面授权，定时刷新本身不建立授权。
+  if (bd) bd.addEventListener('click', async () => { const response = await sendToTab(detectionTabId, 'wsa:redetect'); if (response.ok) detection = response.state; else detectionError = response.error; renderFillTab(); });
 
   if (detection && detection.hasCaptcha) {
     const b = document.createElement('div');

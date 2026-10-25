@@ -187,14 +187,23 @@
       const key = JSON.stringify([binding.profileId, binding.fid]);
       check(!bindingKeys.has(key), '重复档案字段'); bindingKeys.add(key);
     });
+    // Schema v3 可选学习元数据；旧规则仍可导入，但缺少确认及验证标记时不自动复用。
     const mappings = new Set();
     db.mappingRules.forEach((rule) => {
-      keys(rule, ['mappingId', 'origin', 'path', 'label', 'fieldId', 'profileId', 'entryId'], '映射规则');
+      keys(rule, ['mappingId', 'origin', 'path', 'label', 'fieldId', 'profileId', 'entryId', 'semanticId', 'features', 'confirmed', 'enabled', 'lastVerifiedAt', 'ruleVersion'], '映射规则');
       string(rule.mappingId, 'mappingId'); string(rule.label, '映射标签'); string(rule.path, '映射路径');
       check(/^https?:\/\/[^/?#]+$/.test(rule.origin) && defs.has(rule.fieldId), '映射 origin 或字段错误');
       check(rule.profileId === null || profiles.has(rule.profileId), '映射档案错误');
       check(rule.entryId === null || entries.get(rule.entryId)?.profileId === rule.profileId, '映射经历错误');
       check(!mappings.has(rule.mappingId), '重复映射 ID'); mappings.add(rule.mappingId);
+      if (rule.semanticId !== undefined) {
+        keys(rule.features, ['label', 'type', 'group', 'kind', 'degree', 'index'], '映射结构');
+        global.FieldMatchingEngine.validateField({ scanId: 'scan.validation', semanticId: rule.semanticId, ...rule.features, name: '', placeholder: '', options: [] });
+        check(rule.label === rule.features.label && typeof rule.confirmed === 'boolean' && typeof rule.enabled === 'boolean', '映射确认信息错误');
+        check(Number.isInteger(rule.ruleVersion) && rule.ruleVersion >= 1, '映射版本错误');
+        check(rule.lastVerifiedAt === null || (typeof rule.lastVerifiedAt === 'string' && Number.isFinite(Date.parse(rule.lastVerifiedAt))), '映射验证时间错误');
+        check(!rule.confirmed || rule.lastVerifiedAt !== null, '未验证映射不能标记已确认');
+      } else check(['features','confirmed','enabled','lastVerifiedAt','ruleVersion'].every((key) => rule[key] === undefined), '学习规则必须有语义标识');
     });
     check(db.publicFieldIds.every((fieldId) => defs.has(fieldId)) && new Set(db.publicFieldIds).size === db.publicFieldIds.length, '公共导出范围错误');
     settings(db.settings);
@@ -557,6 +566,35 @@
         if (request.expectedRevision !== undefined) check(request.expectedRevision === db.revision, '数据版本已变化，请重新预览');
         let result = null;
         switch (request.action) {
+          case 'confirmField': {
+            keys(input, ['profileId', 'fieldId', 'entryId', 'definition', 'value', 'confirmed', 'source'], '确认学习字段');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '必须先预览差异并明确确认');
+            check(db.profiles.some((profile) => profile.profileId === input.profileId), '档案不存在');
+            let fieldId = input.fieldId;
+            if (input.definition) {
+              keys(input.definition, ['label', 'type', 'group', 'aliases', 'options'], '新学习定义');
+              const def = makeDefinition({ ...input.definition, fieldId: id('custom') });
+              db.fieldDefinitions.push(def); fieldId = def.fieldId;
+              if (!input.entryId) db.bindings.push({ profileId: input.profileId, fieldId, fid: id('field'), key: fieldId, sensitive: true, autoFill: false, material: false, custom: true });
+            }
+            check(db.fieldDefinitions.some((definition) => definition.fieldId === fieldId), '字段不存在');
+            const row = { profileId: input.profileId, fieldId, entryId: input.entryId || null, value: input.value,
+              updatedAt: now(), source: ['manual', 'web-confirmed', 'local-confirmed'].includes(input.source) ? input.source : 'manual' };
+            const index = db.fieldValues.findIndex((value) => value.profileId === row.profileId && value.fieldId === row.fieldId && value.entryId === row.entryId);
+            if (index >= 0) db.fieldValues[index] = row; else db.fieldValues.push(row);
+            result = { fieldId, entryId: row.entryId }; break;
+          }
+          case 'deleteMapping': {
+            keys(input, ['mappingId', 'confirmed'], '删除规则');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '删除规则需要确认及版本');
+            check(db.mappingRules.some((rule) => rule.mappingId === input.mappingId), '规则不存在');
+            db.mappingRules = db.mappingRules.filter((rule) => rule.mappingId !== input.mappingId); break;
+          }
+          case 'restoreMappings': {
+            keys(input, ['rules', 'confirmed'], '撤销规则操作');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '撤销需要确认及版本');
+            list(input.rules, '撤销规则', 10000); db.mappingRules = clone(input.rules); break;
+          }
           case 'createField': {
             keys(input, ['definition', 'profileId', 'value', 'source'], '新字段');
             const def = makeDefinition(input.definition);

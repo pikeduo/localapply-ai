@@ -256,3 +256,13 @@ details.group .gbody { padding: 0 10px 10px; }
 .hint { font-size: 12px; color: var(--sub); padding: 8px 2px; }
 .spin { display: inline-block; animation: r 1s linear infinite; }
 @keyframes r { to { transform: rotate(360deg); } }
+/* 阶段三仅补必要交互，不提前重构整套视觉；长元数据保持可读且不撑破侧栏。 */
+#tab-smart .smart-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+#tab-smart label { display: block; margin: 8px 0; }
+#tab-smart pre { max-height: 300px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; background: #f5f7fb; font-size: 12px; }
+#tab-smart input:not([type="checkbox"]), #tab-smart select, #tab-smart textarea { width: 100%; box-sizing: border-box; margin: 5px 0; padding: 7px; border: 1px solid #d5dcea; border-radius: 6px; font: inherit; }
+#tab-smart h4 { margin: 8px 0; }
+#tab-smart .smart-row[data-status="failed"] { border-color: #cf1322; }
+#tab-smart .smart-row[data-status="success"] { border-color: #1a9e5c; }
+#tab-smart .smart-rule { padding: 10px 0; border-top: 1px solid #d5dcea; }
+#tab-smart .smart-editor { margin-top: 10px; }

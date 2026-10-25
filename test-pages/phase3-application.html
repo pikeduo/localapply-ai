@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成招聘申请 · 阶段三</title><style>body{font:15px/1.6 system-ui;max-width:800px;margin:20px auto}fieldset{margin:15px 0;padding:15px}label{display:block}input,select,textarea{padding:7px;margin:5px} [role=option]{padding:6px;cursor:pointer} [aria-selected=true]{background:#edf2ff}</style></head>
+<body><h1>合成招聘申请表</h1><form id="application">
+<fieldset><legend>基本资料</legend>
+<label for="applicant-name">姓名</label><input id="applicant-name" name="applicantName">
+<label for="applicant-phone">手机号</label><input id="applicant-phone" type="tel">
+<label for="preferred-contact">便捷联系号码</label><input id="preferred-contact">
+<label for="travel-mode">到岗交通方式</label><input id="travel-mode">
+<label for="web-note">资格附加说明</label><textarea id="web-note"></textarea>
+<label for="arrival-date">可到岗日期</label><input id="arrival-date" type="date">
+<label for="graduation-month">毕业月份</label><input id="graduation-month" type="month">
+<label for="identity">应聘身份</label><select id="identity"><option value="">请选择</option><option value="应届生">应届生</option><option value="社会招聘">社会招聘</option></select>
+<label><input type="checkbox" id="has-internship">具备实习经历</label>
+</fieldset>
+<fieldset><legend>性别</legend><label><input type="radio" name="gender" value="男">男</label><label><input type="radio" name="gender" value="女">女</label></fieldset>
+<fieldset><legend>可出差城市</legend><label><input type="checkbox" name="cities" value="合成甲城">合成甲城</label><label><input type="checkbox" name="cities" value="合成乙城">合成乙城</label></fieldset>
+<fieldset data-experience><legend>本科教育</legend><label for="undergrad-school">第一学历毕业院校</label><input id="undergrad-school"></fieldset>
+<fieldset data-experience><legend>硕士教育</legend><label for="master-school">毕业院校</label><input id="master-school"></fieldset>
+<fieldset><legend>意向方向</legend><div role="combobox" id="career" aria-label="意向方向" aria-controls="career-options" tabindex="0">请选择</div><div id="career-options" role="listbox"><div role="option" data-value="技术" aria-selected="false">技术</div><div role="option" data-value="运营" aria-selected="false">运营</div></div></fieldset>
+<div id="dynamic-fields"></div><div id="real-react"></div><div id="real-vue"></div>
+<fieldset><legend>认证（绝不读取）</legend><label for="private-password">密码</label><input id="private-password" type="password" value="synthetic-password-must-not-read"><label for="captcha">验证码</label><input id="captcha" autocomplete="one-time-code" value="synthetic-code-must-not-read"><label><input type="checkbox" id="agreement">我同意隐私协议</label></fieldset>
+<button type="submit" id="apply-submit">提交申请</button></form><button type="button" id="add-project">增加项目经历</button>
+<script>
+// 测试只记录提交次数，保证插件从未点击提交按钮。
+window.__submitCount=0; document.getElementById('application').addEventListener('submit',function(event){event.preventDefault();window.__submitCount++;});
+// ARIA 选项显式更新页面状态和选中标记，便于独立校验真实选中结果。
+document.querySelectorAll('#career-options [role=option]').forEach(function(option){option.addEventListener('click',function(){document.querySelectorAll('#career-options [role=option]').forEach(function(item){item.setAttribute('aria-selected',String(item===option));});document.getElementById('career').textContent=option.textContent;});});
+// 动态新增的表单区块只使用合成内容，扫描需要发现新控件及经历分组。
+document.getElementById('add-project').addEventListener('click',function(){const group=document.createElement('fieldset');group.setAttribute('data-experience','');const legend=document.createElement('legend');legend.textContent='项目经历';const label=document.createElement('label');label.htmlFor='dynamic-project';label.textContent='项目名称';const input=document.createElement('input');input.id='dynamic-project';group.append(legend,label,input);document.getElementById('dynamic-fields').append(group);});
+</script><script src="/test-pages/phase3-frameworks.js"></script></body></html>

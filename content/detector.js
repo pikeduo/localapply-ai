@@ -2,6 +2,7 @@
 // 依赖 data/templates.js（先加载），填充执行在 content/filler.js（WangshenFiller）。
 (function () {
   'use strict';
+  if (globalThis.WangshenDetector) return; // 程序化补注入不重复注册监听器。
 
   const T = globalThis.WangshenTemplates;
   const ROOT_KEY = 'wangshenAutofill';
@@ -18,6 +19,8 @@
 
   let settings = { autoThreshold: 0.85, autoFloatbar: true };
   let filling = false; // 填充批次进行中：暂停自动重检测，避免自己的填充把自己的引用作废
+  let authorized = false; // 当前文档必须由用户主动扫描授权，导航后重新建立。
+  let authorizedUrl = ''; // SPA 路由变化也撤销授权，不延续到另一个页面。
 
   // ============ 平台识别 ============
 
@@ -105,7 +108,7 @@
     push(el.getAttribute('placeholder'));
     // 单选/多选自己的包裹 label（"男/女"这类选项文本）放最后，避免当成字段名
     const wrapLabel = el.closest('label');
-    if (wrapLabel) push(wrapLabel.textContent.replace(el.value || '', ''));
+    if (wrapLabel) push(wrapLabel.textContent); // 扫描元数据时不读取用户已输入的值。
     // 向上找最近容器内的短文本 label（最多 8 层，覆盖 React 深层嵌套）；
     // 每层同时检查前驱兄弟分支（"标签在左、控件在右"且标签不在控件祖先链上的布局）
     let p = el.parentElement;
@@ -145,6 +148,7 @@
 
   // ============ 字段发现 ============
 
+  // 扫描前排除认证与密码控件，不读取相关值。
   function collectFormControls() {
     const all = document.querySelectorAll('input, textarea, select');
     let allArr = Array.from(all);
@@ -165,7 +169,8 @@
       if (inOurUi(el)) continue;
       const type = (el.getAttribute('type') || '').toLowerCase();
       if (el.tagName === 'INPUT') {
-        if (['hidden', 'submit', 'button', 'reset', 'image', 'file'].includes(type)) continue;
+        if (['hidden', 'password', 'submit', 'button', 'reset', 'image', 'file'].includes(type)) continue;
+        if (/password|captcha|one-time-code|验证码|密码/i.test([el.name, el.id, el.getAttribute('autocomplete'), el.getAttribute('aria-label')].join(' '))) continue;
       }
       if (el.disabled) continue;
       if (!isVisible(el)) continue;
@@ -174,6 +179,7 @@
     return out;
   }
 
+  // 附件识别只读取上传控件标签，不遍历无关网页正文。
   function findFileInputs() {
     const out = [];
     for (const el of document.querySelectorAll('input[type="file"]')) {
@@ -181,10 +187,6 @@
       out.push({ id: null, label: findLabelText(el) || '附件上传' });
     }
     // 上传类文案兜底（有的站点是点击区域触发）
-    if (!out.length) {
-      const uploadText = document.body.innerText.match(/上传(简历|附件|成绩单|作品|材料)/);
-      if (uploadText) out.push({ id: null, label: '检测到「' + uploadText[0] + '」入口' });
-    }
     return out;
   }
 
@@ -216,10 +218,12 @@
     return singles;
   }
 
+  // 老引擎同样等待用户授权，保留既有识别与填充分类。
   function detect() {
+    if (!authorized || location.href !== authorizedUrl) { authorized = false; state.fields = []; state.fileInputs = []; if (globalThis.WangshenFloatbar) globalThis.WangshenFloatbar.onDetection(state); return state; }
     state.platform = detectPlatform();
     state.generation += 1;
-    state.hasCaptcha = false;
+    state.hasCaptcha = !!document.querySelector('input[autocomplete="one-time-code"],input[id*="captcha" i],input[name*="captcha" i],input[placeholder*="验证码"]');
 
     const controls = collectFormControls();
     const entries = [];
@@ -356,8 +360,11 @@
     return els && els[0] && els[0].isConnected ? els : null;
   }
 
+  // 返回授权状态供旧入口显示，不向网页广播个人资料。
   function publicState() {
+    if (location.href !== authorizedUrl) detect(); // SPA 导航后只清空旧结果，不读取新页面。
     return {
+      authorized,
       platform: state.platform,
       url: location.href,
       title: document.title,
@@ -384,10 +391,30 @@
 
   // ============ 消息处理（侧边栏 ⇄ 页面） ============
 
+  // 只接受本扩展管理页面/后台的控制消息，网页内容不能自行建立扫描授权。
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
+        if (sender.id !== chrome.runtime.id || sender.tab || (sender.url && !['background.js', 'options/options.html', 'sidepanel/sidepanel.html'].some((page) => sender.url.split(/[?#]/)[0] === chrome.runtime.getURL(page)))) throw new Error('仅允许本插件管理入口操作页面');
         switch (msg && msg.type) {
+          case 'learning:scan': {
+            if (msg.authorize === true && msg.expectedUrl !== location.href) throw new Error('页面已导航，请重新授权扫描');
+            const snapshot = globalThis.LocalApplyPageScanner.scan(msg.authorize === true);
+            if (msg.authorize === true) { authorized = true; authorizedUrl = location.href; detect(); }
+            sendResponse({ ok: true, snapshot }); return;
+          }
+          case 'learning:revoke':
+            authorized = false; globalThis.LocalApplyPageScanner.revoke(); detect(); sendResponse({ ok: true }); return;
+          case 'learning:read':
+          case 'learning:fill':
+          case 'learning:verify': {
+            const record = globalThis.LocalApplyPageScanner.record(msg.scanId, msg.documentId, msg.semanticId);
+            if (msg.type === 'learning:read') { sendResponse({ ok: true, value: globalThis.LocalApplyPageScanner.readValue(record) }); return; }
+            filling = true;
+            try { const result = await globalThis.LocalApplyVerifiedFill[msg.type === 'learning:fill' ? 'fill' : 'verify'](record, msg.value); sendResponse({ ok: true, result }); }
+            finally { filling = false; }
+            return;
+          }
           case 'wsa:getState': {
             sendResponse({ ok: true, state: publicState() });
             return;
@@ -402,11 +429,14 @@
             return;
           }
           case 'wsa:redetect': {
+            authorized = true;
+            authorizedUrl = location.href;
             detect();
             sendResponse({ ok: true, state: publicState() });
             return;
           }
           case 'wsa:debugDump': {
+            if (!authorized || location.href !== authorizedUrl) throw new Error('请先授权扫描当前页面');
             // 诊断 dump：页面上每个输入控件的标签查找结果，供"识别不到"时远程排查
             const rows = [];
             let shadowHosts = 0;
@@ -439,6 +469,7 @@
           }
           case 'wsa:autofill':
           case 'wsa:fillOne': {
+            if (!authorized || location.href !== authorizedUrl) throw new Error('请先授权扫描当前页面');
             filling = true; // 批次期间不自动重检测，防止引用失效
             const items = msg.type === 'wsa:autofill' ? msg.items : [msg.item];
             const results = [];
