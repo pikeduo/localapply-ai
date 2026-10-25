@@ -6,7 +6,7 @@
   "license": "MIT",
   "scripts": {
     "vendor:libs": "node tools/vendor-libs.cjs",
-    "test": "node --test --test-timeout=20000 tests/baseline.test.cjs tests/store.test.cjs tests/resume-files.test.cjs tests/model-capabilities.test.cjs tests/field-learning.test.cjs",
+    "test": "node --test --test-timeout=20000 tests/baseline.test.cjs tests/store.test.cjs tests/resume-files.test.cjs tests/model-capabilities.test.cjs tests/field-learning.test.cjs tests/floating-panel.test.cjs",
     "test:e2e": "node --test --test-timeout=120000 tests/browser.test.cjs"
   },
   "devDependencies": {

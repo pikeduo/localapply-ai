@@ -14,7 +14,7 @@
       try { response = await browser.tabs.sendMessage(tabId, message); }
       catch (error) {
         if (!inject) throw new Error('页面未连接，请重新授权扫描');
-        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/floatbar.js'] });
+        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/floatbar.js'] });
         response = await browser.tabs.sendMessage(tabId, message);
       }
       check(response?.ok, response?.error || '页面操作失败'); return response;

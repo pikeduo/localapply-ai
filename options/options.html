@@ -169,6 +169,11 @@
         插件永不自动点击任何「提交/投递」类按钮，最后一步永远由你本人操作。
       </p>
     </section>
+    <section class="card" id="diagnosticsPanel">
+      <h2>运行日志与错误诊断</h2>
+      <p class="muted">仅保留本机最近七天、最多 400 条操作、耗时、数量和错误分类；不记录 API Key、个人字段值、简历正文或完整网页地址。日志不进入档案备份。</p>
+      <div class="row"><button id="logsRefresh" class="btn ghost">刷新日志</button><button id="logsExport" class="btn ghost">导出日志</button><button id="logsClear" class="btn ghost">清空日志</button></div><pre id="logsOutput" style="max-height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+    </section>
     <section class="card" id="resumeCenter">
       <h2>简历中心</h2>
       <div class="row"><input id="newProfileName" type="text" placeholder="新档案名称" aria-label="新档案名称" /><button id="createResumeProfile" class="btn plain">新建档案</button></div>
@@ -212,5 +217,6 @@
   <script src="resume-ui.js"></script>
   <script src="provider-picker.js"></script>
   <script src="options.js"></script>
+  <script src="diagnostics.js"></script>
 </body>
 </html>

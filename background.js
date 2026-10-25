@@ -1,10 +1,13 @@
-// Service Worker：AI 请求代理（OpenAI 兼容，多服务商预设）、CSV 导出、初始数据、侧边栏开关。
+// Service Worker：复用资料/AI 服务，编排右上角悬浮卡片及本地脱敏诊断。
 'use strict';
 
-importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/field-matching.js', 'data/field-suggestions.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js'); // 字段学习复用唯一仓库与加密凭据。
+importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/field-matching.js', 'data/field-suggestions.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js'); // 字段学习复用唯一仓库与加密凭据。
 
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local);
+const diagnostics = LocalApplyDiagnostics.create(chrome.storage.local);
+const floatingPanel = LocalApplyFloatingPanel.create(chrome, diagnostics);
+const presenceTimes = new Map();
 
 // ============ 初始数据（工厂在 data/templates.js） ============
 
@@ -86,16 +89,54 @@ function formatTs(ts) {
 
 // ============ 消息路由 ============
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+// 对关键业务只记录结果摘要；轮询读取不刷日志，失败记录不包含原始响应或个人值。
+chrome.runtime.onMessage.addListener((msg, sender, respond) => {
+  const started = Date.now();
+  const operation = String(msg?.type || '').replace(':', '.');
+  const quiet = ['wsa:ping','wsa:getState','wsa:contentSettings','localapply:read','learning:session','learning:changed','learning:rules','panel:context','diagnostics:read','diagnostics:clear','diagnostics:presence'].includes(msg?.type);
+  // 完成响应后串行落盘，避免记录高频轮询或消息 payload。
+  function sendResponse(response, logError) {
+    const count = response?.rows?.length ?? response?.data?.items?.length;
+    if (!quiet) diagnostics.append(operation, { level: response?.ok ? 'INFO' : 'ERROR', durationMs: Date.now() - started, count,
+      ...(response?.rows ? { success: response.rows.filter((row) => row.status === 'success').length, failed: response.rows.filter((row) => row.status === 'failed').length } : {}),
+      ...(!response?.ok ? { error: logError || response?.error } : {}) }).catch(() => {});
+    respond(response);
+  }
   (async () => {
     try {
+      // 自动检测只接受当前顶层内容脚本的有限枚举与数量，不授予私有数据库权限。
+      if (msg?.type === 'diagnostics:presence' && sender.id === chrome.runtime.id && sender.tab && sender.frameId === 0) {
+        const now = Date.now();
+        if (['application','login','other'].includes(msg.kind) && Number.isInteger(msg.count) && msg.count >= 0 && msg.count <= 300 && now - (presenceTimes.get(sender.tab.id) || 0) > 1000) {
+          presenceTimes.set(sender.tab.id, now); await diagnostics.append('page.presence', { kind: msg.kind, count: msg.count });
+          await chrome.action?.setBadgeText({ tabId: sender.tab.id, text: msg.kind === 'application' ? '表单' : '' });
+          await chrome.action?.setBadgeBackgroundColor({ tabId: sender.tab.id, color: '#2563eb' });
+        }
+        sendResponse({ ok: true }); return;
+      }
+      // 页面错误只登记固定事件，拒绝内容脚本提交任意异常正文或资料。
+      if (msg?.type === 'diagnostics:pageError' && sender.id === chrome.runtime.id && sender.tab && sender.frameId === 0) {
+        await diagnostics.append('page.error', { level: 'ERROR', error: new Error('页面检测失败') }); sendResponse({ ok: true }); return;
+      }
       // 网页只能报告本页结构变化，不能借学习消息调用模型或读取个人资料。
       if (msg?.type === 'learning:changed' && sender.id === chrome.runtime.id && sender.tab) {
         fieldLearning.changed(sender, msg); sendResponse({ ok: true }); return;
       }
-      if (!['wsa:ping', 'wsa:openPanel', 'wsa:contentSettings'].includes(msg && msg.type) && !trustedPage(sender)) {
+      const panelSession = sender.url?.split(/[?#]/)[0] === chrome.runtime.getURL('panel/panel.html') ? await floatingPanel.authorize(sender, msg) : null;
+      if (!['wsa:ping', 'wsa:openPanel', 'wsa:contentSettings'].includes(msg && msg.type) && !trustedPage(sender) && !panelSession) {
         throw new Error('此消息仅允许扩展管理页调用');
       }
+      // 悬浮请求绑定自身标签，不能借显式 tabId 授权另一个页面。
+      if (panelSession && msg.type === 'learning:scanPage' && msg.tabId !== panelSession.tabId) throw new Error('不能扫描其他标签页');
+      if (msg?.type === 'panel:context') {
+        if (!panelSession) throw new Error('悬浮会话无效');
+        const probe = await chrome.tabs.sendMessage(panelSession.tabId, { type: 'wsa:floatingProbe' }, { frameId: 0 });
+        sendResponse({ ok: true, tabId: panelSession.tabId, presence: probe.presence }); return;
+      }
+      if (msg?.type === 'panel:close') { if (!panelSession) throw new Error('悬浮会话无效'); sendResponse({ ok: true }); await floatingPanel.close(panelSession.tabId); return; }
+      if (msg?.type === 'diagnostics:read') { sendResponse({ ok: true, ...await diagnostics.read() }); return; }
+      if (msg?.type === 'diagnostics:clear') { if (msg.confirmed !== true) throw new Error('清理日志需要确认'); await diagnostics.clear(); sendResponse({ ok: true }); return; }
+      if (msg?.type === 'diagnostics:uiError') { await diagnostics.append('ui.error', { level: 'ERROR', error: { message: msg.error, stack: msg.stack } }); sendResponse({ ok: true }); return; }
       if (msg?.type?.startsWith('learning:')) { sendResponse({ ok: true, ...await fieldLearning.handle(msg) }); return; }
       switch (msg && msg.type) {
         case 'wsa:ping':
@@ -104,15 +145,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'wsa:openPanel': {
           const tabId = sender.tab && sender.tab.id;
           try {
-            if (tabId != null) {
-              await chrome.sidePanel.open({ tabId });
-            } else {
-              const win = await chrome.windows.getLastFocused();
-              await chrome.sidePanel.open({ windowId: win.id });
-            }
+            if (sender.id !== chrome.runtime.id || tabId == null || sender.frameId !== 0) throw new Error('请点击浏览器工具栏打开插件');
+            await floatingPanel.open(tabId);
             sendResponse({ ok: true });
           } catch (e) {
-            sendResponse({ ok: false, error: '无法自动打开侧边栏，请点击浏览器工具栏上的插件图标。' });
+            sendResponse({ ok: false, error: e.message || '无法打开悬浮卡片，请刷新网页后重试。' });
           }
           return;
         }
@@ -177,7 +214,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ ok: false, error: '未知消息类型: ' + (msg && msg.type) });
       }
     } catch (e) {
-      sendResponse({ ok: false, error: e.message || String(e), detail: e.detail });
+      sendResponse({ ok: false, error: e.message || String(e), detail: e.detail }, e);
     }
   })();
   return true; // 所有分支都异步回复
@@ -188,10 +225,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(async () => {
   await getState(); // 首次安装写入默认数据
   try {
-    await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+    await chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: false });
   } catch (e) {
     // 老版本不支持时退化：由 floatbar 的消息触发 open
   }
 });
 
+// 工具栏直接控制网页卡片，不再打开浏览器侧栏；受限页面仅显示可读提示。
+chrome.action?.onClicked?.addListener(async (tab) => {
+  try { await floatingPanel.open(tab.id); }
+  catch (error) { await diagnostics.append('panel.open', { level: 'ERROR', error }); await chrome.action.setTitle({ tabId: tab.id, title: error.message }); }
+});
+// 标签页导航及关闭立即丢弃卡片授权和限流状态。
+chrome.tabs?.onUpdated?.addListener((tabId, info) => { if (info.url || info.status === 'loading') floatingPanel.invalidate(tabId).catch(() => {}); });
+chrome.tabs?.onRemoved?.addListener((tabId) => { presenceTimes.delete(tabId); floatingPanel.invalidate(tabId).catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => {});

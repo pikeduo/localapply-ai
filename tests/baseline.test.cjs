@@ -50,7 +50,7 @@ function scripts(dir) {
 }
 
 test('全部 JavaScript 可通过 Node 语法检查（不执行脚本）', () => {
-  for (const file of ['background.js', 'common.js', ...['content', 'data', 'sidepanel', 'options', 'tools', 'libs', 'tests'].flatMap(scripts)]) {
+  for (const file of ['background.js', 'common.js', ...['content', 'data', 'sidepanel', 'panel', 'options', 'tools', 'libs', 'tests'].flatMap(scripts)]) {
     const result = spawnSync(process.execPath, ['--check', path.join(ROOT, file)], { encoding: 'utf8' });
     assert.equal(result.status, 0, `${file}: ${result.stderr}`);
   }
@@ -59,11 +59,14 @@ test('全部 JavaScript 可通过 Node 语法检查（不执行脚本）', () =>
 test('MV3 清单的脚本、页面及图标资源均存在', () => {
   const manifest = JSON.parse(source('manifest.json'));
   assert.equal(manifest.manifest_version, 3);
-  const files = [manifest.background.service_worker, manifest.side_panel.default_path,
+  const files = [manifest.background.service_worker, 'sidepanel/sidepanel.html', 'panel/panel.html',
     manifest.options_page, ...Object.values(manifest.icons),
     ...manifest.content_scripts.flatMap((entry) => entry.js)];
   for (const file of files) assert.ok(fs.existsSync(path.join(ROOT, file)), file);
-  for (const html of [manifest.side_panel.default_path, manifest.options_page]) {
+  // 新入口为网页悬浮卡片，旧侧栏文件仍检查资源完整性以保留历史回归。
+  assert.equal(manifest.side_panel, undefined);
+  assert.ok(!manifest.permissions.includes('sidePanel'));
+  for (const html of ['sidepanel/sidepanel.html', 'panel/panel.html', manifest.options_page]) {
     for (const match of source(html).matchAll(/(?:src|href)="([^"]+)"/g)) {
       if (match[1].startsWith('#')) continue; // 页内导航无需文件资源。
       assert.ok(fs.existsSync(path.resolve(ROOT, path.dirname(html), match[1])), `${html}: ${match[1]}`);

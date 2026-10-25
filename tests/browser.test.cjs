@@ -996,3 +996,95 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
     await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
   }
 });
+
+// 真实网页中的扩展 iframe：自动类型检测不授予字段读取权限，所有资料仍由确认流程控制。
+test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { timeout: 90000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'floating-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(12000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.locator('#entryProfile option').first().waitFor({ state: 'attached' });
+    const db = (await rpc(options, 'localapply:read')).database;
+    for (const [fieldId, value] of [['builtin.name','合成卡片姓名'],['builtin.phone','13800000000']]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId: db.activeProfileId, fieldId, entryId: null, value } } });
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/phase3-application.html'); await page.locator('#real-vue-name').waitFor();
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    await t.test('自动显示网申提示，但没有读取字段或调用模型', async () => {
+      await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
+      const result = await options.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'wsa:getState' }), tabId);
+      assert.equal(result.state.authorized, false); assert.equal(result.state.fields.length, 0); assert.equal(api.calls.length, 0);
+      assert.equal(await page.locator('#wsa-floatbar-host').evaluate((host) => host.shadowRoot), null);
+    });
+    const panelLoaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+    await page.locator('#wsa-floatbar-host').click();
+    // 扩展 iframe 位于封闭 Shadow DOM，但浏览器级测试仍能访问真正的 frame。
+    await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height > 300);
+    const frame = await panelLoaded;
+    assert.ok(frame, '悬浮扩展 iframe 应已加载'); await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
+    await t.test('右上角两页卡片加载，确认扫描及单项填写成功', async () => {
+      assert.equal(await frame.locator('.panel-tabs button').count(), 2);
+      await frame.locator('#smartPageConsent').check(); await frame.locator('#smartScan').click();
+      const card = frame.locator('.smart-row').filter({ has: frame.getByRole('heading', { name: '姓名 · 已匹配', exact: true }) });
+      await card.waitFor(); await card.getByText('单项填写预览', { exact: true }).click();
+      assert.equal(await page.locator('#applicant-name').inputValue(), '');
+      await frame.locator('#smartFillConsent').check(); await frame.locator('#smartFillConfirm').click();
+      await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('填写完成'));
+      assert.equal(await page.locator('#applicant-name').inputValue(), '合成卡片姓名'); assert.equal(await page.evaluate(() => __submitCount), 0);
+      await page.screenshot({ path: path.join(testRoot,'floating-autofill.png'), fullPage: false });
+    });
+    await t.test('简历预览按当前档案展示，联系方式默认遮挡', async () => {
+      await frame.locator('#resumeTab').click(); await frame.locator('#resumeContent .resume-section').first().waitFor();
+      assert.ok((await frame.locator('#resumeContent').textContent()).includes('合成卡片姓名'));
+      assert.ok(!(await frame.locator('#resumeContent').textContent()).includes('13800000000'));
+      await frame.locator('#previewReveal').check(); assert.ok((await frame.locator('#resumeContent').textContent()).includes('13800000000'));
+      await page.screenshot({ path: path.join(testRoot,'floating-resume.png'), fullPage: false });
+    });
+    await t.test('伪造嵌入及内容脚本不能读取资料或日志', async () => {
+      const forgedLoaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().endsWith('?token=forged') });
+      await page.evaluate((url) => { const iframe = document.createElement('iframe'); iframe.id = 'forged'; iframe.src = url; document.body.append(iframe); }, `chrome-extension://${extensionId}/panel/panel.html?token=forged`);
+      const forged = await forgedLoaded;
+      await forged.waitForFunction(() => typeof sendMessage === 'function');
+      assert.ok(forged); const denied = await forged.evaluate(() => sendMessage('localapply:read')); assert.equal(denied.ok, false);
+      await page.locator('#forged').evaluate((item) => item.remove());
+      const blocked = await worker.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: () => chrome.runtime.sendMessage({ type: 'diagnostics:read' }) }))[0].result, tabId);
+      assert.equal(blocked.ok, false);
+    });
+    await t.test('运行与报错日志可查看导出，且不泄漏凭据、个人值或 URL', async () => {
+      const failed = await frame.evaluate(() => sendMessage('wsa:aiChat', { payload: { messages: [{ role: 'user', content: '合成隐私内容' }] } })); assert.equal(failed.ok, false);
+      await frame.evaluate(() => dispatchEvent(new ErrorEvent('error', { error: new Error('sk-synthetic-log-private 合成隐私内容') })));
+      await frame.locator('#diagnosticsPanel summary').click(); await frame.locator('#logsRefresh').click();
+      await frame.waitForFunction(() => document.getElementById('logsOutput').textContent.includes('wsa.aiChat'));
+      const logs = await rpc(options, 'diagnostics:read'); assert.ok(logs.rows.some((row) => row.level === 'ERROR'));
+      for (const privateText of ['13800000000','合成卡片姓名','sk-synthetic-log-private','合成隐私内容','?private=']) assert.ok(!JSON.stringify(logs).includes(privateText));
+      const downloadPromise = page.waitForEvent('download'); await frame.locator('#logsExport').click(); const download = await downloadPromise;
+      assert.equal(download.suggestedFilename(), 'localapply-diagnostics.json');
+      const backup = (await rpc(options,'localapply:exportBackup')).backup; assert.ok(!JSON.stringify(backup).includes('page.presence'));
+    });
+    await t.test('关闭与导航撤销卡片令牌，登录页不显示网申提示', async () => {
+      const token = new URL(frame.url()).searchParams.get('token'); await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').style.display === 'none');
+      const reloaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+      await worker.evaluate((tabId) => floatingPanel.open(tabId), tabId);
+      const reopened = await reloaded; assert.ok(reopened); await reopened.locator('#profileSel option').first().waitFor({ state: 'attached' });
+      assert.notEqual(new URL(reopened.url()).searchParams.get('token'), token);
+      await page.evaluate(() => history.pushState({}, '', '?step=new'));
+      const denied = await reopened.evaluate(() => sendMessage('localapply:read')); assert.equal(denied.ok, false);
+      await page.goto(api.base + '/test-pages/login-mock.html'); await page.locator('input[placeholder="请输入验证码"]').waitFor();
+      await page.waitForFunction(() => document.getElementById('wsa-floatbar-host')?.style.display === 'none');
+      assert.equal(await page.locator('#wsa-floatbar-host').isVisible(), false);
+      // 异步招聘表单先挂载后显现，自动检测也不能读取任何控件值。
+      await page.evaluate(() => {
+        document.title = '动态候选人信息'; const form = document.createElement('form'); form.id = 'dynamic-application'; form.hidden = true;
+        window.__presenceValueReads = 0;
+        for (const name of ['本科毕业院校','硕士专业','联系电话']) { const label = document.createElement('label'); label.textContent = name; const input = document.createElement('input'); Object.defineProperty(input, 'value', { get() { window.__presenceValueReads++; return '禁止读取'; } }); label.append(input); form.append(label); }
+        document.body.append(form);
+        document.querySelector('input[placeholder="请输入验证码"]').remove();
+      });
+      await options.waitForFunction(async (tabId) => (await chrome.tabs.sendMessage(tabId, { type: 'wsa:floatingProbe' })).presence.kind === 'other', tabId);
+      await page.locator('#dynamic-application').evaluate((form) => { form.hidden = false; });
+      await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
+      assert.equal(await page.evaluate(() => __presenceValueReads), 0);
+    });
+  } finally {
+    if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve));
+    assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
+});

@@ -397,6 +397,14 @@
       try {
         if (sender.id !== chrome.runtime.id || sender.tab || (sender.url && !['background.js', 'options/options.html', 'sidepanel/sidepanel.html'].some((page) => sender.url.split(/[?#]/)[0] === chrome.runtime.getURL(page)))) throw new Error('仅允许本插件管理入口操作页面');
         switch (msg && msg.type) {
+          // 卡片控制仅来自后台；探针不返回令牌或个人信息。
+          case 'wsa:floatingProbe':
+            sendResponse({ ok: true, open: globalThis.WangshenFloatbar?.isOpen() || false, documentId: globalThis.LocalApplyPageScanner.documentId, presence: globalThis.LocalApplyPagePresence?.get() }); return;
+          case 'wsa:floatingOpen':
+            if (!msg.url?.startsWith(chrome.runtime.getURL('panel/panel.html') + '?token=')) throw new Error('悬浮地址无效');
+            globalThis.WangshenFloatbar.open(msg.url); sendResponse({ ok: true }); return;
+          case 'wsa:floatingClose':
+            globalThis.WangshenFloatbar?.close(); sendResponse({ ok: true }); return;
           case 'learning:scan': {
             if (msg.authorize === true && msg.expectedUrl !== location.href) throw new Error('页面已导航，请重新授权扫描');
             const snapshot = globalThis.LocalApplyPageScanner.scan(msg.authorize === true);
@@ -517,7 +525,8 @@
       try {
         detect();
       } catch (e) {
-        console.warn('[wangshen-autofill] detect error', e);
+        // 不把原始页面内容或异常正文输出到控制台。
+        chrome.runtime.sendMessage({ type: 'diagnostics:pageError' }).catch(() => {});
       }
     }, delay || 0);
   }

@@ -142,7 +142,9 @@
   // 绑定用户主动操作，打开侧栏本身不会扫描或调用模型。
   $('smartScan').addEventListener('click', () => task(async () => {
     if (!$('smartPageConsent').checked) throw new Error('请先勾选授权扫描当前招聘页');
-    await flushSaves(); const state = await getState(); const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    await flushSaves(); const state = await getState();
+    // 悬浮卡片固定绑定打开时的顶层标签，不能跟随另一个活动标签操作资料。
+    const tab = globalThis.LocalApplyPanelContext || (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
     current = null; selectionInitialized = false; selected.clear(); drafts.clear(); $('smartAIReview').hidden = $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = '正在扫描已授权页面…';
     update(await request('scanPage', { tabId: tab?.id, profileId: state.activeProfileId, confirmed: true }));
   }));

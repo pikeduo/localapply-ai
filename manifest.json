@@ -22,16 +22,12 @@
   "background": {
     "service_worker": "background.js"
   },
-  "side_panel": {
-    "default_path": "sidepanel/sidepanel.html"
-  },
   "options_page": "options/options.html",
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
   "permissions": [
     "storage",
-    "sidePanel",
     "tabs",
     "downloads",
     "scripting"
@@ -63,10 +59,15 @@
         "content/detector.js",
         "content/filler.js",
         "content/verified-fill.js",
+        "content/page-presence.js",
         "content/floatbar.js"
       ],
       "run_at": "document_idle",
       "all_frames": false
     }
-  ]
+  ],
+  "web_accessible_resources": [{
+    "resources": ["panel/panel.html"],
+    "matches": ["http://*/*", "https://*/*"]
+  }]
 }

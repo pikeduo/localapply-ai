@@ -25,7 +25,7 @@ function crc32(buf) {
 
 // 收集运行必需文件（不含 test-pages/tools/文档/日志/测试 profile）
 const files = ['manifest.json', 'background.js', 'common.js', 'LICENSE']; // 发行包保留原作者 MIT 许可。
-for (const dir of ['content', 'sidepanel', 'options', 'data', 'icons', 'libs']) {
+for (const dir of ['content', 'sidepanel', 'panel', 'options', 'data', 'icons', 'libs']) {
   (function walk(p) {
     for (const e of fs.readdirSync(p, { withFileTypes: true })) {
       const full = path.join(p, e.name);

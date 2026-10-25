@@ -78,7 +78,9 @@ function sendMessage(type, payload) {
       return;
     }
     try {
-      runtime.sendMessage({ type, ...(payload || {}) }, (res) => {
+      // 网页悬浮 iframe 的私有访问还需后台签发的文档会话令牌。
+      const panelToken = globalThis.location?.pathname === '/panel/panel.html' ? new URLSearchParams(location.search).get('token') : null;
+      runtime.sendMessage({ type, ...(payload || {}), ...(panelToken ? { panelToken } : {}) }, (res) => {
         if (runtime.lastError) {
           resolve({ ok: false, error: runtime.lastError.message });
           return;
