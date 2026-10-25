@@ -615,6 +615,15 @@
             check(def.version === db.fieldDefinitions[index].version + 1, '字段定义版本冲突');
             db.fieldDefinitions[index] = def; break;
           }
+          // 将现有定义绑定到档案，只创建空值，绝不从其他档案复制答案。
+          case 'attachField': {
+            keys(input, ['fieldId', 'profileId'], '添加已有字段');
+            const def = db.fieldDefinitions.find((row) => row.fieldId === input.fieldId);
+            check(def && db.profiles.some((row) => row.profileId === input.profileId), '字段或档案不存在');
+            if (!db.bindings.some((row) => row.profileId === input.profileId && row.fieldId === def.fieldId)) db.bindings.push({ profileId: input.profileId, fieldId: def.fieldId, fid: id('field'), key: def.fieldId.startsWith('builtin.') ? def.fieldId.slice(8) : def.fieldId, sensitive: false, autoFill: false, material: false, custom: !db.publicFieldIds.includes(def.fieldId) });
+            if (!db.fieldValues.some((row) => row.profileId === input.profileId && row.fieldId === def.fieldId && row.entryId === null)) db.fieldValues.push({ profileId: input.profileId, fieldId: def.fieldId, entryId: null, value: null, updatedAt: now(), source: 'manual' });
+            break;
+          }
           case 'deleteField': {
             keys(input, ['fieldId'], '删除字段');
             check(db.fieldDefinitions.some((row) => row.fieldId === input.fieldId) && !db.publicFieldIds.includes(input.fieldId), '公共字段不可全局删除');
@@ -633,6 +642,11 @@
             const entry = { entryId: id('entry'), profileId: input.profileId, kind: input.kind, title: input.title || '',
               order: db.entries.filter((row) => row.profileId === input.profileId && row.kind === input.kind).length };
             db.entries.push(entry); result = entry.entryId; break;
+          }
+          // 只编辑经历标题，稳定 entryId、所属档案和所有映射关系保持一致。
+          case 'editEntry': {
+            keys(input, ['entryId', 'title'], '编辑经历'); string(input.title, '经历标题', 500, true);
+            const entry = db.entries.find((row) => row.entryId === input.entryId); check(entry, '经历不存在'); entry.title = input.title; break;
           }
           case 'importResume': {
             keys(input, ['profileId', 'fingerprint', 'rows', 'overwrite'], '简历导入');

@@ -6,7 +6,7 @@ importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'da
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local);
 const diagnostics = LocalApplyDiagnostics.create(chrome.storage.local);
-const floatingPanel = LocalApplyFloatingPanel.create(chrome, diagnostics);
+const floatingPanel = LocalApplyFloatingPanel.create(chrome, diagnostics, (tabId) => fieldLearning.invalidate(tabId)); // 关闭卡片也中止本页 AI 和未确认候选。
 const presenceTimes = new Map();
 
 // ============ 初始数据（工厂在 data/templates.js） ============
@@ -93,7 +93,7 @@ function formatTs(ts) {
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   const started = Date.now();
   const operation = String(msg?.type || '').replace(':', '.');
-  const quiet = ['wsa:ping','wsa:getState','wsa:contentSettings','localapply:read','learning:session','learning:changed','learning:rules','panel:context','diagnostics:read','diagnostics:clear','diagnostics:presence'].includes(msg?.type);
+  const quiet = ['wsa:ping','wsa:getState','wsa:contentSettings','localapply:read','learning:session','learning:changed','learning:rules','panel:context','panel:layout','diagnostics:read','diagnostics:clear','diagnostics:presence'].includes(msg?.type);
   // 完成响应后串行落盘，避免记录高频轮询或消息 payload。
   function sendResponse(response, logError) {
     const count = response?.rows?.length ?? response?.data?.items?.length;
@@ -134,6 +134,21 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         sendResponse({ ok: true, tabId: panelSession.tabId, presence: probe.presence }); return;
       }
       if (msg?.type === 'panel:close') { if (!panelSession) throw new Error('悬浮会话无效'); sendResponse({ ok: true }); await floatingPanel.close(panelSession.tabId); return; }
+      // 布局命令仅由已授权的扩展卡片发送，不能让网页伪造拖动或取得资料。
+      if (msg?.type === 'panel:layout') {
+        if (!panelSession || typeof msg.collapsed !== 'boolean' && !(Number.isFinite(msg.dx) && Number.isFinite(msg.dy) && Math.abs(msg.dx) <= 2000 && Math.abs(msg.dy) <= 2000)) throw new Error('悬浮布局参数无效');
+        await chrome.tabs.sendMessage(panelSession.tabId, { type: 'wsa:floatingLayout', collapsed: msg.collapsed, dx: msg.dx, dy: msg.dy }, { frameId: 0 });
+        sendResponse({ ok: true }); return;
+      }
+      // 编辑入口只构造固定的内部页面，档案和分组通过参数定位，禁止任意导航 URL。
+      if (msg?.type === 'panel:edit') {
+        if (!panelSession) throw new Error('悬浮会话无效');
+        const db = await repository.read(); const profileId = db.profiles.some((item) => item.profileId === msg.profileId) ? msg.profileId : db.activeProfileId;
+        const params = new URLSearchParams({ profile: profileId, section: typeof msg.section === 'string' ? msg.section.slice(0, 500) : '' });
+        const destination = ['pdfCard', 'privacySettings', 'fieldLibrary', 'aiSettings'].includes(msg.destination) ? msg.destination : 'resumeCenter';
+        await chrome.tabs.create({ url: chrome.runtime.getURL('options/options.html') + '?' + params + '#' + destination });
+        sendResponse({ ok: true }); return;
+      }
       if (msg?.type === 'diagnostics:read') { sendResponse({ ok: true, ...await diagnostics.read() }); return; }
       if (msg?.type === 'diagnostics:clear') { if (msg.confirmed !== true) throw new Error('清理日志需要确认'); await diagnostics.clear(); sendResponse({ ok: true }); return; }
       if (msg?.type === 'diagnostics:uiError') { await diagnostics.append('ui.error', { level: 'ERROR', error: { message: msg.error, stack: msg.stack } }); sendResponse({ ok: true }); return; }

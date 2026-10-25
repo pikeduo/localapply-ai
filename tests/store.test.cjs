@@ -58,6 +58,18 @@ test('动态字段新增、版本化编辑、删除及引用清理', async () =>
   assert.ok(!db.fieldValues.some((row) => row.fieldId === created.result));
 });
 
+// 已有定义绑定只添加空白，不复制其他档案值，也不创建重复定义。
+test('工作台添加已有字段保持 ID、档案隔离和幂等，改经历标题不改变引用', async () => {
+  const { repo } = fixture(); await repo.initialize(); const fieldId = (await command(repo, 'createField', { profileId: 'p1', definition: { label: '合成共享定义' }, value: '合成私有内容' })).result;
+  const profileId = (await command(repo, 'createProfile', { name: '合成第二档案' })).result;
+  await command(repo, 'attachField', { fieldId, profileId }); await command(repo, 'attachField', { fieldId, profileId }); let db = await repo.read();
+  assert.equal(db.fieldDefinitions.filter((item) => item.fieldId === fieldId).length, 1); assert.equal(db.bindings.filter((item) => item.fieldId === fieldId && item.profileId === profileId).length, 1); assert.equal(value(db, profileId, fieldId), null); assert.equal(value(db, 'p1', fieldId), '合成私有内容');
+  const entryId = (await command(repo, 'createEntry', { profileId, kind: 'project', title: '合成旧标题' })).result;
+  await command(repo, 'setValue', { profileId, entryId, fieldId, value: '合成项目值' }); await command(repo, 'editEntry', { entryId, title: '合成新标题' }); db = await repo.read();
+  assert.equal(db.entries.find((item) => item.entryId === entryId).title, '合成新标题'); assert.equal(db.fieldValues.find((item) => item.entryId === entryId).value, '合成项目值');
+  await assert.rejects(command(repo, 'attachField', { fieldId: 'missing', profileId }), /不存在/); await assert.rejects(command(repo, 'editEntry', { entryId, title: 'x', kind: 'education' }), /未声明/);
+});
+
 test('字段定义只含元数据，个人值和 API 分开存储', async () => {
   const { repo, disk, templates } = fixture();
   const legacy = templates.defaultState(); legacy.settings.apiKeys = { zhipu: 'fake-unit-secret' };

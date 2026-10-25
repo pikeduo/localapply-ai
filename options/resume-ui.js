@@ -148,29 +148,36 @@ async function confirmResume() {
   } catch (error) { $('#pdfStatus').textContent = '未导入：' + error.message + '。数据变化时请点击「刷新差异」后重新核对。'; }
   finally { $('#btnImport').disabled = false; $('#cancelResume').disabled = false; }
 }
-// 简历中心复用旧字段保存入口，手动编辑会清除此前的 AI 来源标记。
+// 按分类和字段类型编辑；三方合并保留并发保护，手动编辑清除旧 AI 来源。
 async function renderResumeCenter() {
   const root = $('#basicFields'); root.replaceChildren();
   const fresh = await getState(); state = fresh;
   const profile = fresh.profiles.find((p) => p.id === $('#entryProfile').value);
   if (!profile) return;
-  for (const field of profile.fields.filter((f) => !f.material)) {
+  const groups = [...new Set(profile.fields.filter((field) => !field.material).map((field) => field.group))];
+  const selectedGroup = $('#centerGroup').value; $('#centerGroup').replaceChildren(new Option('全部分类', ''), ...groups.map((group) => new Option(group, group))); $('#centerGroup').value = selectedGroup;
+  let priorGroup;
+  for (const field of profile.fields.filter((f) => !f.material).sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group))) {
+    if (priorGroup !== field.group) { const heading = document.createElement('h3'); heading.textContent = field.group; heading.dataset.group = field.group; heading.className = 'center-group-heading'; root.append(heading); priorGroup = field.group; }
     const label = document.createElement('label'); label.className = 'center-field';
     const text = document.createElement('span'); text.textContent = field.label;
-    const input = document.createElement('input'); input.type = 'text'; input.value = fieldText(field.value);
+    const def = { type: field.inputType, options: field.options || [] }; const input = workspaceControl(def, field.value);
     input.setAttribute('aria-label', '简历中心 · ' + field.label);
+    input.addEventListener('input', () => { input.dataset.dirty = 'true'; });
     input.addEventListener('change', async () => {
       try {
         const next = await getState();
         const current = next.profiles.find((p) => p.id === profile.id)?.fields.find((f) => f.fid === field.fid);
         if (!current) throw new Error('档案或字段已变化，请刷新');
-        current.value = input.value === '' ? '' : field.inputType === 'number' ? Number(input.value)
-          : ['boolean', 'multiSelect'].includes(field.inputType) ? JSON.parse(input.value) : input.value;
+        if (JSON.stringify(current.value) !== JSON.stringify(field.value)) throw new Error('该字段已被其他页面修改，请刷新后重新核对');
+        current.value = workspaceValue(input, def);
         await saveState(next); state = next;
+        field.value = current.value; input.dataset.dirty = ''; if (workspaceInitialized) await refreshWorkspace();
         $('#centerStatus').textContent = '已保存在本地';
       } catch (error) { $('#centerStatus').textContent = '保存失败：' + error.message; }
     });
-    label.append(text, input); root.append(label);
+    const source = document.createElement('small'); source.textContent = '修改后离开输入框自动保存 · 保存失败保留输入';
+    label.append(text, input, source); root.append(label);
   }
 }
 // 独立挂载导入和本地编辑入口，切换文件时取消旧任务。
@@ -190,7 +197,6 @@ function initResume() {
   $('#targetProfile').addEventListener('change', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));
   $('#overwriteResume').addEventListener('change', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));
   $('#refreshReview').addEventListener('click', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));
-  $('#entryProfile').addEventListener('change', renderResumeCenter);
   $('#createResumeProfile').addEventListener('click', async () => {
     try {
       const { result } = await dataCommand('createProfile', { name: $('#newProfileName').value.trim() });

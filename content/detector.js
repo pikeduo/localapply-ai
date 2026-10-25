@@ -405,6 +405,9 @@
             globalThis.WangshenFloatbar.open(msg.url); sendResponse({ ok: true }); return;
           case 'wsa:floatingClose':
             globalThis.WangshenFloatbar?.close(); sendResponse({ ok: true }); return;
+          // 布局只修改隔离卡片的位置和大小，不接触网页表单。
+          case 'wsa:floatingLayout':
+            globalThis.WangshenFloatbar?.layout(msg); sendResponse({ ok: true }); return;
           case 'learning:scan': {
             if (msg.authorize === true && msg.expectedUrl !== location.href) throw new Error('页面已导航，请重新授权扫描');
             const snapshot = globalThis.LocalApplyPageScanner.scan(msg.authorize === true);

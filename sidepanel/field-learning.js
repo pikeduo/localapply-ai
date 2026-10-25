@@ -100,15 +100,19 @@
     let excluded = $('smartExcluded');
     if (!excluded) { excluded = node('details', '', 'card'); excluded.id = 'smartExcluded'; $('smartUnknown').after(excluded); }
     excluded.replaceChildren(); excluded.hidden = !current;
-    if (!current) return;
+    if (!current) { if ($('smartMetrics')) $('smartMetrics').replaceChildren(); return; }
+    if ($('smartMetrics')) {
+      $('smartMetrics').replaceChildren(...[['可填写', current.rows.filter((row) => row.status === 'matched').length], ['待处理', current.rows.filter((row) => row.status === 'needs_confirmation').length], ['缺资料', current.rows.filter((row) => row.status === 'missing_value').length], ['已排除', current.excluded?.length || 0]].map(([label, count]) => node('span', `${label} ${count}`, 'metric')));
+    }
+    $('smartMatched').hidden = !!$('smartOnlyUnknown')?.checked;
     excluded.append(node('summary', `已排除控件 ${current.excluded?.length || 0} 项 / 本次忽略 ${current.rows.filter((row) => row.ignored).length} 项`));
     for (const item of current.excluded || []) excluded.append(node('p', `${item.label} · ${item.category} · ${item.reason}`));
     $('smartStatus').textContent = `${current.origin} · 扫描 ${current.rows.length} 个字段；可填写 ${current.rows.filter((row) => row.status === 'matched').length}，待处理 ${current.rows.filter((row) => !row.target && !row.ignored).length}，缺资料 ${current.rows.filter((row) => row.status === 'missing_value').length}；资料版本 ${current.revision} ${current.notice || ''}`; $('smartStatus').className = 'muted';
     for (const row of current.rows) {
       if (row.ignored) { const ignored = node('p', row.field.label + ' · 本次已忽略'); ignored.append(button('恢复此字段', async () => update(await request('ignore', { scanId: row.field.scanId, ignored: false })))); excluded.append(ignored); continue; }
       const card = node('article', '', 'card smart-row'); card.dataset.scanId = row.field.scanId; card.dataset.status = row.status;
-      const title = node('h4', row.field.label + ' · ' + (directFill && row.status === 'needs_confirmation' ? '待处理' : labels[row.status])); const check = node('input'); check.type = 'checkbox'; check.className = 'smart-check'; check.checked = selected.has(row.field.scanId); check.disabled = !row.target || ['unsupported','missing_value'].includes(row.status);
-      check.addEventListener('change', () => check.checked ? selected.add(row.field.scanId) : selected.delete(row.field.scanId)); title.prepend(check); card.append(title, node('p', [row.field.group, row.field.type, directFill ? row.reason.replace('填写前仍需确认', '可直接填写') : row.reason].filter(Boolean).join(' · '), 'muted'));
+      const title = node('h4', row.field.label + ' · ' + (directFill && row.status === 'needs_confirmation' ? '待处理' : labels[row.status])); const check = node('input'); check.type = 'checkbox'; check.className = 'smart-check'; check.setAttribute('aria-label', '选择填写' + row.field.label); check.checked = selected.has(row.field.scanId); check.disabled = !row.target || ['unsupported','missing_value'].includes(row.status);
+      check.addEventListener('change', () => check.checked ? selected.add(row.field.scanId) : selected.delete(row.field.scanId)); const heading = node('div', '', 'smart-row-heading'); heading.append(check, title); card.append(heading, node('p', [row.field.group, row.field.type, directFill ? row.reason.replace('填写前仍需确认', '可直接填写') : row.reason].filter(Boolean).join(' · '), 'muted'));
       card.append(sourceSelect(row, async (source) => { selected.add(row.field.scanId); update(await request('select', { scanId: row.field.scanId, fieldId: source.fieldId, entryId: source.entryId })); }));
       if (!row.target && row.status !== 'unsupported') {
         const aiLabel = node('label'); const aiCheck = node('input'); aiCheck.type = 'checkbox'; aiCheck.className = 'smart-ai-check'; aiCheck.checked = aiSelected.has(row.field.scanId);
@@ -176,6 +180,8 @@
     else { try { update(await request('session')); } catch { await scanPage(); } }
   }
   $('smartScan').addEventListener('click', () => task(scanPage));
+  // 只筛选可见列表，不清空选择、草稿或后台扫描会话。
+  $('smartOnlyUnknown')?.addEventListener('change', () => { $('smartMatched').hidden = $('smartOnlyUnknown').checked; });
   $('smartRefresh').addEventListener('click', () => task(async () => { if (directFill && !current) await scanPage(); else update(await request('session')); }));
   $('smartRevoke').addEventListener('click', () => task(async () => { if (current) await request('revoke'); clear(); $('smartStatus').textContent = directFill ? '已清除扫描结果，点击即可重新填写' : '已撤销本页授权'; }));
   $('smartAI').addEventListener('click', () => task(async () => { if (directFill) await ensureCurrent(); aiPreview = await request('prepareAI', { scanIds: current.rows.filter((row) => !row.target && !row.ignored && aiSelected.has(row.field.scanId)).map((row) => row.field.scanId) }); $('smartRecipient').textContent = `${aiPreview.recipient.name} · ${aiPreview.recipient.baseUrl} · ${aiPreview.recipient.model} · ${aiPreview.recipient.protocol}`; $('smartAIPayload').textContent = JSON.stringify(aiPreview.payload, null, 2); $('smartAIConsent').checked = false; $('smartAIReview').dataset.token = aiPreview.token; $('smartAIReview').hidden = false; }));

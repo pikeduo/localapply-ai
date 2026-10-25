@@ -1289,3 +1289,103 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
     assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
   }
 });
+
+// 阶段四验收通过真实按钮与后台存储检查界面行为，不将元素存在视为完成。
+test('阶段四：双标签、预览三操作、工作台和窄窗交互', { timeout: 180000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'phase4-')); const api = await serve(); let context; let worker; let extensionId; let options; let page; let frame; let profileId; let schoolId; let fieldId;
+  const errors = [];
+  // 使用后台同一入口模拟工具栏调用；iframe 的按钮和指针操作均为真实 UI 事件。
+  const open = async () => { const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((item) => item.url === url).id, page.url()); const loaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); await worker.evaluate((tabId) => floatingPanel.open(tabId), tabId); frame = await loaded; await frame.locator('#profileSel option').first().waitFor({ state: 'attached' }); return tabId; };
+  // 等待资料真正落盘后再进行跨窗口断言，避免以渲染时序冒充持久性。
+  const value = async (id) => (await rpc(options, 'localapply:read')).database.fieldValues.find((item) => item.profileId === profileId && item.fieldId === id && item.entryId === null)?.value;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); ({ worker, extensionId } = await extension(context));
+    options = await context.newPage(); options.on('pageerror', (error) => errors.push(error.message)); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.getElementById('overviewValues')?.textContent !== '—'); profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(api.base + '/test-pages/phase3-composites.html'); await open();
+    await t.test('空档案引导支持跳过 AI，填写不会假报成功且零模型请求', async () => {
+      await frame.locator('#panelWelcome').waitFor({ state: 'visible' }); await frame.locator('#smartFillAll').click(); await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('没有可填写'));
+      assert.equal(await page.locator('#name').inputValue(), ''); assert.equal(api.calls.length, 0); const opened = context.waitForEvent('page'); await frame.locator('#welcomeSkipAI').click(); const editor = await opened; await editor.waitForLoadState(); assert.ok(editor.url().includes('options/options.html?profile=')); assert.ok(editor.url().endsWith('#resumeCenter')); await editor.close();
+    });
+    await t.test('工作台新增类型化字段及值，保存前不入库，无 Key 可用', async () => {
+      await options.locator('#fieldCreate').evaluate((element) => { element.open = true; }); await options.locator('#fieldLabel').fill('合成是否调剂'); await options.locator('#fieldType').selectOption('boolean');
+      assert.ok(!(await rpc(options, 'localapply:read')).database.fieldDefinitions.some((item) => item.label === '合成是否调剂')); await options.locator('#fieldSave').click(); await options.waitForFunction(() => document.getElementById('fieldStatus').textContent.includes('已保存'));
+      const db = (await rpc(options, 'localapply:read')).database; fieldId = db.fieldDefinitions.find((item) => item.label === '合成是否调剂').fieldId; assert.equal(db.fieldValues.find((item) => item.fieldId === fieldId).value, null);
+      await options.getByLabel('简历中心 · 合成是否调剂', { exact: true }).selectOption('false'); await options.waitForFunction(() => document.getElementById('centerStatus').textContent.includes('已保存')); await options.evaluate(() => flushSaves()); assert.equal(await value(fieldId), false);
+      for (const [id, content] of [['builtin.name','合成阶段四姓名'],['builtin.phone','13800000000'],['builtin.skills','合成中文技能：DOM 与测试']]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: id, value: content } } });
+      for (let index = 0; index < 2; index++) { const entryId = (await rpc(options, 'localapply:command', { request: { action: 'createEntry', payload: { profileId, kind: 'education', title: '同名合成教育' } } })).result; if (!index) schoolId = entryId; await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, entryId, fieldId: 'builtin.school', value: '合成学院' + index } } }); }
+      await options.locator('#centerRefresh').click(); assert.equal(api.calls.length, 0);
+    });
+    await t.test('预览分类导航实际滚动展开并高亮，同名经历保持独立', async () => {
+      await frame.locator('#resumeTab').click(); await frame.locator('#resumeContent .resume-section').first().waitFor(); assert.equal(await frame.locator('#resumeContent details').count(), 2); assert.ok(!(await frame.locator('#resumeContent').textContent()).includes('13800000000'));
+      await frame.locator('#previewNav').selectOption('entry:' + schoolId); const section = frame.locator('[data-section-key="entry:' + schoolId + '"]'); assert.equal(await section.evaluate((element) => element.open), true); assert.ok(await section.evaluate((element) => element.classList.contains('is-target'))); assert.equal(await frame.evaluate(() => document.activeElement.dataset.sectionKey), 'entry:' + schoolId);
+      await section.locator('summary').click(); assert.equal(await section.evaluate((element) => element.open), false);
+      await frame.locator('#previewSearch').fill('合成是否调剂'); assert.ok((await frame.locator('#resumeContent').textContent()).includes('否')); assert.equal(await frame.locator('#resumeContent details').count(), 0); await frame.locator('#previewSearch').fill('');
+    });
+    await t.test('预览刷新实际读取修改，增删字段自动同步且不调用 AI', async () => {
+      await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.name', value: '合成阶段四刷新姓名' } } }); await frame.locator('#previewRefresh').click(); await frame.waitForFunction(() => document.getElementById('resumeContent').textContent.includes('合成阶段四刷新姓名'));
+      const created = (await rpc(options, 'localapply:command', { request: { action: 'createField', payload: { profileId, definition: { label: '合成即时新增' }, value: '合成即时值' } } })).result; await frame.waitForFunction(() => document.getElementById('resumeContent').textContent.includes('合成即时新增'));
+      await rpc(options, 'localapply:command', { request: { action: 'deleteField', payload: { fieldId: created } } }); await frame.waitForFunction(() => !document.getElementById('resumeContent').textContent.includes('合成即时新增')); assert.equal(api.calls.length, 0);
+    });
+    await t.test('编辑按钮打开当前档案与分类的简历中心', async () => {
+      await frame.locator('#previewNav').selectOption('entry:' + schoolId); const opened = context.waitForEvent('page'); await frame.locator('#previewEdit').click(); const editor = await opened; await editor.waitForFunction(() => document.getElementById('overviewValues')?.textContent !== '—'); await editor.waitForFunction((id) => document.getElementById('entryProfile').value === id, profileId); assert.ok(editor.url().includes(encodeURIComponent('entry:' + schoolId))); await editor.locator('[data-entry-id="' + schoolId + '"].is-target').waitFor(); await editor.close();
+    });
+    await t.test('单击复制只针对所选项，敏感值保持遮挡直到主动显示', async () => {
+      await frame.locator('#previewSearch').fill('手机号'); await frame.getByRole('button', { name: '复制手机号', exact: true }).click(); assert.ok((await frame.locator('#previewStatus').textContent()).includes('先勾选'));
+      await frame.locator('#previewReveal').check(); await frame.getByRole('button', { name: '复制手机号', exact: true }).click(); await frame.waitForFunction(() => document.getElementById('previewStatus').textContent.includes('已复制')); await frame.locator('#previewSearch').fill('');
+      await page.screenshot({ path: path.join(testRoot, 'stage4-preview.png'), fullPage: false });
+    });
+    await t.test('两个主标签切换保留扫描会话和字段选择，筛选不改变数据', async () => {
+      await frame.locator('#autoTab').click(); await frame.locator('#smartScan').click(); await frame.locator('.smart-row').first().waitFor(); const session = await frame.locator('#tab-smart').getAttribute('data-session-id'); const count = await frame.locator('.smart-row').count();
+      await frame.locator('#smartOnlyUnknown').check(); assert.equal(await frame.locator('#smartMatched').isHidden(), true); await frame.locator('#resumeTab').click(); await frame.locator('#autoTab').click(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), session); assert.equal(await frame.locator('.smart-row').count(), count); assert.equal(await frame.locator('#smartOnlyUnknown').isChecked(), true); await frame.locator('#smartOnlyUnknown').uncheck(); assert.equal(await frame.locator('.panel-tabs [role=tab]').count(), 2);
+    });
+    await t.test('拖动、折叠、展开和视口变化保持卡片可见且保留会话', async () => {
+      const before = await page.locator('#wsa-floatbar-host').boundingBox(); const header = await frame.locator('.panel-brand').boundingBox(); await page.mouse.move(header.x + 40, header.y + 16); await page.mouse.down(); await page.mouse.move(header.x - 120, header.y + 70, { steps: 8 }); await page.mouse.up(); await page.waitForFunction((left) => document.getElementById('wsa-floatbar-host').getBoundingClientRect().left < left - 30, before.x);
+      const session = await frame.locator('#tab-smart').getAttribute('data-session-id'); await frame.locator('#panelMinimize').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height < 90); await frame.locator('#panelMinimize').click(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), session);
+      await page.setViewportSize({ width: 375, height: 720 }); await page.waitForFunction(() => { const rect = document.getElementById('wsa-floatbar-host').getBoundingClientRect(); return rect.x >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight; }); assert.equal(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); await page.screenshot({ path: path.join(testRoot, 'stage4-narrow.png'), fullPage: false }); await page.setViewportSize({ width: 1280, height: 900 });
+    });
+    await t.test('键盘标签切换与 Escape 关闭可用，再次打开不残留失效会话', async () => {
+      await frame.locator('#autoTab').focus(); await page.keyboard.press('ArrowRight'); assert.equal(await frame.locator('#resumeTab').getAttribute('aria-selected'), 'true'); await page.keyboard.press('Escape'); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 0); await open(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), null);
+    });
+    await t.test('工作台字段修改和删除有确认，未保存编辑不能被刷新覆盖', async () => {
+      await options.locator('#fieldSearch').fill('合成是否调剂'); const row = options.locator('.library-row').filter({ hasText: '合成是否调剂' }); await row.getByRole('button', { name: '编辑定义', exact: true }).click(); await options.locator('#fieldLabel').fill('合成调剂修改名');
+      options.once('dialog', (dialog) => dialog.dismiss()); await options.locator('#centerRefresh').click(); assert.equal(await options.locator('#fieldLabel').inputValue(), '合成调剂修改名');
+      options.once('dialog', (dialog) => dialog.accept()); await options.locator('#fieldSave').click(); await options.waitForFunction(() => [...document.querySelectorAll('.center-field')].some((item) => item.textContent.includes('合成调剂修改名'))); assert.equal(await value(fieldId), false);
+      await options.locator('#fieldSearch').fill('合成调剂修改名'); const updated = options.locator('.library-row').filter({ hasText: '合成调剂修改名' }); options.once('dialog', (dialog) => { assert.ok(dialog.message().includes('1 个档案')); dialog.dismiss(); }); await updated.getByRole('button', { name: '彻底删除字段', exact: true }).click(); assert.equal(await value(fieldId), false);
+      options.once('dialog', (dialog) => dialog.accept()); await updated.getByRole('button', { name: '彻底删除字段', exact: true }).click(); await options.waitForFunction(() => document.getElementById('fieldStatus').textContent.includes('已删除')); assert.equal(await value(fieldId), undefined);
+      await options.evaluate(() => window.scrollTo(0, 0)); await options.screenshot({ path: path.join(testRoot, 'stage4-workspace.png'), fullPage: false });
+    });
+    await t.test('中文和长字段、窄窗工作台无横向溢出，网页强样式不能污染卡片', async () => {
+      await options.setViewportSize({ width: 390, height: 844 }); assert.equal(await options.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); await options.setViewportSize({ width: 1440, height: 1000 });
+      await page.addStyleTag({ content: 'input,button,select{font-size:70px!important;color:red!important}div{border:6px solid red!important}' }); assert.equal(await frame.locator('#autoTab').evaluate((element) => getComputedStyle(element).fontSize), '13px');
+      assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => __submitCount), 0); assert.deepEqual(errors, []);
+    });
+    await t.test('经历新增修改与删除按稳定 ID 生效，取消删除保留所有值', async () => {
+      await options.locator('#entryKind').selectOption('project'); await options.locator('#entryTitle').fill('合成阶段四项目'); await options.locator('#btnAddEntry').click();
+      const project = options.locator('#entriesList .entry-card').filter({ hasText: '合成阶段四项目' }); await project.waitFor(); const entryId = await project.getAttribute('data-entry-id');
+      await project.getByLabel('经历字段', { exact: true }).selectOption('builtin.skills'); await project.getByLabel('经历字段值', { exact: true }).fill('合成项目成果'); await project.getByRole('button', { name: '保存字段', exact: true }).click(); await options.waitForFunction((id) => [...document.querySelectorAll('[data-entry-id]')].find((item) => item.dataset.entryId === id)?.textContent.includes('合成项目成果'), entryId);
+      const stable = options.locator('[data-entry-id="' + entryId + '"]'); options.once('dialog', (dialog) => dialog.accept('合成项目新名称')); await stable.getByRole('button', { name: '修改经历名称', exact: true }).click(); await options.waitForFunction((id) => [...document.querySelectorAll('[data-entry-id]')].find((item) => item.dataset.entryId === id)?.textContent.includes('合成项目新名称'), entryId);
+      options.once('dialog', (dialog) => dialog.dismiss()); await stable.getByRole('button', { name: '删除经历', exact: true }).click(); assert.ok((await rpc(options, 'localapply:read')).database.fieldValues.some((item) => item.entryId === entryId && item.value === '合成项目成果'));
+      options.once('dialog', (dialog) => dialog.accept()); await stable.getByRole('button', { name: '删除经历', exact: true }).click(); await stable.waitFor({ state: 'detached' }); assert.ok((await rpc(options, 'localapply:read')).database.entries.some((item) => item.entryId === schoolId));
+    });
+    await t.test('档案切换隔离资料并在重新打开后保留，不复制其他人的内容', async () => {
+      const second = (await rpc(options, 'localapply:command', { request: { action: 'createProfile', payload: { name: '合成第二预览档案' } } })).result;
+      await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId: second, fieldId: 'builtin.name', value: '合成另一档案姓名' } } });
+      await frame.waitForFunction((id) => [...document.getElementById('profileSel').options].some((item) => item.value === id), second); await frame.locator('#profileSel').selectOption(profileId); await frame.waitForFunction((id) => document.getElementById('profileSel').value === id, profileId);
+      await frame.locator('#profileSel').selectOption(second); await frame.locator('#resumeTab').click(); await frame.waitForFunction(() => document.getElementById('resumeContent').textContent.includes('合成另一档案姓名')); assert.ok(!(await frame.locator('#resumeContent').textContent()).includes('合成阶段四刷新姓名'));
+      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 0); await open(); assert.equal(await frame.locator('#profileSel').inputValue(), second); assert.equal(api.calls.length, 0);
+    });
+    await t.test('React、Moka 和日期复合夹具中浮层独立显示，导航关闭恢复可用', async () => {
+      for (const fixture of ['phase3-application.html','moka-mock.html','phase3-composites.html']) {
+        await page.goto(api.base + '/test-pages/' + fixture); await open(); await frame.locator('#resumeTab').click(); await frame.locator('#resumeContent h1').waitFor();
+        const rect = await page.locator('#wsa-floatbar-host').boundingBox(); const viewport = page.viewportSize(); assert.ok(rect.x >= 0 && rect.x + rect.width <= viewport.width && rect.y + rect.height <= viewport.height);
+        assert.equal(await frame.locator('.panel-tabs button').count(), 2); await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 0);
+      }
+      await page.goto(api.base + '/test-pages/login-mock.html'); await page.waitForFunction(() => !document.getElementById('wsa-floatbar-host') || getComputedStyle(document.getElementById('wsa-floatbar-host')).display === 'none'); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
+    });
+    await t.test('无卡片令牌不能请求布局或编辑导航，普通管理页不能冒用卡片权限', async () => {
+      const count = context.pages().length;
+      for (const type of ['panel:layout', 'panel:edit']) { const result = await options.evaluate((type) => chrome.runtime.sendMessage({ type, dx: 1, dy: 1, destination: 'https://example.invalid/' }), type); assert.equal(result.ok, false); }
+      assert.equal(context.pages().length, count);
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});

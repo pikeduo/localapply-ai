@@ -2,20 +2,24 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <title>网申自动填写助手 · 设置</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LocalApply · 本地简历工作台</title>
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
+  <a class="skip-link" href="#workspaceOverview">跳到工作区</a>
+  <aside class="workspace-sidebar"><a class="workspace-brand" href="#workspaceOverview">LocalApply<span>本地智能网申助手</span></a><nav aria-label="工作台导航"><a href="#workspaceOverview">概览</a><a href="#resumeCenter">我的简历</a><a href="#pdfCard">导入简历</a><a href="#fieldLibrary">字段库</a><a href="#aiSettings">AI 与模型</a><a href="#privacySettings">数据与备份</a><a href="#diagnosticsPanel">诊断与关于</a></nav><p>资料只在本机保存<br>自动填写，不自动投递</p><small>基于 wangshen-autofill · MIT</small></aside>
   <div class="wrap">
-    <h1>LocalApply <span class="muted">本地智能网申助手</span></h1>
-    <nav class="page-nav" aria-label="页面导航"><a href="#resumeCenter">简历中心</a><a href="#pdfCard">导入简历</a><a href="#aiSettings">模型与密钥</a><a href="#privacySettings">数据与备份</a></nav>
+    <header class="workspace-heading"><div><span class="eyebrow">你的本地求职工作台</span><h1>把资料整理好，让填写更轻松。</h1><p class="muted">管理简历、字段与模型。已有资料可离线填写，AI 由你决定何时使用。</p></div><span id="workspaceMode" class="mode-pill">本地规则 · AI 可选</span></header>
+    <section class="overview-grid" id="workspaceOverview" aria-label="本地资料概览"><div><span>当前档案</span><strong id="overviewProfile">正在读取</strong></div><div><span>已填写资料</span><strong id="overviewValues">—</strong></div><div><span>独立经历</span><strong id="overviewEntries">—</strong></div><div><span>本地映射</span><strong id="overviewRules">—</strong></div></section>
+    <section class="card welcome-card" id="managerWelcome" hidden><h2>欢迎，先建立你的第一份资料</h2><p>无需配置 API。可以直接在简历中心手动录入，也可以导入文件或恢复备份。</p><div class="row"><a class="btn" href="#resumeCenter">手动录入 · 跳过 AI 配置</a><a class="btn ghost" href="#pdfCard">导入 PDF / DOCX</a><a class="btn ghost" href="#privacySettings">恢复 JSON 备份</a></div></section>
     <p id="initializationError" class="init-error" role="alert" hidden></p>
     <p id="standaloneNotice" class="standalone-notice" role="status" hidden>当前为本地文件管理模式：配置和资料保存在此浏览器的独立 IndexedDB，与插件数据互不自动同步。可通过 JSON 备份交换资料（备份不含 API 配置/Key）。获取模型、测试连接和 AI 解析需要服务端允许文件页的跨域请求；网页自动填充需从插件入口使用。</p>
     <div id="toast" class="toast"></div>
 
     <section class="card" id="aiSettings">
       <h2>模型与密钥 <span class="badge">可选</span></h2>
-      <p class="muted" style="margin-top:-4px">不配置 AI 完全不影响使用：直接在侧边栏「字段库」手动录入，核心的一键填充零配置可用。AI 只用来加速两件事：PDF/DOCX 简历解析、开放题起草。</p>
+      <p class="muted" style="margin-top:-4px">不配置 AI 也能手动管理资料并使用本地规则填写。AI 可用于简历文件识别、未知字段建议和开放题草稿，每次发送均由你主动操作。</p>
       <div class="row">
         <label class="lbl" for="provider">服务商</label>
         <div id="providerPicker" class="provider-picker">
@@ -177,18 +181,20 @@
     <section class="card" id="resumeCenter">
       <h2>简历中心</h2>
       <div class="row"><input id="newProfileName" type="text" placeholder="新档案名称" aria-label="新档案名称" /><button id="createResumeProfile" class="btn plain">新建档案</button></div>
-      <p class="muted">教育、实习、工作、项目分别保存多条经历。此处数据已纳入备份；当前填表引擎仍使用侧边栏平面字段，重复区块自动匹配将在后续阶段接入。</p>
+      <p class="muted">每段教育、实习、工作和项目独立保存。网页填写按分组和经历匹配，遇到歧义由你选择来源。</p>
+      <div class="row center-toolbar"><select id="centerGroup" aria-label="简历中心分类导航"><option value="">全部分类</option></select><input id="centerSearch" type="search" placeholder="搜索资料字段" aria-label="搜索资料字段"><button id="centerRefresh" class="btn ghost">刷新本地资料</button></div>
       <div class="row">
         <select id="entryProfile" aria-label="经历所属档案"></select>
         <select id="entryKind" aria-label="经历类别"><option value="education">教育经历</option><option value="internship">实习经历</option><option value="employment">工作经历</option><option value="project">项目经历</option></select>
         <input id="entryTitle" type="text" placeholder="经历标题（仅本地）" aria-label="经历标题" />
         <button id="btnAddEntry" class="btn">新增经历</button>
       </div>
-      <details><summary>编辑基本资料与动态字段</summary><div id="basicFields" class="basic-grid"></div></details>
+      <details open><summary>编辑基本资料与动态字段</summary><div id="basicFields" class="basic-grid"></div></details>
       <p id="centerStatus" class="muted" role="status"></p>
       <div id="entriesList"></div>
       <div id="entryStatus" class="muted" role="status"></div>
     </section>
+    <section class="card" id="fieldLibrary"><div class="section-heading"><div><h2>字段库</h2><p class="muted">定义说明“是什么”，实际值独立保存在当前档案。自定义字段默认私有。</p></div></div><div class="row"><input id="fieldSearch" type="search" placeholder="搜索字段名称或分类" aria-label="搜索字段库"></div><details id="fieldCreate"><summary>新增自定义字段</summary><form id="fieldForm" class="field-form"><label>字段名称<input id="fieldLabel" required maxlength="100"></label><label>分类<input id="fieldGroup" value="自定义字段" required maxlength="100"></label><label>字段类型<select id="fieldType"><option value="text">短文本</option><option value="textarea">长文本</option><option value="number">数字</option><option value="boolean">是 / 否</option><option value="date">日期</option><option value="select">单选</option><option value="multiSelect">多选</option></select></label><label>别名（顿号分隔）<input id="fieldAliases" maxlength="1000"></label><label>选项（每行一个）<textarea id="fieldOptions" rows="3"></textarea></label><p class="muted">新字段先保存为空，实际内容在简历中心录入。</p><div class="row"><button class="btn" type="submit" id="fieldSave">确认新增字段</button><button class="btn ghost" type="button" id="fieldCancel">取消编辑</button></div></form></details><p id="fieldStatus" class="muted" role="status"></p><div id="fieldList"></div></section>
   </div>
 
   <script src="../libs/pdfjs/pdf.min.js"></script>
@@ -198,6 +204,7 @@
   <script src="../libs/docx/docx-preview.min.js"></script>
   <script src="../libs/docx/html2canvas.min.js"></script>
   <script src="../data/templates.js"></script>
+  <script src="../data/profile-view.js"></script>
   <script src="../data/providers.js"></script>
   <script src="../data/key-vault.js"></script>
   <script src="../data/resume.js"></script>
@@ -216,6 +223,7 @@
   <script src="resume-files.js"></script>
   <script src="resume-ui.js"></script>
   <script src="provider-picker.js"></script>
+  <script src="workspace.js"></script>
   <script src="options.js"></script>
   <script src="diagnostics.js"></script>
 </body>

@@ -3,7 +3,7 @@
   'use strict';
   const KEY = 'localapply.panelSessions';
   // 会话可跨后台休眠恢复，但不进入个人库、配置或备份。
-  function create(browser, diagnostics) {
+  function create(browser, diagnostics, onClose = () => {}) {
     const sessions = new Map();
     const restored = browser.storage.session?.get(KEY).then((data) => { for (const item of data[KEY] || []) if (Date.now() - item.createdAt < 1800000) sessions.set(item.tabId, item); }).catch(() => {});
     // 仅保存当前存活会话，不保存资料或网页内容。
@@ -40,7 +40,7 @@
       return probe?.open && probe.documentId === item.documentId ? item : null;
     }
     // 关闭立即撤销令牌，再移除网页中的扩展 iframe。
-    async function close(tabId) { await restored; sessions.delete(tabId); await persist(); await browser.tabs.sendMessage(tabId, { type: 'wsa:floatingClose' }, { frameId: 0 }).catch(() => {}); await diagnostics.append('panel.close').catch(() => {}); }
+    async function close(tabId) { await restored; onClose(tabId); sessions.delete(tabId); await persist(); await browser.tabs.sendMessage(tabId, { type: 'wsa:floatingClose' }, { frameId: 0 }).catch(() => {}); await diagnostics.append('panel.close').catch(() => {}); }
     // 导航/关闭标签页清除旧会话，刷新不能沿用旧确认。
     async function invalidate(tabId) { await restored; if (sessions.delete(tabId)) await persist(); }
     return { open, authorize, close, invalidate };

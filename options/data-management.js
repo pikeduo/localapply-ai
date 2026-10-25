@@ -39,6 +39,7 @@ async function reloadDataState() {
   renderTargetProfiles();
   await renderEntries();
   await renderResumeCenter();
+  if (typeof workspaceInitialized !== 'undefined' && workspaceInitialized) await refreshWorkspace();
 }
 
 // 渲染重复经历编辑器；所有标题和值用 textContent/value，避免注入 HTML。
@@ -50,34 +51,35 @@ async function renderEntries() {
   select.value = database.profiles.some((profile) => profile.profileId === selected) ? selected : database.activeProfileId;
   const root = document.getElementById('entriesList'); root.replaceChildren();
   for (const entry of database.entries.filter((row) => row.profileId === select.value)) {
-    const box = document.createElement('div'); box.className = 'card';
+    const box = document.createElement('div'); box.className = 'card entry-card'; box.dataset.entryId = entry.entryId;
     const title = document.createElement('h3'); title.textContent = `${LocalApplyResume.kinds[entry.kind]} · ${entry.title || '未命名经历'}`;
     box.appendChild(title);
     const field = document.createElement('select'); field.setAttribute('aria-label', '经历字段');
     database.fieldDefinitions.forEach((def) => field.appendChild(new Option(`${def.group} · ${def.label}`, def.fieldId)));
     field.value = database.fieldValues.find((row) => row.entryId === entry.entryId)?.fieldId || database.fieldDefinitions[0].fieldId;
-    const input = document.createElement('input'); input.type = 'text'; input.setAttribute('aria-label', '经历字段值');
+    let input; const valueBox = document.createElement('div'); valueBox.className = 'entry-input';
     const hint = document.createElement('div'); hint.className = 'muted';
     // 选择字段时显示已有值，类型化字段在保存时转换并由后台再次校验。
     const update = () => {
       const row = database.fieldValues.find((value) => value.entryId === entry.entryId && value.fieldId === field.value);
-      input.value = row?.value === undefined || row.value === null ? '' : Array.isArray(row.value) ? JSON.stringify(row.value) : String(row.value);
       const def = database.fieldDefinitions.find((def) => def.fieldId === field.value);
-      hint.textContent = def.type === 'boolean' ? '填写 true 或 false。' : def.type === 'multiSelect' ? '多选内容填写 JSON 数组。'
-        : row?.evidence ? `来源${row.evidence.page ? '（页/块 ' + row.evidence.page + '）' : ''}：${row.evidence.excerpt || '人工校对'}；编辑保存后改为手动资料。` : '修改后点击保存字段。';
+      input = workspaceControl(def, row?.value); input.setAttribute('aria-label', '经历字段值'); input.addEventListener('input', () => { input.dataset.dirty = 'true'; }); valueBox.replaceChildren(input);
+      hint.textContent = row?.evidence ? `来源${row.evidence.page ? '（页/块 ' + row.evidence.page + '）' : ''}：${row.evidence.excerpt || '人工校对'}；编辑保存后改为手动资料。` : '修改后点击保存字段。';
     };
     field.addEventListener('change', update); update();
     const save = document.createElement('button'); save.className = 'btn'; save.textContent = '保存字段';
     save.addEventListener('click', () => entryAction(async () => {
       const def = database.fieldDefinitions.find((def) => def.fieldId === field.value);
-      const value = input.value === '' ? null : def.type === 'number' ? Number(input.value)
-        : ['boolean', 'multiSelect'].includes(def.type) ? JSON.parse(input.value) : input.value;
+      const value = workspaceValue(input, def);
       await dataCommand('setValue', { profileId: entry.profileId, entryId: entry.entryId, fieldId: field.value, value }, database.revision);
+      input.dataset.dirty = '';
     }));
     const remove = document.createElement('button'); remove.className = 'btn ghost'; remove.textContent = '删除经历';
-    remove.addEventListener('click', () => entryAction(() => dataCommand('deleteEntry', { entryId: entry.entryId }, database.revision)));
-    box.append(field, input, save, remove, hint);
-    const values = document.createElement('p'); values.className = 'muted';
+    remove.addEventListener('click', () => { const count = database.fieldValues.filter((row) => row.entryId === entry.entryId).length; if (confirm(`删除“${entry.title || '未命名经历'}”及其 ${count} 个字段值和关联映射？其他经历保留。`)) entryAction(() => dataCommand('deleteEntry', { entryId: entry.entryId }, database.revision)); });
+    const rename = document.createElement('button'); rename.className = 'btn ghost'; rename.textContent = '修改经历名称';
+    rename.addEventListener('click', () => { const title = prompt('修改经历名称（不会改变经历 ID 或字段值）', entry.title); if (title !== null) entryAction(() => dataCommand('editEntry', { entryId: entry.entryId, title }, database.revision)); });
+    box.append(field, valueBox, save, rename, remove, hint);
+    const values = document.createElement('p'); values.className = 'entry-values';
     values.textContent = database.fieldValues.filter((row) => row.entryId === entry.entryId).map((row) => `${database.fieldDefinitions.find((def) => def.fieldId === row.fieldId).label}：${fieldText(row.value)}`).join('；');
     box.appendChild(values); root.appendChild(box);
   }
@@ -86,7 +88,7 @@ async function renderEntries() {
 // 统一显示保存结果；失败保留原库并刷新可见版本。
 async function entryAction(work) {
   const status = document.getElementById('entryStatus');
-  try { await work(); status.textContent = '已保存在本地'; await renderEntries(); }
+  try { await work(); status.textContent = '已保存在本地'; await renderEntries(); if (workspaceInitialized) await refreshWorkspace(); }
   catch (error) { status.textContent = '操作失败：' + error.message; }
 }
 
@@ -126,7 +128,6 @@ async function initDataManagement() {
       await dataCommand('mergePublicFields', payload); await reloadDataState(); backupMsg('公共定义已合并，未复制任何个人值。');
     } catch (error) { backupMsg(escapeHtml(error.message)); }
   });
-  document.getElementById('entryProfile').addEventListener('change', renderEntries);
   document.getElementById('btnAddEntry').addEventListener('click', () => entryAction(() => dataCommand('createEntry', {
     profileId: document.getElementById('entryProfile').value, kind: document.getElementById('entryKind').value,
     title: document.getElementById('entryTitle').value,
