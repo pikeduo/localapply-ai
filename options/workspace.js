@@ -28,6 +28,37 @@ function showWorkspacePage(target, focus = false) {
 }
 // DOM 构造始终用文本，字段名、经历标题不得拼接到 HTML。
 function workspaceNode(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
+// 目录只取当前渲染的分类与稳定经历 ID；同名经历分别保留，不含字段实际值。
+function renderResumeToc() {
+  const root = document.getElementById('resumeToc');
+  const selected = root.querySelector('[aria-current="location"]')?.dataset.tocKey;
+  const items = [['overview', '资料概览'], ['center', '档案与资料']];
+  document.querySelectorAll('#basicFields .center-group-heading').forEach((heading) => items.push(['group:' + heading.dataset.group, heading.textContent]));
+  document.querySelectorAll('#entriesList .entry-card').forEach((entry) => items.push(['entry:' + entry.dataset.entryId, entry.querySelector('h3').textContent]));
+  items.push(['preferences', '填写偏好']);
+  root.replaceChildren(...items.map(([key, label]) => {
+    const button = workspaceNode('button', label); button.type = 'button'; button.dataset.tocKey = key; button.title = label;
+    if (selected === key) button.setAttribute('aria-current', 'location');
+    return button;
+  }));
+}
+// 分类定位先展开折叠区并恢复被搜索隐藏的字段，不改变地址或丢弃表单草稿。
+function locateResumeSection(key) {
+  let target;
+  if (key.startsWith('group:')) {
+    const group = key.slice(6); target = [...document.querySelectorAll('#basicFields .center-group-heading')].find((item) => item.dataset.group === group);
+    if (target) {
+      document.getElementById('centerGroup').value = group;
+      document.getElementById('centerSearch').value = ''; document.getElementById('centerSearch').dispatchEvent(new Event('input'));
+    }
+  } else if (key.startsWith('entry:')) target = [...document.querySelectorAll('#entriesList .entry-card')].find((item) => item.dataset.entryId === key.slice(6));
+  else target = document.getElementById({ overview: 'workspaceOverview', center: 'resumeCenter', preferences: 'fillingPreferences' }[key]);
+  if (!target) return;
+  for (let parent = target.parentElement; parent; parent = parent.parentElement) { if (parent.tagName === 'DETAILS') parent.open = true; }
+  document.querySelectorAll('.resume-main .is-target').forEach((item) => item.classList.remove('is-target'));
+  target.classList.add('is-target'); target.tabIndex = -1; target.focus({ preventScroll: true }); target.scrollIntoView({ block: 'start' });
+  document.querySelectorAll('#resumeToc button').forEach((button) => { if (button.dataset.tocKey === key) button.setAttribute('aria-current', 'location'); else button.removeAttribute('aria-current'); });
+}
 // 按字段类型创建编辑器；日期保留年/月精度，不能使用 date 输入框静默补日。
 function workspaceControl(def, value) {
   let input;
@@ -55,7 +86,7 @@ async function refreshWorkspace() {
   document.getElementById('overviewEntries').textContent = String(database.entries.filter((item) => item.profileId === profileId).length);
   document.getElementById('overviewRules').textContent = String(database.mappingRules.filter((item) => item.profileId === profileId).length);
   document.getElementById('managerWelcome').hidden = database.fieldValues.some((item) => item.profileId === profileId && LocalApplyProfileView.hasValue(item.value));
-  renderFieldLibrary();
+  renderFieldLibrary(); renderResumeToc();
 }
 // 当前档案删除与全局删除明确分开；公共内置定义只能从个人展示中移除。
 function renderFieldLibrary() {
@@ -109,6 +140,7 @@ async function locateWorkspace() {
 // 工作台导航、字段定义和刷新入口只挂载一次，沿用旧设置页的初始化顺序。
 async function initWorkspace() {
   if (workspaceInitialized) return; workspaceInitialized = true;
+  document.getElementById('resumeToc').addEventListener('click', (event) => { const button = event.target.closest('button[data-toc-key]'); if (button) locateResumeSection(button.dataset.tocKey); });
   // 导航和引导链接共用入口；从导入页检测能力时显示 AI 模块，避免结果藏在其他页面。
   document.addEventListener('click', (event) => {
     const link = event.target.closest('a[href^="#"]'); const detecting = event.target.closest('#btnDetectImport');
@@ -126,7 +158,7 @@ async function initWorkspace() {
     cancelFieldEdit(); await reloadDataState(); document.getElementById('fieldStatus').textContent = '字段定义已保存，实际内容请在简历中心填写。';
   } catch (error) { document.getElementById('fieldStatus').textContent = '未保存：' + error.message; } finally { button.disabled = false; } });
   document.getElementById('centerSearch').addEventListener('input', () => { const query = document.getElementById('centerSearch').value.trim().toLowerCase(); document.querySelectorAll('#basicFields .center-field').forEach((item) => { item.hidden = !item.textContent.toLowerCase().includes(query); }); });
-  document.getElementById('centerGroup').addEventListener('change', () => { const group = document.getElementById('centerGroup').value; const heading = [...document.querySelectorAll('.center-group-heading')].find((item) => item.dataset.group === group); if (heading) { heading.scrollIntoView({ block: 'center' }); heading.classList.add('is-target'); } });
+  document.getElementById('centerGroup').addEventListener('change', () => locateResumeSection('group:' + document.getElementById('centerGroup').value));
   document.getElementById('centerRefresh').addEventListener('click', async () => { try { if (workspaceDirty() && !confirm('存在未保存编辑，确认丢弃并刷新本地资料？')) return; cancelFieldEdit(); await flushSaves(); await reloadDataState(); document.getElementById('centerStatus').textContent = '已刷新本地资料。'; } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });
   document.getElementById('entryProfile').addEventListener('change', async () => { const profileId = document.getElementById('entryProfile').value; try { if (workspaceDirty() && !confirm('切换档案将丢弃未保存编辑，是否继续？')) { document.getElementById('entryProfile').value = workspaceDatabase.activeProfileId; return; } cancelFieldEdit(); const next = await getState(); next.activeProfileId = profileId; await saveState(next); await reloadDataState(); } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });
   window.addEventListener('beforeunload', (event) => { if (workspaceDirty()) { event.preventDefault(); event.returnValue = ''; } });

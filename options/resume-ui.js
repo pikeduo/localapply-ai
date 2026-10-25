@@ -179,6 +179,8 @@ async function renderResumeCenter() {
     const source = document.createElement('small'); source.textContent = '修改后离开输入框自动保存 · 保存失败保留输入';
     label.append(text, input, source); root.append(label);
   }
+  // 新建档案或重新导入后立即同步目录，避免继续指向上一份档案。
+  renderResumeToc();
 }
 // 独立挂载导入和本地编辑入口，切换文件时取消旧任务。
 function initResume() {

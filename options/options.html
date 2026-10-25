@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>LocalApply · 本地简历工作台</title>
+  <script src="appearance.js"></script>
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
@@ -100,6 +101,10 @@
     </section>
 
     <section class="workspace-page" data-workspace-page="resumeCenter" hidden>
+    <!-- 目录独立于编辑表单，按当前档案生成，切换定位不会丢弃输入。 -->
+    <div class="resume-layout">
+    <aside class="resume-toc" aria-labelledby="resumeTocTitle"><h2 id="resumeTocTitle">简历目录</h2><nav id="resumeToc" aria-label="我的简历目录"></nav></aside>
+    <div class="resume-main">
     <section class="overview-grid" id="workspaceOverview" aria-label="本地资料概览"><div><span>当前档案</span><strong id="overviewProfile">正在读取</strong></div><div><span>已填写资料</span><strong id="overviewValues">—</strong></div><div><span>独立经历</span><strong id="overviewEntries">—</strong></div><div><span>本地映射</span><strong id="overviewRules">—</strong></div></section>
     <section class="card welcome-card" id="managerWelcome" hidden><h2>欢迎，先建立你的第一份资料</h2><p>无需配置 API。可以直接在简历中心手动录入，也可以导入文件或恢复备份。</p><div class="row"><a class="btn" href="#resumeCenter">手动录入 · 跳过 AI 配置</a><a class="btn ghost" href="#pdfCard">导入 PDF / DOCX</a><a class="btn ghost" href="#privacySettings">恢复 JSON 备份</a></div></section>
     <section class="card" id="resumeCenter">
@@ -135,6 +140,8 @@
         <label><input type="checkbox" id="autoFloatbar" /> 检测到网申表单时在页面右下角显示浮条</label>
       </div>
     </section>
+    </div>
+    </div>
     </section>
 
     <section class="workspace-page" data-workspace-page="pdfCard">
@@ -215,6 +222,12 @@
   </section>
   </main>
 
+  <!-- 快捷操作固定在右下角，使用独立按钮便于键盘和屏幕阅读器访问。 -->
+  <nav class="workspace-tools" aria-label="页面快捷操作">
+    <button id="scrollTop" type="button" title="回到顶部"><span aria-hidden="true">↑</span><span>顶部</span></button>
+    <button id="themeToggle" type="button" title="切换至暗黑模式" aria-label="切换至暗黑模式" aria-pressed="false"><span id="themeIcon" aria-hidden="true">☾</span><span id="themeLabel">暗黑</span></button>
+    <button id="scrollBottom" type="button" title="回到底部"><span aria-hidden="true">↓</span><span>底部</span></button>
+  </nav>
   <script src="../libs/pdfjs/pdf.min.js"></script>
   <!-- 经典 worker 预载支持 file://；PDF.js 只在本地执行，不动态导入远程脚本。 -->
   <script src="../libs/pdfjs/pdf.worker.min.js"></script>

@@ -130,3 +130,57 @@ body{padding:30px 32px 60px 242px;background:#f5f7fa;color:#223247;font-size:14p
 
 /* 独立模块使用 hidden 保持草稿，只显示当前导航；避免卡片布局覆盖隐藏状态。 */
 .workspace-page[hidden]{display:none!important}.workspace-page{min-width:0}#workspaceContent:focus{outline:none}
+
+/* 明暗主题仅改变设置页；简历页面图片保留原色，不使用整体反色。 */
+:root { color-scheme: light; --heading: #29496b; --soft: #f7f9fc; --hover: #dde7ff; --error-bg: #fff1f0; --error-line: #ffccc7; }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #101722; --card: #192332; --ink: #e0e8f3; --sub: #a3b3c9;
+  --line: #2e3b4f; --line-strong: #465975; --brand: #a3bbff; --brand-weak: #273954;
+  --heading: #c6d9f3; --soft: #142031; --hover: #33496b;
+  --ok: #75dba5; --warn: #ffc078; --err: #ff9e9e; --error-bg: #3b252b; --error-line: #71414a;
+}
+body { background: var(--bg); color: var(--ink); padding-bottom: 112px; }
+.workspace-sidebar, .overview-grid > div, .resume-toc { background: var(--card); border-color: var(--line); }
+.workspace-brand, .overview-grid strong, .center-group-heading { color: var(--heading); }
+.workspace-brand span, .workspace-sidebar p, .workspace-sidebar nav a, .eyebrow, .overview-grid span,
+.center-field small, .field-form label, .library-row p { color: var(--sub); }
+.workspace-sidebar nav a:hover, .workspace-sidebar nav a[aria-current="page"] { color: var(--brand); background: var(--brand-weak); }
+.card, .center-group-heading, .library-row { border-color: var(--line); }
+input:not([type="checkbox"]):not([type="range"]):not([type="file"]), textarea, select,
+.center-field input, .center-field textarea, .center-field select, .field-form input, .field-form textarea, .field-form select,
+.entry-input input, .entry-input textarea, .entry-input select { background: var(--card); color: var(--ink); border-color: var(--line-strong); }
+input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
+.btn.ghost, .skip-link { background: var(--card); }
+.btn.plain:hover { background: var(--hover); }
+:root[data-theme="dark"] .btn:not(.plain):not(.ghost) { background: #355bd1; color: #fff; }
+.welcome-card { background: linear-gradient(120deg, var(--brand-weak), var(--card)); border-color: var(--line-strong); }
+.entry-values { background: var(--soft); }
+.init-error { background: var(--error-bg); border-color: var(--error-line); }
+
+/* 长简历使用粘性目录，窄窗改为顶部列表；每段同名经历仍可独立定位。 */
+.resume-layout { display: grid; grid-template-columns: minmax(0, 1fr) 176px; align-items: start; gap: 18px; }
+.resume-main { grid-column: 1; grid-row: 1; min-width: 0; }
+.resume-toc { grid-column: 2; grid-row: 1; position: sticky; top: 20px; padding: 16px 12px; border: 1px solid var(--line); border-radius: 12px; max-height: calc(100dvh - 40px); overflow-y: auto; }
+.resume-toc h2 { font-size: 14px; color: var(--heading); margin: 0 8px 10px; }
+.resume-toc nav { display: flex; flex-direction: column; gap: 4px; }
+.resume-toc button { text-align: left; font: inherit; font-size: 12px; color: var(--sub); background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 7px 8px; cursor: pointer; overflow-wrap: anywhere; }
+.resume-toc button:hover, .resume-toc button[aria-current="location"] { color: var(--brand); background: var(--brand-weak); }
+.resume-toc button[aria-current="location"] { border-color: var(--line-strong); font-weight: 600; }
+.resume-main .is-target { scroll-margin-top: 24px; outline: 2px solid var(--brand); outline-offset: 4px; }
+
+/* 右下角快捷栏独立于滚动内容，页面底部留出空间，避免挡住最后一项。 */
+.workspace-tools { position: fixed; right: max(22px, env(safe-area-inset-right)); bottom: max(20px, env(safe-area-inset-bottom)); z-index: 30; display: flex; padding: 5px; gap: 3px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 13px; box-shadow: 0 6px 24px #0002; }
+.workspace-tools button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; width: 55px; height: 51px; border: 0; border-radius: 8px; background: transparent; color: var(--sub); font: inherit; font-size: 11px; cursor: pointer; }
+.workspace-tools button > span:first-child { font-size: 22px; line-height: 1.15; }
+.workspace-tools button:hover, .workspace-tools button[aria-pressed="true"] { background: var(--brand-weak); color: var(--brand); }
+@media (max-width: 1100px) {
+  .resume-layout { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .resume-toc { grid-column: 1; grid-row: 1; position: static; max-height: none; margin-bottom: 20px; }
+  .resume-main { grid-column: 1; grid-row: 2; }
+  .resume-toc nav { flex-direction: row; flex-wrap: wrap; }
+}
+@media (max-width: 680px) {
+  .workspace-tools { right: max(12px, env(safe-area-inset-right)); bottom: max(12px, env(safe-area-inset-bottom)); }
+  .resume-toc { padding: 12px; }
+}

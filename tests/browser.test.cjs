@@ -1476,3 +1476,80 @@ for (const withExtension of [true, false]) {
     } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
+
+// 两种设置入口实测主题持久化、页面滚动和动态目录，所有资料均为合成内容。
+for (const withExtension of [true, false]) {
+  test(`设置快捷导航：${withExtension ? '扩展' : 'file://'}明暗、滚动与简历目录`, { timeout: 60000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'workspace-tools-')); let context;
+    const errors = []; const mode = withExtension ? 'extension' : 'file';
+    try {
+      context = await launch(profile, withExtension); await context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message));
+      await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' }); await page.setViewportSize({ width: 1440, height: 900 }); await page.goto(url);
+      await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+      assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+      assert.equal(await page.locator('#resumeToc').isVisible(), false);
+      const before = await page.evaluate(() => dataRequest('localapply:read'));
+      await page.locator('#themeToggle').click(); assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+      assert.equal(await page.locator('#themeToggle').getAttribute('aria-label'), '切换至明亮模式');
+      assert.equal(await page.locator('#themeToggle').getAttribute('aria-pressed'), 'true');
+      assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, before.database.revision, '显示偏好不能写入简历数据库');
+      await page.reload(); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+      assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+      await workspacePage(page, 'resumeCenter');
+      const profileId = (await page.evaluate(() => dataRequest('localapply:read'))).database.activeProfileId;
+      const entryIds = await page.evaluate(async (profileId) => {
+        const first = await dataCommand('createEntry', { profileId, kind: 'education', title: '合成同名经历' });
+        const second = await dataCommand('createEntry', { profileId, kind: 'education', title: '合成同名经历' });
+        return [first.result, second.result];
+      }, profileId);
+      await page.locator('#centerRefresh').click();
+      await page.waitForFunction(() => document.querySelectorAll('#resumeToc button[data-toc-key^="entry:"]').length === 2);
+      assert.equal(await page.locator('#resumeToc').isVisible(), true);
+      assert.equal(await page.locator('#resumeToc button[data-toc-key^="group:"]').count(), await page.locator('.center-group-heading').count());
+      const group = page.locator('#resumeToc button[data-toc-key^="group:"]').first();
+      await page.locator('#centerSearch').fill('合成无匹配词'); await page.locator('#basicFields').evaluate((element) => { element.closest('details').open = false; });
+      await group.click();
+      assert.equal(await page.locator('#basicFields').evaluate((element) => element.closest('details').open), true);
+      assert.equal(await page.locator('#centerSearch').inputValue(), '');
+      assert.equal(await group.getAttribute('aria-current'), 'location');
+      assert.equal(await page.locator('.center-group-heading.is-target').evaluate((element) => document.activeElement === element), true);
+      assert.equal(new URL(page.url()).hash, '#resumeCenter');
+      await page.locator('#resumeToc button[data-toc-key="entry:' + entryIds[1] + '"]').click();
+      assert.equal(await page.locator('#entriesList .is-target').getAttribute('data-entry-id'), entryIds[1]);
+      await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0);
+      assert.equal(await page.locator('body').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(16, 23, 34)');
+      assert.equal(await page.locator('#newProfileName').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(25, 35, 50)');
+      await page.screenshot({ path: path.join(testRoot, `workspace-dark-${mode}.png`) });
+      await page.locator('#scrollBottom').click(); await page.waitForFunction(() => Math.abs(scrollY + innerHeight - document.documentElement.scrollHeight) < 2);
+      assert.equal(await page.locator('#fillingPreferences').evaluate((element) => { const rect = element.getBoundingClientRect(); return rect.bottom > 0 && rect.top < innerHeight; }), true);
+      await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0);
+      await page.locator('#themeToggle').click(); assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+      // 等按钮颜色过渡完成再截图，避免把中间帧误记为明亮主题效果。
+      await page.waitForFunction(() => getComputedStyle(document.querySelector('#centerRefresh')).backgroundColor === 'rgb(255, 255, 255)');
+      await page.screenshot({ path: path.join(testRoot, `workspace-light-${mode}.png`) });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      const tools = await page.locator('.workspace-tools').boundingBox(); assert.ok(tools.x >= 0 && tools.x + tools.width <= 390 && tools.y + tools.height <= 844);
+      await page.locator('#themeToggle').click(); await page.waitForFunction(() => getComputedStyle(document.querySelector('#centerRefresh')).backgroundColor === 'rgb(25, 35, 50)');
+      await page.screenshot({ path: path.join(testRoot, `workspace-narrow-${mode}.png`) });
+      // 经历管理后的目录跟随真实数据更新，同名条目与其他档案严格隔离。
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const secondEntry = page.locator('#entriesList [data-entry-id="' + entryIds[1] + '"]');
+      page.once('dialog', (dialog) => dialog.accept('合成目录新名称')); await secondEntry.getByRole('button', { name: '修改经历名称', exact: true }).click();
+      await page.waitForFunction(() => document.getElementById('resumeToc').textContent.includes('合成目录新名称'));
+      page.once('dialog', (dialog) => dialog.accept()); await secondEntry.getByRole('button', { name: '删除经历', exact: true }).click();
+      await page.waitForFunction(() => document.querySelectorAll('#resumeToc button[data-toc-key^="entry:"]').length === 1);
+      const otherProfile = (await page.evaluate(() => dataCommand('createProfile', { name: '合成目录第二档案' }))).result;
+      await page.locator('#centerRefresh').click(); await page.locator('#entryProfile').selectOption(otherProfile);
+      await page.waitForFunction(() => document.querySelectorAll('#resumeToc button[data-toc-key^="entry:"]').length === 0);
+      await workspacePage(page, 'aiSettings'); assert.equal(await page.locator('#resumeToc').isVisible(), false);
+      await page.locator('#scrollBottom').click(); await page.waitForFunction(() => Math.abs(scrollY + innerHeight - document.documentElement.scrollHeight) < 2);
+      await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0);
+      await page.reload(); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+      assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark'); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
