@@ -111,7 +111,7 @@
       <div id="resumeProfileControls" class="resume-profile-controls">
       <h2>简历中心</h2>
       <div class="row"><input id="newProfileName" type="text" placeholder="新档案名称" aria-label="新档案名称" /><button id="createResumeProfile" class="btn plain">新建档案</button></div>
-      <p class="muted">每段教育、实习、工作和项目独立保存。网页填写按分组和经历匹配，遇到歧义由你选择来源。</p>
+      <p class="muted">资料自动归入对应分类，所有字段均可直接编辑。多段教育、工作、实习和项目分别保留，避免相互覆盖。</p>
       <div class="row resume-profile-actions">
         <label for="entryProfile">当前简历</label>
         <select id="entryProfile" aria-label="当前简历"></select>
@@ -119,15 +119,9 @@
         <button id="deleteResumeProfile" class="btn ghost">删除简历</button>
       </div>
       <p id="profileManageHint" class="muted">下方可直接修改当前简历的资料；删除整份简历需确认，至少保留一份简历。</p>
-      <div class="row">
-        <select id="entryKind" aria-label="经历类别"><option value="education">教育经历</option><option value="internship">实习经历</option><option value="employment">工作经历</option><option value="project">项目经历</option></select>
-        <input id="entryTitle" type="text" placeholder="经历标题（仅本地）" aria-label="经历标题" />
-        <button id="btnAddEntry" class="btn">新增经历</button>
       </div>
-      </div>
-      <details open><summary>编辑基本资料与动态字段</summary><div id="basicFields" class="resume-groups"></div></details>
+      <details open><summary>编辑简历全部字段</summary><div id="basicFields" class="resume-groups"></div></details>
       <p id="centerStatus" class="muted" role="status"></p>
-      <div id="entriesList"></div>
       <div id="entryStatus" class="muted" role="status"></div>
     </section>
     <section class="card" id="fillingPreferences">

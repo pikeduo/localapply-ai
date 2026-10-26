@@ -24,5 +24,43 @@
     }
     return [...groups.values()].sort((a, b) => Number(!!a.entryId) - Number(!!b.entryId) || a.group.localeCompare(b.group, 'zh-CN') || a.order - b.order);
   }
-  global.LocalApplyProfileView = { hasValue, text, sensitive, sections };
+  // 只归一已知分类别名，不根据个人值猜测语义；自定义分类原样保留。
+  function editorGroup(group) {
+    const aliases = { '教育经历': '教育背景', '教育': '教育背景', '基本资料': '基本信息', '个人信息': '基本信息', '工作经验': '工作经历', '实习经验': '实习经历', '项目经验': '项目经历' };
+    return Object.hasOwn(aliases, group) ? aliases[group] : group;
+  }
+  // 编辑视图把经历放回所属分类；所有值（含未绑定动态字段）可编辑，同名经历仍按 ID 隔离。
+  function editorSections(database, profileId) {
+    const definitions = new Map(database.fieldDefinitions.map((item) => [item.fieldId, item]));
+    const groups = new Map(); const seen = new Set();
+    // 仅缺少目标分类时创建界面容器，不新增或改写数据库字段定义。
+    function group(name) {
+      const label = editorGroup(name);
+      if (!groups.has(label)) groups.set(label, { group: label, kind: Object.keys(kinds).find((kind) => kinds[kind] === label) || null, items: [], entries: [] });
+      return groups.get(label);
+    }
+    // 基本资料按定义分类，旧导入中笼统的“简历资料”复用明确的同名标准字段分类。
+    function add(row, definition) {
+      if (!definition || seen.has(definition.fieldId)) return;
+      seen.add(definition.fieldId);
+      const standard = definition.group === '简历资料' && database.fieldDefinitions.find((item) => item.fieldId.startsWith('builtin.') && item.label === definition.label);
+      const name = standard?.group || (definition.fieldId === 'resume.languages' ? '语言与技能证书' : definition.group);
+      group(name).items.push({ row, definition });
+    }
+    for (const binding of database.bindings.filter((item) => item.profileId === profileId)) {
+      const row = database.fieldValues.find((item) => item.profileId === profileId && item.fieldId === binding.fieldId && item.entryId === null);
+      add(row || null, definitions.get(binding.fieldId));
+    }
+    for (const row of database.fieldValues.filter((item) => item.profileId === profileId && item.entryId === null)) add(row, definitions.get(row.fieldId));
+    for (const kind of Object.keys(kinds)) {
+      const target = group(kinds[kind]);
+      for (const entry of database.entries.filter((item) => item.profileId === profileId && item.kind === kind).sort((a, b) => a.order - b.order)) {
+        const items = database.fieldValues.filter((item) => item.profileId === profileId && item.entryId === entry.entryId)
+          .map((row) => ({ row, definition: definitions.get(row.fieldId) })).filter((item) => item.definition);
+        target.entries.push({ entry, items });
+      }
+    }
+    return [...groups.values()];
+  }
+  global.LocalApplyProfileView = { hasValue, text, sensitive, sections, editorSections };
 })(globalThis);

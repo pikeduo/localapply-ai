@@ -144,46 +144,138 @@ async function confirmResume() {
     const { result } = await dataCommand('importResume', { profileId: $('#targetProfile').value, fingerprint: resumeSource.fingerprint,
       rows, overwrite: $('#overwriteResume').checked }, resumeDatabase.revision);
     clearResume(`已确认保存 ${result.saved} 项，保留已有值 ${result.kept} 项；原文件和全文未保存。`);
-    await reloadDataState(); await renderResumeCenter();
+    await reloadDataState();
   } catch (error) { $('#pdfStatus').textContent = '未导入：' + error.message + '。数据变化时请点击「刷新差异」后重新核对。'; }
   finally { $('#btnImport').disabled = false; $('#cancelResume').disabled = false; }
 }
-// 每个分类包含完整标题和字段卡片；三方合并保留并发保护，手动编辑清除旧 AI 来源。
-async function renderResumeCenter() {
-  const root = $('#basicFields'); root.replaceChildren();
-  const fresh = await getState(); state = fresh;
-  const profile = fresh.profiles.find((p) => p.id === $('#entryProfile').value);
-  if (!profile) { renderResumeToc(); return; }
-  const groups = [...new Set(profile.fields.filter((field) => !field.material).map((field) => field.group))];
-  let priorGroup; let fields;
-  for (const field of profile.fields.filter((f) => !f.material).sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group))) {
-    if (!fields || priorGroup !== field.group) {
-      const section = document.createElement('section'); section.className = 'resume-group'; section.dataset.group = field.group;
-      const heading = document.createElement('h3'); heading.textContent = field.group; heading.dataset.group = field.group; heading.className = 'center-group-heading';
-      heading.id = 'resumeGroupHeading' + groups.indexOf(field.group); section.setAttribute('aria-labelledby', heading.id);
-      fields = document.createElement('div'); fields.className = 'basic-grid'; section.append(heading, fields); root.append(section); priorGroup = field.group;
-    }
-    const label = document.createElement('label'); label.className = 'center-field';
-    const text = document.createElement('span'); text.textContent = field.label;
-    const def = { type: field.inputType, options: field.options || [] }; const input = workspaceControl(def, field.value);
-    input.setAttribute('aria-label', '简历中心 · ' + field.label);
-    input.addEventListener('input', () => { input.dataset.dirty = 'true'; });
-    input.addEventListener('change', async () => {
+// 串行保存同一页面的字段；读取最新版本后只写当前行，避免多个自动保存互相覆盖。
+let resumeSaveQueue = Promise.resolve();
+// 基本字段、经历字段和未绑定动态字段共用编辑器；失败保留输入，不重建其他字段草稿。
+function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = definition.label) {
+  const label = workspaceNode('label', '', 'center-field'); label.dataset.fieldId = definition.fieldId;
+  const multiline = definition.type === 'text' && typeof row?.value === 'string' && row.value.includes('\n');
+  const input = workspaceControl(multiline ? { ...definition, type: 'textarea' } : definition, row?.value);
+  input.setAttribute('aria-label', (entryId ? '经历字段 · ' : '简历中心 · ') + displayLabel);
+  const hint = workspaceNode('small', '修改后离开输入框自动保存 · 保存失败保留输入'); hint.setAttribute('role', 'status');
+  let saved = row ? structuredClone(row) : null;
+  input.addEventListener('input', () => { input.dataset.dirty = 'true'; });
+  input.addEventListener('change', () => {
+    input.dataset.dirty = 'true'; hint.textContent = '正在保存…';
+    let value;
+    try { value = workspaceValue(input, definition); }
+    catch (error) { hint.textContent = '保存失败：' + error.message; return; }
+    // 值在事件发生时捕获；等待期间继续输入时不清除较新的草稿。
+    resumeSaveQueue = resumeSaveQueue.then(async () => {
       try {
-        const next = await getState();
-        const current = next.profiles.find((p) => p.id === profile.id)?.fields.find((f) => f.fid === field.fid);
-        if (!current) throw new Error('档案或字段已变化，请刷新');
-        if (JSON.stringify(current.value) !== JSON.stringify(field.value)) throw new Error('该字段已被其他页面修改，请刷新后重新核对');
-        current.value = workspaceValue(input, def);
-        await saveState(next); state = next;
-        field.value = current.value; input.dataset.dirty = ''; if (workspaceInitialized) await refreshWorkspace();
-        $('#centerStatus').textContent = '已保存在本地';
-      } catch (error) { $('#centerStatus').textContent = '保存失败：' + error.message; }
+        const { database: latest } = await dataRequest('localapply:read');
+        if (!latest.profiles.some((profile) => profile.profileId === profileId) || (entryId && !latest.entries.some((entry) => entry.profileId === profileId && entry.entryId === entryId))) throw new Error('档案或经历已变化，请刷新');
+        const currentDefinition = latest.fieldDefinitions.find((def) => def.fieldId === definition.fieldId);
+        if (JSON.stringify(currentDefinition) !== JSON.stringify(definition)) throw new Error('字段定义已修改，请刷新后重新核对');
+        const current = latest.fieldValues.find((item) => item.profileId === profileId && item.fieldId === definition.fieldId && item.entryId === entryId);
+        if (!!current !== !!saved || JSON.stringify(current?.value) !== JSON.stringify(saved?.value)) throw new Error('该字段已被其他页面修改，请刷新后重新核对');
+        await dataCommand('setValue', { profileId, entryId, fieldId: definition.fieldId, value }, latest.revision);
+        saved = { value };
+        if (JSON.stringify(workspaceValue(input, definition)) === JSON.stringify(value)) input.dataset.dirty = '';
+        hint.textContent = '已保存在本地 · 手动资料'; $('#centerStatus').textContent = '已保存在本地';
+        if (workspaceInitialized) await refreshWorkspace();
+      } catch (error) { hint.textContent = '保存失败：' + error.message; $('#centerStatus').textContent = hint.textContent; }
     });
-    const source = document.createElement('small'); source.textContent = '修改后离开输入框自动保存 · 保存失败保留输入';
-    label.append(text, input, source); fields.append(label);
+  });
+  label.append(workspaceNode('span', displayLabel), input, hint);
+  return label;
+}
+// 分类内新增、改名和删除保留稳定 ID；先保护未保存草稿，再按最新版本提交。
+async function manageResumeEntry(kind, entryId, action) {
+  const status = $('#entryStatus');
+  try {
+    await resumeSaveQueue;
+    if (workspaceDirty() && !confirm('存在未保存编辑，继续将丢弃这些编辑，是否继续？')) return;
+    const { database } = await dataRequest('localapply:read'); const profileId = $('#entryProfile').value;
+    const entry = database.entries.find((item) => item.profileId === profileId && item.entryId === entryId);
+    let payload;
+    if (action === 'createEntry') {
+      const title = prompt('添加' + LocalApplyResume.kinds[kind] + '，请输入名称（可稍后修改）', '');
+      if (title === null) return;
+      payload = { profileId, kind, title };
+    } else {
+      if (!entry) throw new Error('经历已变化，请刷新');
+      if (action === 'editEntry') {
+        const title = prompt('修改经历名称（不会改变经历 ID 或字段值）', entry.title);
+        if (title === null) return;
+        payload = { entryId, title };
+      } else {
+        const count = database.fieldValues.filter((item) => item.profileId === profileId && item.entryId === entryId).length;
+        if (!confirm(`删除“${entry.title || '未命名经历'}”及其 ${count} 个字段值和关联映射？其他经历保留。`)) return;
+        payload = { entryId };
+      }
+    }
+    const { result } = await dataCommand(action, payload, database.revision);
+    await reloadDataState(profileId); status.textContent = '已保存在本地';
+    if (action === 'createEntry') locateResumeSection('entry:' + result);
+  } catch (error) { status.textContent = '操作失败：' + error.message; }
+}
+// 多段经历嵌入相应分类，已有全部字段直接编辑；补充字段只增加空编辑框，不复制他人的值。
+function resumeEntryEditor(database, profileId, entry, items) {
+  const box = workspaceNode('article', '', 'entry-card'); box.dataset.entryId = entry.entryId;
+  const header = workspaceNode('div', '', 'resume-entry-header');
+  const title = workspaceNode('h4', LocalApplyResume.kinds[entry.kind] + ' · ' + (entry.title || '未命名经历'));
+  const actions = workspaceNode('div', '', 'resume-entry-actions');
+  for (const [text, action] of [['修改经历名称', 'editEntry'], ['删除经历', 'deleteEntry']]) {
+    const button = workspaceNode('button', text, 'btn ghost'); button.type = 'button';
+    button.addEventListener('click', () => manageResumeEntry(entry.kind, entry.entryId, action)); actions.append(button);
   }
-  // 新建档案或重新导入后立即同步目录，避免继续指向上一份档案。
+  header.append(title, actions); box.append(header);
+  const fields = workspaceNode('div', '', 'basic-grid'); box.append(fields); const added = new Set();
+  // 不在界面按标题合并经历，字段也只按内部 ID 去重。
+  function appendField(definition, row) {
+    if (added.has(definition.fieldId)) return;
+    // 旧导入复用 title 定义；按经历上下文显示岗位名称，不改写共享定义或字段 ID。
+    const displayLabel = definition.fieldId === 'resume.title' && ['employment', 'internship'].includes(entry.kind) ? '岗位名称' : definition.label;
+    added.add(definition.fieldId); fields.append(resumeFieldEditor(profileId, entry.entryId, definition, row, displayLabel));
+  }
+  items.forEach(({ definition, row }) => appendField(definition, row));
+  const empty = workspaceNode('p', '可补充下方字段，或导入简历后自动归入此处。', 'muted'); empty.hidden = items.length > 0; box.append(empty);
+  const more = document.createElement('details'); more.className = 'resume-entry-more'; more.open = !items.length;
+  more.append(workspaceNode('summary', '补充字段'));
+  const footer = workspaceNode('div', '', 'row resume-entry-add');
+  const select = document.createElement('select'); select.setAttribute('aria-label', '补充经历字段');
+  const add = workspaceNode('button', '添加字段', 'btn ghost'); add.type = 'button';
+  // 每次补充后移除已显示的选项，当前所有编辑框和草稿保持原位。
+  function updateOptions() {
+    select.replaceChildren(new Option('选择需要补充的字段', ''), ...database.fieldDefinitions.filter((definition) => !added.has(definition.fieldId)).map((definition) => new Option(definition.group + ' · ' + definition.label, definition.fieldId)));
+    add.disabled = true; select.disabled = select.options.length <= 1;
+  }
+  updateOptions();
+  select.addEventListener('change', () => { add.disabled = !select.value; });
+  add.addEventListener('click', () => {
+    const definition = database.fieldDefinitions.find((item) => item.fieldId === select.value); if (!definition) return;
+    appendField(definition, null); empty.hidden = true; updateOptions(); fields.lastElementChild.querySelector('input,textarea,select').focus(); scheduleResumePosition();
+  });
+  footer.append(select, add); more.append(footer); box.append(more); return box;
+}
+// 使用规范数据库投影，把已有分类、动态资料和多段经历一次渲染为可编辑分类，不写入新模块。
+async function renderResumeCenter() {
+  const { database } = await dataRequest('localapply:read'); const profileId = $('#entryProfile').value;
+  const root = $('#basicFields'); root.replaceChildren();
+  if (!database.profiles.some((profile) => profile.profileId === profileId)) { renderResumeToc(); return; }
+  for (const [index, group] of LocalApplyProfileView.editorSections(database, profileId).entries()) {
+    const section = workspaceNode('section', '', 'resume-group'); section.dataset.group = group.group;
+    const header = workspaceNode('div', '', 'resume-group-header');
+    const heading = workspaceNode('h3', group.group, 'center-group-heading'); heading.id = 'resumeGroupHeading' + index;
+    section.setAttribute('aria-labelledby', heading.id); header.append(heading);
+    if (group.kind) {
+      const add = workspaceNode('button', '添加' + LocalApplyResume.kinds[group.kind], 'btn ghost'); add.type = 'button'; add.dataset.addEntryKind = group.kind;
+      add.addEventListener('click', () => manageResumeEntry(group.kind, null, 'createEntry')); header.append(add);
+    }
+    section.append(header);
+    if (group.items.length) {
+      const fields = workspaceNode('div', '', 'basic-grid');
+      group.items.forEach(({ definition, row }) => fields.append(resumeFieldEditor(profileId, null, definition, row))); section.append(fields);
+    }
+    for (const { entry, items } of group.entries) section.append(resumeEntryEditor(database, profileId, entry, items));
+    if (!group.items.length && !group.entries.length) section.append(workspaceNode('p', '暂无资料，可在此添加，或导入简历后自动归类。', 'muted'));
+    root.append(section);
+  }
   renderResumeToc();
 }
 // 独立挂载导入和本地编辑入口，切换文件时取消旧任务。
