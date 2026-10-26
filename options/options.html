@@ -111,7 +111,7 @@
       <div id="resumeProfileControls" class="resume-profile-controls">
       <h2>简历中心</h2>
       <div class="row"><input id="newProfileName" type="text" placeholder="新档案名称" aria-label="新档案名称" /><button id="createResumeProfile" class="btn plain">新建档案</button></div>
-      <p class="muted">在现有分类中编辑基础字段。先确定需要保留的字段，再导入简历识别相应内容。</p>
+      <p class="muted">已补齐参考简历页的基础模块和字段，保留原有资料。可在“字段库”移除当前简历不需要的字段，确定保留项后再导入简历。</p>
       <div class="row resume-profile-actions">
         <label for="entryProfile">当前简历</label>
         <select id="entryProfile" aria-label="当前简历"></select>
@@ -182,7 +182,7 @@
     <section class="card" id="fieldTemplates">
       <h2>字段模板</h2>
       <div id="tplList"></div>
-      <p class="muted">全字段模板（互联网 + 央国企合并，51 字段）：新建档案（侧边栏顶部「＋」）默认带全部字段，有值就填、没值自动跳过；字段可在档案里随意增删改。</p>
+      <p class="muted">新建简历默认包含完整基础字段目录。可在“字段库”按当前简历添加或移除字段，已有资料不会因模板补齐而被覆盖。</p>
     </section>
     </section>
 
@@ -237,6 +237,7 @@
   <script src="../libs/docx/docx-preview.min.js"></script>
   <script src="../libs/docx/html2canvas.min.js"></script>
   <script src="../data/templates.js"></script>
+  <script src="../data/regions.js"></script>
   <script src="../data/profile-view.js"></script>
   <script src="../data/providers.js"></script>
   <script src="../data/key-vault.js"></script>

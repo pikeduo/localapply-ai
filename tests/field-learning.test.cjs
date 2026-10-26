@@ -293,11 +293,11 @@ test('同会话刷新与填写并发时仍保留准确成功状态', async () =>
   assert.equal(results[0].rows[0].status, 'success'); assert.equal(results[1].rows[0].status, 'success');
 });
 
-// 新动态字段可属于明确的重复经历，其他经历及平面值保持不变。
+// “研究方向”已成为预置字段；用仍未知的合成名称继续验证动态字段的经历边界。
 test('新字段按指定经历保存并拒绝跨档案经历引用', async () => {
   const env = await fixture(); const entry = await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'education', title: '合成本科' } });
-  let view = await env.scan(env.field('研究方向', { kind: 'education' })); const scanId = view.rows[0].field.scanId;
-  const preview = await env.send(view, 'previewValue', { scanId, definition: definition('研究方向'), entryId: entry.result, value: '合成方向' });
+  let view = await env.scan(env.field('合成研究题目', { kind: 'education' })); const scanId = view.rows[0].field.scanId;
+  const preview = await env.send(view, 'previewValue', { scanId, definition: definition('合成研究题目'), entryId: entry.result, value: '合成方向' });
   view = await env.send(view, 'commitValue', { scanId, token: preview.token, confirmed: true }); assert.equal(view.rows[0].target.entryId, entry.result);
   const db = await env.repo.read(); assert.equal(db.fieldValues.find((row) => row.fieldId === view.rows[0].target.fieldId).entryId, entry.result);
   await assert.rejects(env.send(view, 'previewValue', { scanId, definition: definition('新方向'), entryId: 'another-profile-entry', value: '合成' }), /不属于当前档案/);

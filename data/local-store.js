@@ -7,6 +7,7 @@
   const LEGACY_KEY = 'wangshenAutofill';
   const VAULT_KEY = 'localapply.keyVault';
   const DEVICE_KEY = 'localapply.deviceKeys';
+  const CATALOG_KEY = 'localapply.fieldCatalog'; // 独立升级标记，用户删掉字段后不再自动补回。
   const SCHEMA_VERSION = 3;
   const TYPES = ['text', 'textarea', 'select', 'number', 'boolean', 'date', 'multiSelect'];
   const KINDS = ['education', 'internship', 'employment', 'project'];
@@ -64,7 +65,7 @@
     check(Number.isInteger(value.version) && value.version > 0, '字段版本错误');
     string(value.description, 'description', 2000, true);
     for (const key of ['aliases', 'options']) {
-      list(value[key], key, 200);
+      list(value[key], key, key === 'options' ? 500 : 200); // 专业分类包含 238 个真实静态选项，不截断。
       value[key].forEach((item) => string(item, key));
     }
     return clone(value);
@@ -76,14 +77,14 @@
       group: input.group || '其他', aliases: input.aliases || [], options: input.options || [],
       description: input.description || '', version: input.version || 1 });
   }
-  // 根据字段类型校验个人值，保留 false/0，不自动推断敏感信息。
+  // 根据类型校验个人值，保留 false/0；无预置选项的多选允许手动添加，封闭多选仍严格限制候选。
   function validValue(value, def) {
     if (value === null || value === '') return;
     if (def.type === 'number') check(typeof value === 'number' && Number.isFinite(value), '字段需要数字');
     else if (def.type === 'boolean') check(typeof value === 'boolean', '字段需要布尔值');
     else if (def.type === 'multiSelect') {
       list(value, '多选值', 200);
-      value.forEach((item) => { string(item, '多选值'); check(def.options.includes(item), '多选值不在选项内'); });
+      value.forEach((item) => { string(item, '多选值'); check(!def.options.length || def.options.includes(item), '多选值不在选项内'); });
     } else {
       string(value, '字段值', 100000, true);
       if (def.type === 'date') {
@@ -94,12 +95,36 @@
       // 原项目允许 select 保存自定义文字，保留这一兼容行为。
     }
   }
-  // 仅取标准模板公共元数据，旧词库继续作为识别引擎。
-  function builtins() {
-    return global.WangshenTemplates.SOE_LONG_TEMPLATE.map((field) => makeDefinition({
+  // 从指定模板取得公共元数据，默认包含参考页结构，不复制个人值或界面专用属性。
+  function builtins(template = global.WangshenTemplates.PROFILE_TEMPLATE) {
+    return template.map((field) => makeDefinition({
       fieldId: 'builtin.' + field.key, label: field.label, type: field.inputType, group: field.group,
       aliases: (field.patterns || []).filter((alias) => !alias.startsWith('re:')), options: field.options || [],
     }));
+  }
+  // 一次性补齐参考目录：仅升级未改动的旧标准定义，新增空白绑定，保留旧值及用户已删的旧字段。
+  function upgradeFieldCatalog(db) {
+    const old = new Map(builtins(global.WangshenTemplates.SOE_LONG_TEMPLATE).map((def) => [def.fieldId, def]));
+    for (const field of global.WangshenTemplates.PROFILE_TEMPLATE) {
+      const next = builtins([field])[0];
+      const index = db.fieldDefinitions.findIndex((def) => def.fieldId === next.fieldId);
+      if (index < 0) { db.fieldDefinitions.push(next); db.publicFieldIds.push(next.fieldId); }
+      else if (equal(db.fieldDefinitions[index], old.get(next.fieldId)) && !equal(next, db.fieldDefinitions[index])) {
+        db.fieldDefinitions[index] = { ...next, version: db.fieldDefinitions[index].version + 1 };
+      }
+      // 原有 51 字段若被手动移除则继续尊重；只将本次新目录字段添加到已有简历。
+      if (old.has(next.fieldId) || !db.publicFieldIds.includes(next.fieldId)) continue;
+      for (const profile of db.profiles) {
+        if (!db.bindings.some((binding) => binding.profileId === profile.profileId && binding.fieldId === next.fieldId)) {
+          db.bindings.push({ profileId: profile.profileId, fieldId: next.fieldId, fid: id('field'), key: field.key,
+            sensitive: !!field.sensitive, autoFill: false, material: false, custom: false });
+        }
+        if (!db.fieldValues.some((row) => row.profileId === profile.profileId && row.fieldId === next.fieldId && row.entryId === null)) {
+          db.fieldValues.push({ profileId: profile.profileId, fieldId: next.fieldId, entryId: null, value: null, updatedAt: now(), source: 'catalog' });
+        }
+      }
+    }
+    return validate(db);
   }
   // 建立空数据库，API 设置不进入此对象。
   function emptyDatabase() {
@@ -420,23 +445,28 @@
     // 初始化访问限制和数据；失败不删除/修改旧源，下次启动可重试。
     async function load() {
       await storage.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
-      const data = await storage.get([DB_KEY, API_KEY, VAULT_KEY, DEVICE_KEY]);
+      const data = await storage.get([DB_KEY, API_KEY, VAULT_KEY, DEVICE_KEY, CATALOG_KEY]);
       if (data[VAULT_KEY]) global.LocalApplyVault.validate(data[VAULT_KEY]);
       if (sessionKey && data[VAULT_KEY]?.salt !== sessionSalt) { sessionKey = sessionSalt = null; }
       if (data[DEVICE_KEY]) global.LocalApplyVault.validateDevice(data[DEVICE_KEY]);
       if (data[DB_KEY]) {
         const db = upgradeDatabase(data[DB_KEY]); const api = apiSettings(data[API_KEY]);
-        if (data[DB_KEY].schemaVersion !== SCHEMA_VERSION) {
+        const catalogUpgrade = data[CATALOG_KEY]?.version !== global.WangshenTemplates.CATALOG_VERSION;
+        if (catalogUpgrade) upgradeFieldCatalog(db);
+        if (!equal(db, data[DB_KEY])) {
           db.revision++;
-          await storage.set({ [DB_KEY]: db }); // 校验完整副本后一次提交，失败保留旧版本。
+          await storage.set({ [DB_KEY]: db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } }); // 数据和升级标记同批提交，失败可重试。
+        } else if (catalogUpgrade) {
+          await storage.set({ [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } });
         }
         return { db, api, vault: data[VAULT_KEY] || null, device: data[DEVICE_KEY] || null };
       }
       const legacy = await storage.get(LEGACY_KEY);
       const migrated = migrate(legacy[LEGACY_KEY] || global.WangshenTemplates.defaultState());
+      upgradeFieldCatalog(migrated.db);
       // 先持久化独立配置，再以单 DB 键作为迁移生效点；中断时旧源仍可重试。
       await storage.set({ [API_KEY]: migrated.api });
-      await storage.set({ [DB_KEY]: migrated.db });
+      await storage.set({ [DB_KEY]: migrated.db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } });
       const saved = await storage.get([DB_KEY, API_KEY]);
       check(equal(saved[DB_KEY], migrated.db) && equal(saved[API_KEY], migrated.api), '迁移写入校验失败；旧数据仍保留');
       return { ...migrated, vault: data[VAULT_KEY] || null, device: data[DEVICE_KEY] || null };
@@ -820,5 +850,5 @@
       command,
     };
   }
-  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, DEVICE_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId };
+  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, DEVICE_KEY, CATALOG_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId };
 })(globalThis);

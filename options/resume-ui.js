@@ -150,12 +150,12 @@ async function confirmResume() {
 }
 // 串行保存同一页面的字段；读取最新版本后只写当前行，避免多个自动保存互相覆盖。
 let resumeSaveQueue = Promise.resolve();
-// 基本字段、经历字段和未绑定动态字段共用编辑器；失败保留输入，不重建其他字段草稿。
+// 所有基础字段共用保存链路；复合编辑器标注内部输入，失败保留草稿且不重建其他字段。
 function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = definition.label) {
-  const label = workspaceNode('label', '', 'center-field'); label.dataset.fieldId = definition.fieldId;
   const multiline = definition.type === 'text' && typeof row?.value === 'string' && row.value.includes('\n');
   const input = workspaceControl(multiline ? { ...definition, type: 'textarea' } : definition, row?.value);
-  input.setAttribute('aria-label', (entryId ? '经历字段 · ' : '简历中心 · ') + displayLabel);
+  const label = workspaceNode(input.tagName === 'DIV' ? 'div' : 'label', '', 'center-field'); label.dataset.fieldId = definition.fieldId;
+  (input.querySelector('[data-primary]') || input).setAttribute('aria-label', (entryId ? '经历字段 · ' : '简历中心 · ') + displayLabel);
   const hint = workspaceNode('small', '修改后离开输入框自动保存 · 保存失败保留输入'); hint.setAttribute('role', 'status');
   let saved = row ? structuredClone(row) : null;
   input.addEventListener('input', () => { input.dataset.dirty = 'true'; });

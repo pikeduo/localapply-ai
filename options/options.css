@@ -177,6 +177,15 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 .resume-group-header .center-group-heading { margin: 5px 0 0; }
 #legacyEntriesNotice { padding: 12px 14px; margin-top: 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--soft); }
 #legacyEntriesNotice p { margin: 0 0 10px; }
+/* 复合编辑器沿用基础字段宽度，日历精度、地区子项与多城市在窄窗自动换行。 */
+.workspace-date { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px; }
+.workspace-region, .workspace-multi { display: grid; gap: 8px; min-width: 0; }
+.workspace-region-parts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.workspace-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.workspace-tags button { overflow-wrap: anywhere; max-width: 100%; }
+.workspace-multi > button { justify-self: start; }
+.workspace-region > small { color: var(--sub); }
+@media (max-width: 680px) { .workspace-region-parts { grid-template-columns: minmax(0, 1fr); } }
 .resume-profile-controls { padding: 12px; margin: -12px -12px 8px; border: 1px solid transparent; border-radius: 12px; }
 /* 当前简历及管理操作独立成行，窄窗沿用工作台换行规则。 */
 .resume-profile-actions select { flex: 1; }

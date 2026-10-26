@@ -75,7 +75,8 @@
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') sendMessage('panel:close'); });
   $('previewReveal').addEventListener('change', renderResume); $('previewEmpty').addEventListener('change', renderResume); $('previewSearch').addEventListener('input', renderResume); $('previewNav').addEventListener('change', navigate);
   $('previewRefresh').addEventListener('click', () => refresh().then(() => { $('previewStatus').textContent = '已从本地刷新当前档案。'; }).catch(report));
-  $('profileSel').addEventListener('change', async () => { const profileId = $('profileSel').value; ++refreshing; try { const state = await getState(); state.activeProfileId = profileId; await saveState(state); $('previewReveal').checked = false; $('previewSearch').value = ''; sectionKey = ''; await refresh(); } catch (error) { await report(error); } });
+  // 切档案期间禁用选择并等待落盘，避免大目录下连续选择使用旧快照而回到前一个档案。
+  $('profileSel').addEventListener('change', async () => { const profileId = $('profileSel').value; $('profileSel').disabled = true; ++refreshing; try { await flushSaves(); const state = await getState(); state.activeProfileId = profileId; await saveState(state); $('previewReveal').checked = false; $('previewSearch').value = ''; sectionKey = ''; await refresh(); } catch (error) { await report(error); } finally { $('profileSel').disabled = false; } });
   $('panelClose').addEventListener('click', () => sendMessage('panel:close')); $('panelMinimize').addEventListener('click', () => minimize().catch(report));
   $('panelSettings').addEventListener('click', () => edit('aiSettings').catch(report)); $('previewEdit').addEventListener('click', () => edit().catch(report));
   $('welcomeManual').addEventListener('click', () => edit().catch(report)); $('welcomeImport').addEventListener('click', () => edit('pdfCard').catch(report)); $('welcomeBackup').addEventListener('click', () => edit('privacySettings').catch(report));

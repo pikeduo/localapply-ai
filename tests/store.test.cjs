@@ -46,6 +46,93 @@ function value(db, profileId, fieldId, entryId = null) { return db.fieldValues.f
 // 创建仅含元数据的公共定义，测试文本均为虚构。
 function def(fieldId = 'shared.skill') { return { fieldId, label: '测试技能', type: 'text', group: '技能', aliases: ['能力项'], options: [], description: '测试定义', version: 1 }; }
 
+// 仅用合成资料构造升级前的 Schema v3，保留一项删除、一项自定义及旧格式日期。
+async function oldCatalogFixture() {
+  const seed = fixture(); await seed.repo.initialize();
+  await command(seed.repo, 'createProfile', { name: '合成第二简历' });
+  await command(seed.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.birthDate', value: '2000.02（原有文本）' });
+  await command(seed.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.ethnic', value: '汉' });
+  await command(seed.repo, 'createField', { profileId: 'p1', definition: { label: '合成自定义', group: '合成模块' }, value: '合成保留值' });
+  const db = await seed.repo.read();
+  const legacy = seed.templates.SOE_LONG_TEMPLATE.map((field) => seed.store.definition({ fieldId: 'builtin.' + field.key,
+    label: field.label, type: field.inputType, group: field.group, options: field.options || [],
+    aliases: field.patterns.filter((item) => !item.startsWith('re:')), description: '', version: 1 }));
+  const retained = new Set(legacy.map((field) => field.fieldId));
+  db.fieldDefinitions = [...legacy, ...db.fieldDefinitions.filter((field) => !field.fieldId.startsWith('builtin.'))];
+  db.publicFieldIds = [...retained];
+  db.bindings = db.bindings.filter((binding) => !binding.fieldId.startsWith('builtin.') || retained.has(binding.fieldId));
+  db.fieldValues = db.fieldValues.filter((row) => !row.fieldId.startsWith('builtin.') || retained.has(row.fieldId));
+  db.bindings = db.bindings.filter((binding) => binding.profileId !== 'p1' || binding.fieldId !== 'builtin.name');
+  db.fieldValues = db.fieldValues.filter((row) => row.profileId !== 'p1' || row.fieldId !== 'builtin.name');
+  return { env: fixture({ [seed.store.DB_KEY]: JSON.parse(JSON.stringify(db)), [seed.store.API_KEY]: seed.disk[seed.store.API_KEY] }), before: JSON.parse(JSON.stringify(db)) };
+}
+
+// 静态目录覆盖全部参考模块；选项不因旧的 200 项限制而被截断。
+test('参考目录包含 155 项结构、12 个模块，日期/下拉/多选完整且不含个人值', async () => {
+  const env = fixture(); const db = await env.repo.read(); const fields = env.templates.REFERENCE_FIELDS;
+  assert.equal(fields.length, 155); assert.equal(new Set(fields.map((field) => field[2])).size, 12);
+  assert.equal(db.fieldDefinitions.length, 175); assert.equal(db.bindings.length, 175);
+  assert.ok(db.fieldValues.every((row) => row.value === '' || row.value === null));
+  for (const field of env.templates.SOE_LONG_TEMPLATE) assert.ok(db.fieldDefinitions.some((item) => item.fieldId === 'builtin.' + field.key));
+  assert.equal(db.fieldDefinitions.find((item) => item.fieldId === 'builtin.majorCategory').options.length, 238);
+  assert.equal(db.fieldDefinitions.find((item) => item.fieldId === 'builtin.ethnic').options.length, 56);
+  for (const key of ['awardDate','certificateDate','publicationDate','familyBirthDate','employmentStartDate']) assert.equal(db.fieldDefinitions.find((item) => item.fieldId === 'builtin.' + key).type, 'date');
+  assert.equal(db.fieldDefinitions.find((item) => item.fieldId === 'builtin.currentSalary').type, 'number');
+  assert.equal(db.fieldDefinitions.find((item) => item.fieldId === 'builtin.expectedCities').type, 'multiSelect');
+  assert.ok(db.fieldDefinitions.every((item) => !Object.hasOwn(item, 'value') && !Object.hasOwn(item, 'widget')));
+});
+
+// 地区候选随包分发，不依赖接口；直辖市、普通地级市和区县均可联动。
+test('离线地区数据提供完整三级候选，保留原许可证且不包含执行逻辑', () => {
+  const context = {}; const source = fs.readFileSync(path.join(__dirname, '../data/regions.js'), 'utf8'); vm.runInNewContext(source, context);
+  const regions = context.LocalApplyRegions;
+  assert.equal(Object.keys(regions).length, 31); assert.equal(Object.values(regions).reduce((count, cities) => count + Object.keys(cities).length, 0), 341);
+  assert.ok(regions['江苏省']['南京市'].includes('玄武区')); assert.ok(regions['北京市']['北京市'].includes('海淀区'));
+  assert.ok(Object.values(regions).every((cities) => Object.values(cities).every((districts) => Array.isArray(districts) && districts.every((name) => typeof name === 'string'))));
+  assert.ok(fs.readFileSync(path.join(__dirname, '../libs/regions/LICENSE'), 'utf8').includes('Version 2, December 2004'));
+});
+
+test('旧 v3 目录只补新空字段，保留旧值、已删除字段、私有定义及全部档案', async () => {
+  const { env, before } = await oldCatalogFixture(); const db = await env.repo.read();
+  assert.equal(db.schemaVersion, 3); assert.equal(db.revision, before.revision + 1);
+  for (const old of before.fieldValues) assert.deepEqual(JSON.parse(JSON.stringify(db.fieldValues.find((row) => row.profileId === old.profileId && row.fieldId === old.fieldId && row.entryId === old.entryId))), old);
+  assert.deepEqual(JSON.parse(JSON.stringify(db.profiles)), before.profiles);
+  assert.equal(value(db, 'p1', 'builtin.birthDate'), '2000.02（原有文本）'); assert.equal(value(db, 'p1', 'builtin.ethnic'), '汉');
+  assert.ok(!db.bindings.some((binding) => binding.profileId === 'p1' && binding.fieldId === 'builtin.name'));
+  assert.deepEqual(JSON.parse(JSON.stringify(db.fieldDefinitions.filter((field) => !field.fieldId.startsWith('builtin.')))), before.fieldDefinitions.filter((field) => !field.fieldId.startsWith('builtin.')));
+  for (const profile of db.profiles) assert.equal(value(db, profile.profileId, 'builtin.paperName'), null);
+  assert.equal(db.fieldDefinitions.find((field) => field.fieldId === 'builtin.ethnic').type, 'select');
+  assert.equal(db.fieldDefinitions.find((field) => field.fieldId === 'builtin.ethnic').version, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(await env.restart().read())), JSON.parse(JSON.stringify(db)), '重启不得重复迁移');
+  const state = await env.repo.readLegacy(); const next = structuredClone(state);
+  next.profiles[0].fields = next.profiles[0].fields.filter((field) => field.key !== 'paperName'); await env.repo.saveLegacy(state, next);
+  assert.ok(!(await env.restart().read()).bindings.some((binding) => binding.profileId === 'p1' && binding.fieldId === 'builtin.paperName'), '用户删除新字段后不得补回');
+});
+
+test('目录迁移写入失败保留旧库及升级标记，可重试且不覆盖用户改过的标准定义', async () => {
+  const { env, before } = await oldCatalogFixture();
+  env.disk[env.store.DB_KEY].fieldDefinitions.find((field) => field.fieldId === 'builtin.ethnic').description = '合成用户修改';
+  const diskBefore = structuredClone(env.disk); env.fail(); await assert.rejects(env.repo.read(), /模拟磁盘错误/);
+  assert.deepEqual(env.disk, diskBefore); assert.equal(env.disk[env.store.CATALOG_KEY], undefined);
+  const db = await env.restart().read(); assert.equal(db.revision, before.revision + 1);
+  assert.equal(db.fieldDefinitions.find((field) => field.fieldId === 'builtin.ethnic').description, '合成用户修改');
+  assert.equal(env.disk[env.store.CATALOG_KEY].version, 1);
+});
+
+test('参考日期、数字及开放城市多选经校验保存、备份往返，新简历不复制旧值', async () => {
+  const env = fixture(); await env.repo.initialize();
+  for (const [fieldId, next] of [['builtin.awardDate', '2028-02-29'], ['builtin.educationStartDate', '2024-09'], ['builtin.currentSalary', 0], ['builtin.expectedCities', ['合成甲城', '合成乙城']]]) {
+    await command(env.repo, 'setValue', { profileId: 'p1', fieldId, value: next });
+  }
+  await assert.rejects(command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.awardDate', value: '2027-02-29' }), /日期不存在/);
+  const second = (await command(env.repo, 'createProfile', { name: '合成空白简历' })).result;
+  const db = await env.repo.read(); assert.equal(db.bindings.filter((binding) => binding.profileId === second).length, 175);
+  assert.equal(value(db, second, 'builtin.awardDate'), '');
+  const backup = await env.repo.exportBackup(); const restored = env.store.parseBackup(backup);
+  assert.deepEqual(JSON.parse(JSON.stringify(restored.fieldValues)), JSON.parse(JSON.stringify(db.fieldValues)));
+  assert.ok(!JSON.stringify(backup).includes('localapply.fieldCatalog'));
+});
+
 test('动态字段新增、版本化编辑、删除及引用清理', async () => {
   const { repo } = fixture(); await repo.initialize();
   const created = await command(repo, 'createField', { profileId: 'p1', definition: { label: '虚构字段' }, value: '合成内容' });

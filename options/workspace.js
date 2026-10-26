@@ -93,8 +93,106 @@ function locateResumeSection(key) {
   window.scrollTo({ top: Math.max(0, bounds.top + scrollY - inset), behavior: 'instant' });
   markResumeSection(key); scheduleResumePosition();
 }
-// 按字段类型创建编辑器；日期保留年/月精度，不能使用 date 输入框静默补日。
+// 日期编辑提供真实日历、月份和年份三种精度；旧非标准文本须显式修改，渲染时不改值。
+function workspaceDateControl(def, value) {
+  const box = workspaceNode('div', '', 'workspace-date'); box.setAttribute('role', 'group');
+  const precision = document.createElement('select'); precision.setAttribute('aria-label', '日期精度 · ' + def.label);
+  for (const [key, label] of [['date', '年月日'], ['month', '年月'], ['year', '年份']]) precision.append(new Option(label, key));
+  const raw = value == null ? '' : String(value);
+  // 非法旧日期也必须原样显示，不能让原生日历把 2 月 30 日等历史文本静默清空。
+  const validDay = /^\d{4}-\d{2}-\d{2}$/.test(raw) && Number.isFinite(Date.parse(raw)) && new Date(raw).toISOString().slice(0, 10) === raw && Number(raw.slice(0, 4)) > 0;
+  const mode = !raw || validDay ? 'date' : /^\d{4}-(0[1-9]|1[0-2])$/.test(raw) && Number(raw.slice(0, 4)) > 0 ? 'month' : /^\d{4}$/.test(raw) && Number(raw) > 0 ? 'year' : 'legacy';
+  if (mode === 'legacy' || def.type === 'text') precision.append(new Option(mode === 'legacy' ? '原有文本' : '文字说明', 'legacy'));
+  precision.value = mode;
+  const input = document.createElement('input'); input.dataset.primary = '';
+  // 原生 date/month 自带浏览器日历，年份单独输入，避免把未知日期补成一月一日。
+  function configure(next, text) {
+    input.type = next === 'date' || next === 'month' ? next : next === 'year' ? 'number' : 'text';
+    if (next === 'year') { input.min = '1000'; input.max = '9999'; input.step = '1'; }
+    else { input.removeAttribute('min'); input.removeAttribute('max'); input.removeAttribute('step'); }
+    input.value = text;
+  }
+  configure(mode, raw);
+  precision.addEventListener('input', (event) => event.stopPropagation());
+  precision.addEventListener('change', (event) => {
+    event.stopPropagation(); const previous = input.value; const next = precision.value;
+    const length = next === 'year' ? 4 : next === 'month' ? 7 : 10;
+    const compatible = /^\d{4}(-\d{2})?(-\d{2})?$/.test(previous) && previous.length >= length;
+    configure(next, compatible ? previous.slice(0, length) : next === 'legacy' ? previous : '');
+    // 降低精度是用户的显式操作；提高精度必须等待实际选择，不能凭空补月或补日。
+    if (compatible && previous !== input.value) box.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  Object.defineProperty(box, 'value', { get: () => input.value });
+  box.append(precision, input); return box;
+}
+// 开放多选把用户添加的城市仅存为个人值，绝不将这些内容混入公共候选定义。
+function workspaceOpenMultiControl(def, value) {
+  const box = workspaceNode('div', '', 'workspace-multi'); box.setAttribute('role', 'group');
+  let values = Array.isArray(value) ? [...value] : [];
+  const tags = workspaceNode('div', '', 'workspace-tags');
+  const input = document.createElement('input'); input.placeholder = '输入城市，按回车或点击添加'; input.setAttribute('aria-label', '添加城市 · ' + def.label);
+  const add = workspaceNode('button', '添加', 'btn ghost'); add.type = 'button';
+  const status = workspaceNode('small'); status.setAttribute('role', 'status');
+  // 只由明确的添加/移除动作保存，多选输入尚未确认的文字不视为已添加。
+  function render() {
+    tags.replaceChildren();
+    values.forEach((city) => {
+      const remove = workspaceNode('button', city + ' ×', 'btn ghost'); remove.type = 'button'; remove.setAttribute('aria-label', '移除城市 · ' + city);
+      remove.addEventListener('click', () => { values = values.filter((item) => item !== city); render(); box.dispatchEvent(new Event('change', { bubbles: true })); }); tags.append(remove);
+    });
+  }
+  // 可一次输入多个城市，限制数量与长度，后台仍会重复校验。
+  function append() {
+    const additions = input.value.split(/[、,，\n]/).map((item) => item.trim()).filter(Boolean);
+    const next = [...new Set([...values, ...additions])];
+    if (next.length > 200 || next.some((item) => item.length > 500)) { status.textContent = '最多添加 200 项，每项不超过 500 字。'; return; }
+    if (!additions.length) return;
+    values = next; input.value = ''; status.textContent = ''; render(); box.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  input.addEventListener('change', (event) => event.stopPropagation());
+  input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); append(); } });
+  add.addEventListener('click', append); Object.defineProperty(box, 'value', { get: () => [...values] });
+  render(); box.append(tags, input, add, status); return box;
+}
+// 离线地区编辑提供省市区联动候选及自由输入，兼容旧文本、区划更新和海外地址。
+function workspaceRegionControl(def, value) {
+  const box = workspaceNode('div', '', 'workspace-region'); box.setAttribute('role', 'group');
+  const input = document.createElement('input'); input.dataset.primary = ''; input.value = value == null ? '' : String(value);
+  input.placeholder = '完整地区，也可使用下方省市区控件';
+  const parts = workspaceNode('div', '', 'workspace-region-parts');
+  const province = document.createElement('select'); province.setAttribute('aria-label', '省份 · ' + def.label); province.append(new Option('选择省份', ''));
+  const provinces = ['北京市', '天津市', '河北省', '山西省', '内蒙古自治区', '辽宁省', '吉林省', '黑龙江省', '上海市', '江苏省', '浙江省', '安徽省', '福建省', '江西省', '山东省', '河南省', '湖北省', '湖南省', '广东省', '广西壮族自治区', '海南省', '重庆市', '四川省', '贵州省', '云南省', '西藏自治区', '陕西省', '甘肃省', '青海省', '宁夏回族自治区', '新疆维吾尔自治区', '香港特别行政区', '澳门特别行政区', '台湾省', '海外/其他'];
+  provinces.forEach((name) => province.append(new Option(name, name)));
+  const city = document.createElement('input'); city.placeholder = '城市'; city.setAttribute('aria-label', '城市 · ' + def.label);
+  const district = document.createElement('input'); district.placeholder = '区县（可留空）'; district.setAttribute('aria-label', '区县 · ' + def.label);
+  const regions = globalThis.LocalApplyRegions || {};
+  const cities = document.createElement('datalist'); cities.id = 'region-cities-' + def.fieldId; city.setAttribute('list', cities.id);
+  const districts = document.createElement('datalist'); districts.id = 'region-districts-' + def.fieldId; district.setAttribute('list', districts.id);
+  // 城市/区县用可输入的原生候选列表，不能将离线快照中缺失的新地名当作无效个人值。
+  function refreshOptions() {
+    cities.replaceChildren(...Object.keys(regions[province.value] || {}).map((name) => new Option(name, name)));
+    districts.replaceChildren(...(regions[province.value]?.[city.value] || []).map((name) => new Option(name, name)));
+  }
+  // 只有明确的分隔符才拆分已有值，单个城市名不猜测省份。
+  function syncParts() { const chunks = input.value.split(/\s*\/\s*/); province.value = provinces.includes(chunks[0]) ? chunks[0] : ''; city.value = chunks.length > 1 ? chunks[1] : ''; district.value = chunks.length > 2 ? chunks.slice(2).join(' / ') : ''; refreshOptions(); }
+  input.addEventListener('change', syncParts); syncParts();
+  city.addEventListener('input', refreshOptions);
+  for (const part of [province, city, district]) part.addEventListener('change', (event) => {
+    event.stopPropagation(); if (part === province) { city.value = ''; district.value = ''; }
+    else if (part === city) district.value = '';
+    refreshOptions();
+    input.value = [province.value, city.value.trim(), district.value.trim()].filter(Boolean).join(' / ');
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  Object.defineProperty(box, 'value', { get: () => input.value }); parts.append(province, city, district);
+  box.append(input, parts, cities, districts, workspaceNode('small', '省、市、区县联动候选均在本地；支持手动输入新地区或海外地址。')); return box;
+}
+// 按定义和参考控件创建编辑器；旧日期文本保持兼容，静态下拉完整显示并保留历史自定义值。
 function workspaceControl(def, value) {
+  const standard = def.fieldId?.startsWith('builtin.') && WangshenTemplates.FIELD_INDEX[def.fieldId.slice(8)];
+  if (def.type === 'date' || (def.type === 'text' && standard?.widget === 'date')) return workspaceDateControl(def, value);
+  if (def.type === 'text' && standard?.widget === 'region') return workspaceRegionControl(def, value);
+  if (def.type === 'multiSelect' && !def.options.length) return workspaceOpenMultiControl(def, value);
   let input;
   if (['boolean', 'select', 'multiSelect'].includes(def.type)) {
     input = document.createElement('select'); input.multiple = def.type === 'multiSelect';
@@ -104,11 +202,10 @@ function workspaceControl(def, value) {
     if (input.multiple) [...input.options].forEach((option) => { option.selected = Array.isArray(value) && value.includes(option.value); });
     else input.value = value == null ? '' : String(value);
   } else { input = document.createElement(def.type === 'textarea' ? 'textarea' : 'input'); if (input.tagName === 'INPUT') input.type = def.type === 'number' ? 'number' : 'text'; input.value = value == null ? '' : String(value); }
-  if (def.type === 'date') input.placeholder = 'YYYY / YYYY-MM / YYYY-MM-DD';
   return input;
 }
 // 只做显式类型转换，最终由后台契约再次校验，不用字符串真假推断布尔值。
-function workspaceValue(input, def) { if (def.type === 'multiSelect') return [...input.selectedOptions].map((option) => option.value); if (input.value === '') return null; if (def.type === 'number') { const value = Number(input.value); if (!Number.isFinite(value)) throw new Error('请输入有效数字'); return value; } return def.type === 'boolean' ? input.value === 'true' : input.value; }
+function workspaceValue(input, def) { if (def.type === 'multiSelect') return input.tagName === 'SELECT' ? [...input.selectedOptions].map((option) => option.value) : input.value; if (input.value === '') return null; if (def.type === 'number') { const value = Number(input.value); if (!Number.isFinite(value)) throw new Error('请输入有效数字'); return value; } return def.type === 'boolean' ? input.value === 'true' : input.value; }
 // 页面含未保存的字段定义或经历输入时，重新渲染或切换须由用户选择丢弃。
 function workspaceDirty() { return !!document.querySelector('[data-dirty="true"]'); }
 // 统一处理新建、重命名和删除；操作前保护草稿，删除预览绑定 revision，成功后才清理编辑状态。

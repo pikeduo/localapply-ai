@@ -29,7 +29,7 @@
     const aliases = { '教育经历': '教育背景', '教育': '教育背景', '基本资料': '基本信息', '个人信息': '基本信息', '工作经验': '工作经历', '实习经验': '实习经历', '项目经验': '项目经历' };
     return Object.hasOwn(aliases, group) ? aliases[group] : group;
   }
-  // 编辑视图只呈现当前基础字段；旧经历不展成卡片，也不猜测多个记录应覆盖哪个基础值。
+  // 编辑视图按参考目录组织基础字段；旧经历不展成卡片，也不猜测多个记录应覆盖哪个基础值。
   function editorSections(database, profileId) {
     const definitions = new Map(database.fieldDefinitions.map((item) => [item.fieldId, item]));
     const groups = new Map(); const seen = new Set();
@@ -52,7 +52,13 @@
       add(row || null, definitions.get(binding.fieldId));
     }
     for (const row of database.fieldValues.filter((item) => item.profileId === profileId && item.entryId === null)) add(row, definitions.get(row.fieldId));
-    return [...groups.values()];
+    const catalog = global.WangshenTemplates?.PROFILE_TEMPLATE || [];
+    const fieldOrder = new Map(catalog.map((field, index) => ['builtin.' + field.key, index]));
+    const groupOrder = [...new Set(catalog.map((field) => editorGroup(field.group)))];
+    // 旧档案新增字段后仍按完整模块排序；用户自定义模块及其中的字段保留相对顺序。
+    const result = [...groups.values()];
+    result.forEach((section) => section.items.sort((a, b) => (fieldOrder.get(a.definition.fieldId) ?? Infinity) - (fieldOrder.get(b.definition.fieldId) ?? Infinity)));
+    return result.sort((a, b) => (groupOrder.includes(a.group) ? groupOrder.indexOf(a.group) : Infinity) - (groupOrder.includes(b.group) ? groupOrder.indexOf(b.group) : Infinity));
   }
   global.LocalApplyProfileView = { hasValue, text, sensitive, sections, editorSections };
 })(globalThis);

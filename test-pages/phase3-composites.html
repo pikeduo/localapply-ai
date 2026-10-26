@@ -11,7 +11,8 @@
 <div class="form-item"><label for="calendar-date">日历日期</label><input id="calendar-date" readonly aria-haspopup="dialog" aria-controls="calendar"><div id="calendar" role="dialog" hidden><select aria-label="年" id="calendar-year"><option>2026</option><option>2028</option></select><select aria-label="月" id="calendar-month"><option>1</option><option>2</option><option>3</option></select><button type="button" id="calendar-day" aria-label="2026-01-29">29</button></div></div>
 <div class="form-item"><span class="label">现居地址</span><select id="province" aria-label="省"><option value="">省</option><option value="合成省">合成省</option></select><select id="city" aria-label="市"><option value="">市</option><option value="合成市">合成市</option></select><select id="district" aria-label="区"><option value="">区</option><option value="合成区">合成区</option></select></div>
 <div class="form-item"><label for="unknown">资格附加说明</label><input id="unknown"></div>
-<div class="form-item"><label for="other-unknown">是否接受调剂</label><input id="other-unknown"></div>
+<!-- 原“是否接受调剂”已加入标准目录；这里继续用合成未知字段验证可选 AI。 -->
+<div class="form-item"><label for="other-unknown">合成候选补充偏好</label><input id="other-unknown"></div>
 <label><input id="sync-resume" type="checkbox">同步更新在线简历</label><label><input id="agreement" type="checkbox">我已阅读并同意隐私协议</label>
 <label for="password">密码</label><input id="password" type="password"><label for="captcha">短信验证码</label><input id="captcha" autocomplete="one-time-code">
 <button type="button" id="send-code">发送验证码</button><button type="submit">提交投递</button></form><output id="calendar-state"></output>
