@@ -212,11 +212,14 @@ function workspaceControl(def, value) {
 function workspaceValue(input, def) { if (def.type === 'multiSelect') return input.tagName === 'SELECT' ? [...input.selectedOptions].map((option) => option.value) : input.value; if (input.value === '') return null; if (def.type === 'number') { const value = Number(input.value); if (!Number.isFinite(value)) throw new Error('请输入有效数字'); return value; } return def.type === 'boolean' ? input.value === 'true' : input.value; }
 // 页面含未保存的字段定义或经历输入时，重新渲染或切换须由用户选择丢弃。
 function workspaceDirty() { return !!document.querySelector('[data-dirty="true"]'); }
-// 统一处理新建、重命名和删除；操作前保护草稿，删除预览绑定 revision，成功后才清理编辑状态。
+// 统一处理简历管理及清空内容；保护草稿，破坏性操作绑定确认版本，成功后才刷新编辑器。
 async function manageResumeProfile(action) {
   const status = document.getElementById('centerStatus');
-  const buttons = ['createResumeProfile', 'renameResumeProfile', 'deleteResumeProfile'].map((id) => document.getElementById(id));
+  const buttons = ['createResumeProfile', 'renameResumeProfile', 'clearResumeValues', 'deleteResumeProfile'].map((id) => document.getElementById(id));
   const select = document.getElementById('entryProfile');
+  // 清空等待期间禁止继续修改字段，防止新输入排到清空命令之后重新写回。
+  const editors = action === 'clearProfileValues' ? [...document.querySelectorAll('#basicFields input:enabled, #basicFields textarea:enabled, #basicFields select:enabled, #basicFields button:enabled')] : [];
+  editors.forEach((control) => { control.disabled = true; });
   buttons.forEach((button) => { button.disabled = true; }); select.disabled = true;
   try {
     // 按钮引起的失焦保存先完成；仍未保存的冲突草稿继续交给用户决定。
@@ -238,6 +241,11 @@ async function manageResumeProfile(action) {
         if (!name.trim()) throw new Error('简历名称不能为空');
         if (name.trim() === profile.name) return;
         payload = { profileId: profile.profileId, name: name.trim(), confirmed: true }; message = '简历已重命名。';
+      } else if (action === 'clearProfileValues') {
+        const values = database.fieldValues.filter((item) => item.profileId === profile.profileId && (LocalApplyProfileView.hasValue(item.value) || item.evidence !== undefined)).length;
+        if (!values) { cancelFieldEdit(); await reloadDataState(profile.profileId); status.textContent = '当前简历的全部字段内容已为空。'; return; }
+        if (!confirm(`清空简历“${profile.name}”的全部字段内容（${values} 项，包含收起的选填字段、动态字段及旧经历字段值）？\n字段、简历和经历结构、映射规则、其他简历及模型配置保留。清空前会保存恢复点，可在“数据与备份”恢复；该恢复点将替换上一次恢复点。`)) return;
+        payload = { profileId: profile.profileId, confirmed: true }; message = `已清空 ${values} 项字段内容，字段结构保留。可在“数据与备份”恢复清空前资料。`;
       } else {
         if (database.profiles.length <= 1) throw new Error('至少保留一份简历，可直接修改现有资料');
         const values = database.fieldValues.filter((item) => item.profileId === profile.profileId).length;
@@ -248,11 +256,12 @@ async function manageResumeProfile(action) {
       }
     }
     const { result } = await dataCommand(action, payload, database.revision);
-    cancelFieldEdit(); await reloadDataState(result);
+    cancelFieldEdit(); await reloadDataState(action === 'clearProfileValues' ? profile.profileId : result);
     if (action === 'createProfile') document.getElementById('newProfileName').value = '';
     status.textContent = message;
   } catch (error) { status.textContent = '未完成：' + error.message; }
   finally {
+    editors.forEach((control) => { if (control.isConnected) control.disabled = false; });
     buttons.forEach((button) => { button.disabled = false; }); select.disabled = false;
     document.getElementById('deleteResumeProfile').disabled = select.options.length <= 1;
   }
@@ -350,7 +359,7 @@ async function initWorkspace() {
     else await dataCommand('createField', { definition, profileId: document.getElementById('entryProfile').value, value: null }, workspaceDatabase.revision);
     cancelFieldEdit(); await reloadDataState(); document.getElementById('fieldStatus').textContent = '字段定义已保存，实际内容请在简历中心填写。';
   } catch (error) { document.getElementById('fieldStatus').textContent = '未保存：' + error.message; } finally { button.disabled = false; } });
-  for (const [id, action] of [['createResumeProfile', 'createProfile'], ['renameResumeProfile', 'renameProfile'], ['deleteResumeProfile', 'deleteProfile']]) {
+  for (const [id, action] of [['createResumeProfile', 'createProfile'], ['renameResumeProfile', 'renameProfile'], ['clearResumeValues', 'clearProfileValues'], ['deleteResumeProfile', 'deleteProfile']]) {
     document.getElementById(id).addEventListener('click', () => manageResumeProfile(action));
   }
   document.getElementById('entryProfile').addEventListener('change', async () => { const profileId = document.getElementById('entryProfile').value; try { if (workspaceDirty() && !confirm('切换档案将丢弃未保存编辑，是否继续？')) { document.getElementById('entryProfile').value = workspaceDatabase.activeProfileId; return; } cancelFieldEdit(); const next = await getState(); next.activeProfileId = profileId; await saveState(next); await reloadDataState(); } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });

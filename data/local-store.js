@@ -758,6 +758,21 @@
             await commit(db, null, previous, true);
             return { result, revision: db.revision };
           }
+          // 清空当前简历全部个人字段值（含动态及旧经历值），保留定义/绑定/经历和映射。
+          case 'clearProfileValues': {
+            keys(input, ['profileId', 'confirmed'], '清空字段内容');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '清空字段内容必须确认并携带版本');
+            check(db.profiles.some((profile) => profile.profileId === input.profileId), '目标档案不存在');
+            const rows = db.fieldValues.filter((row) => row.profileId === input.profileId && (row.value !== null || row.evidence !== undefined));
+            // 空字符串/空多选也视为已清空，避免旧界面保存空值后覆盖有效恢复点；0/false 属于内容。
+            result = { values: rows.filter((row) => (row.value !== null && row.value !== '' && (!Array.isArray(row.value) || row.value.length > 0)) || row.evidence !== undefined).length };
+            // 重复清空不增加版本，也不覆盖可恢复原资料的恢复点。
+            if (!result.values) return { result, revision: db.revision };
+            const updatedAt = now();
+            for (const row of rows) { row.value = null; row.source = 'manual'; row.updatedAt = updatedAt; delete row.evidence; }
+            await commit(db, null, previous, true);
+            return { result, revision: db.revision };
+          }
           case 'setValue': {
             keys(input, ['profileId', 'fieldId', 'entryId', 'value', 'source'], '保存字段值');
             const row = { profileId: input.profileId, fieldId: input.fieldId, entryId: input.entryId ?? null,

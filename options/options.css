@@ -196,7 +196,7 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 .resume-profile-controls { padding: 12px; margin: -12px -12px 8px; border: 1px solid transparent; border-radius: 12px; }
 /* 当前简历及管理操作独立成行，窄窗沿用工作台换行规则。 */
 .resume-profile-actions select { flex: 1; }
-#deleteResumeProfile:not(:disabled) { color: var(--err); }
+#deleteResumeProfile:not(:disabled), #clearResumeValues:not(:disabled) { color: var(--err); }
 .resume-main .is-target { scroll-margin-top: 24px; border-color: var(--brand); outline: none; border-radius: 12px; box-shadow: 0 0 0 3px var(--brand-weak); }
 
 /* 右下角快捷栏竖向排列，页面底部按整栏高度留白，避免挡住最后一项。 */

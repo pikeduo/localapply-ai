@@ -643,3 +643,36 @@ test('旧经历清理的恢复点或主库写入失败时不丢失当前资料',
     assert.deepEqual(await env.restart().read(), before);
   }
 });
+
+// 全字段清空覆盖隐藏、动态、类型化及旧经历值，保留原有定义和各档案的结构。
+test('清空字段内容需确认和版本，原子清空当前档案并支持恢复', async () => {
+  const env = await cleanupFixture();
+  for (const [label, type, content] of [['合成数字', 'number', 0], ['合成布尔', 'boolean', false], ['合成多选', 'multiSelect', ['合成选项']]]) await command(env.repo, 'createField', { profileId: 'p1', definition: { label, type, group: '合成清空测试' }, value: content });
+  await command(env.repo, 'importResume', { profileId: 'p1', fingerprint: 'f'.repeat(64), rows: [{ kind: 'basic', index: 0, key: 'name', value: '合成待清空姓名', evidence: { kind: 'manual', excerpt: '合成来源片段', page: 0, verified: false } }], overwrite: true }, (await env.repo.read()).revision);
+  const before = await env.repo.read(); const settings = structuredClone(env.disk['localapply.apiSettings']); const keys = structuredClone(env.disk['localapply.deviceKeys']);
+  const base = await env.repo.readLegacy(); const stale = structuredClone(base); stale.profiles.find((profile) => profile.id === 'p1').fields.find((field) => field.key === 'school').value = '合成旧页写回';
+  for (const [payload, revision] of [[{ profileId: 'p1' }, before.revision], [{ profileId: 'p1', confirmed: true }, undefined], [{ profileId: 'p1', confirmed: true }, before.revision - 1], [{ profileId: 'missing', confirmed: true }, before.revision], [{ profileId: 'p1', confirmed: true, extra: true }, before.revision]]) {
+    await assert.rejects(command(env.repo, 'clearProfileValues', payload, revision)); assert.deepEqual(await env.repo.read(), before);
+  }
+  const result = await command(env.repo, 'clearProfileValues', { profileId: 'p1', confirmed: true }, before.revision); const after = await env.restart().read();
+  assert.equal(result.result.values, 9, '四段经历、基础院校、姓名和三项类型化字段均被清空；空值不计数');
+  assert.ok(after.fieldValues.filter((row) => row.profileId === 'p1').every((row) => row.value === null && row.evidence === undefined));
+  assert.equal(after.fieldValues.length, before.fieldValues.length);
+  for (const table of ['profiles', 'fieldDefinitions', 'bindings', 'entries', 'mappingRules', 'drafts']) assert.deepEqual(after[table], before[table]);
+  assert.deepEqual(after.fieldValues.filter((row) => row.profileId === env.other), before.fieldValues.filter((row) => row.profileId === env.other));
+  assert.deepEqual(env.disk['localapply.apiSettings'], settings); assert.deepEqual(env.disk['localapply.deviceKeys'], keys); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
+  await assert.rejects(env.repo.saveLegacy(base, stale), /资料已变化/);
+  const empty = await command(env.repo, 'clearProfileValues', { profileId: 'p1', confirmed: true }, after.revision); assert.equal(empty.result.values, 0); assert.equal((await env.repo.read()).revision, after.revision); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
+  await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '' });
+  await command(env.repo, 'setValue', { profileId: 'p1', fieldId: before.fieldDefinitions.find((field) => field.label === '合成多选').fieldId, value: [] });
+  const blank = await env.repo.read(); const noChange = await command(env.repo, 'clearProfileValues', { profileId: 'p1', confirmed: true }, blank.revision); assert.equal(noChange.result.values, 0); assert.equal((await env.repo.read()).revision, blank.revision); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
+  await command(env.restart(), 'restoreRecovery', {}); assert.deepEqual((await env.repo.read()).fieldValues, before.fieldValues);
+});
+
+// 恢复点或主库落盘失败均不得造成半份简历被清空。
+test('清空字段内容写入失败时保持原库及字段值', async () => {
+  for (const failureAt of [0, 1]) {
+    const env = fixture(); await env.repo.initialize(); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成失败保护值' }); const before = await env.repo.read(); env.fail(failureAt);
+    await assert.rejects(command(env.repo, 'clearProfileValues', { profileId: 'p1', confirmed: true }, before.revision), /模拟磁盘/); assert.deepEqual(await env.restart().read(), before);
+  }
+});

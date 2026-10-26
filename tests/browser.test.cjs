@@ -2057,3 +2057,48 @@ for (const withExtension of [true, false]) {
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
+
+// 清空内容通过真实按钮确认，独立浏览器重启后验证空值及恢复点，而非仅检查显示文字。
+for (const withExtension of [true, false]) {
+  test(`简历清空内容：${withExtension ? '扩展' : 'file://'}确认、隔离、重启与恢复`, { timeout: 90000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'clear-values-')); let context; const errors = []; const mode = withExtension ? 'extension' : 'file';
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      let page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.setViewportSize({ width: 1440, height: 900 }); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      const seeded = await page.evaluate(async () => {
+        const db = (await dataRequest('localapply:read')).database; const profileId = db.activeProfileId;
+        await dataCommand('setValue', { profileId, fieldId: 'builtin.name', value: '合成清空姓名' }); await dataCommand('setValue', { profileId, fieldId: 'builtin.wechat', value: '合成隐藏字段内容' });
+        const fieldId = (await dataCommand('createField', { profileId, definition: { label: '合成动态数字', group: '合成清空模块', type: 'number' }, value: 0 })).result;
+        await dataCommand('importResume', { profileId, fingerprint: 'e'.repeat(64), overwrite: false, rows: [{ kind: 'education', index: 0, key: 'school', value: '合成旧经历学院', evidence: { kind: 'manual', excerpt: '合成来源', page: 0, verified: false } }] }, (await dataRequest('localapply:read')).database.revision);
+        const other = (await dataCommand('createProfile', { name: '合成保留简历' })).result; await dataCommand('setValue', { profileId: other, fieldId: 'builtin.name', value: '合成隔离姓名' });
+        const next = await getState(); next.activeProfileId = profileId; await saveState(next); await reloadDataState(profileId); return { profileId, other, fieldId };
+      });
+      // 读取完整规范数据库进行隔离检查，不借助 UI 投影掩盖隐藏值。
+      const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      const before = await read(); const settings = await page.evaluate(async () => (await getState()).settings);
+      const stale = await context.newPage(); await stale.goto(url); await workspacePage(stale, 'resumeCenter');
+      page.once('dialog', (dialog) => dialog.dismiss()); await page.locator('#clearResumeValues').click(); await page.waitForFunction(() => !document.getElementById('clearResumeValues').disabled);
+      assert.equal((await read()).revision, before.revision); assert.equal(await page.getByLabel('简历中心 · 姓名', { exact: true }).inputValue(), '合成清空姓名');
+      page.once('dialog', (dialog) => { assert.match(dialog.message(), /收起的选填字段/); assert.match(dialog.message(), /恢复点/); dialog.accept(); });
+      await page.locator('#clearResumeValues').click(); await page.waitForFunction(() => !document.getElementById('clearResumeValues').disabled && document.getElementById('centerStatus').textContent.startsWith('已清空'));
+      const after = await read(); assert.ok(after.fieldValues.filter((row) => row.profileId === seeded.profileId).every((row) => row.value === null && row.evidence === undefined));
+      for (const table of ['profiles', 'fieldDefinitions', 'bindings', 'entries', 'mappingRules']) assert.deepEqual(after[table], before[table]);
+      assert.deepEqual(after.fieldValues.filter((row) => row.profileId === seeded.other), before.fieldValues.filter((row) => row.profileId === seeded.other));
+      assert.deepEqual(await page.evaluate(async () => (await getState()).settings), settings);
+      assert.equal(await page.locator('#overviewValues').textContent(), '0'); assert.equal(await page.getByLabel('简历中心 · 姓名', { exact: true }).inputValue(), '');
+      await page.locator('#resumeToc').getByRole('button', { name: '档案与资料', exact: true }).click(); await page.screenshot({ path: path.join(testRoot, `clear-values-${mode}.png`) });
+      const staleName = stale.getByLabel('简历中心 · 姓名', { exact: true }); await staleName.fill('合成过期输入'); await staleName.blur(); await stale.evaluate(() => resumeSaveQueue);
+      assert.ok((await stale.locator('#centerStatus').textContent()).includes('保存失败')); assert.equal((await read()).revision, after.revision); await stale.close();
+      // 全空时重复点击不覆盖恢复点；明确放弃未保存日期草稿后也应清空界面。
+      const date = page.locator('[data-field-id="builtin.birthDate"] input'); await date.fill('2027-02-30'); page.once('dialog', (dialog) => dialog.accept()); await page.locator('#clearResumeValues').click();
+      await page.waitForFunction(() => !document.getElementById('clearResumeValues').disabled && document.getElementById('centerStatus').textContent.includes('已为空'));
+      assert.equal(await date.inputValue(), ''); assert.equal((await read()).revision, after.revision);
+      await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      assert.ok((await read()).fieldValues.filter((row) => row.profileId === seeded.profileId).every((row) => row.value === null));
+      await workspacePage(page, 'privacySettings'); await page.locator('#btnRestoreRecovery').click(); await page.waitForFunction(() => document.getElementById('backupMsg').textContent.includes('已恢复'));
+      assert.deepEqual((await read()).fieldValues, before.fieldValues); await workspacePage(page, 'resumeCenter'); assert.equal(await page.getByLabel('简历中心 · 姓名', { exact: true }).inputValue(), '合成清空姓名'); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}

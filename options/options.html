@@ -117,9 +117,10 @@
         <label for="entryProfile">当前简历</label>
         <select id="entryProfile" aria-label="当前简历"></select>
         <button id="renameResumeProfile" class="btn ghost">重命名简历</button>
+        <button id="clearResumeValues" class="btn ghost" type="button">清空全部字段内容</button>
         <button id="deleteResumeProfile" class="btn ghost">删除简历</button>
       </div>
-      <p id="profileManageHint" class="muted">下方可直接修改当前简历的资料；删除整份简历需确认，至少保留一份简历。</p>
+      <p id="profileManageHint" class="muted">下方可直接修改当前简历的资料；清空内容保留字段并保存恢复点，删除整份简历至少保留一份。两项操作均需确认。</p>
       <div id="legacyEntriesNotice" hidden><p id="legacyEntriesHint" class="muted"></p><button id="clearResumeEntries" class="btn ghost" type="button">清空当前简历的旧经历</button></div>
       </div>
       <details open><summary>编辑简历全部字段</summary><div id="basicFields" class="resume-groups"></div></details>
