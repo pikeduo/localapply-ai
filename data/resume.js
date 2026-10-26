@@ -1,4 +1,4 @@
-// 简历抽取契约：仅接受有限结构，模型来源片段须人工校对，不从文档正文提取字段。
+// 简历抽取契约：仅接受有限结构并保留未核实来源，不从文档正文提取字段。
 (function (global) {
   'use strict';
   const basic = { name: '姓名', birthDate: '出生日期', politicalStatus: '政治面貌', phone: '手机号', email: '邮箱', school: '毕业院校', major: '专业', degree: '学历', graduationDate: '毕业时间', gpa: 'GPA/排名', skills: '技能特长', languages: '语言证书' };
@@ -15,8 +15,8 @@
       '出生日期、出生年月、生日统一写入 basic.birthDate；仅按原文精度输出 YYYY、YYYY-MM 或 YYYY-MM-DD，只有年月绝不补日，只有年份绝不补月日，也不得根据年龄推算出生日期。evidence 保留原文日期片段。' +
       '政治面貌、政治状态统一写入 basic.politicalStatus，仅提取原文明示的身份，不推断政治面貌，不按职务、经历或其他个人信息猜测，未写明则省略。仅明确同义的简称可规范名称，具体党派名称保留原文，evidence 保留原始片段。' +
       '请直接阅读原文件或全部页面图片，识别正文及嵌入图片中的文字与版式，不遗漏图片型内容。跨页同一经历有明确依据时合并，避免重复。' +
-      '无法读取附件时返回 {"error":"无法读取附件"}，不要猜测。所有来源片段均须用户人工核对。' +
-      '没有依据的字段省略。education 用 school/major/degree/start/end，实习与工作用 company/role/start/end/description，项目用 title/role/start/end/description。';
+      '无法读取附件时返回 {"error":"无法读取附件"}，不要猜测。来源片段不代表已通过人工核对。' +
+      '未写明、空白或没有依据的字段直接省略或置为 null，禁止用未知/未提供等占位文字替代，不得把未提及推断为否。education 用 school/major/degree/start/end，实习与工作用 company/role/start/end/description，项目用 title/role/start/end/description。';
   }
   // 只忽略空白比较；改写、猜测、没有来源的值一律不能默认选中。
   function compact(text) { return String(text).replace(/\s+/g, ''); }
@@ -40,7 +40,7 @@
     const aliases = { '团员': '共青团员', '共青团团员': '共青团员', '中国共产主义青年团团员': '共青团员', '中国共产党党员': '中共党员', '预备党员': '中共预备党员', '中国共产党预备党员': '中共预备党员' };
     return Object.hasOwn(aliases, text) ? aliases[text] : text;
   }
-  // 文件/图片结果不伪称已本地核对原文，所有候选都需人工勾选；仅兼容历史文本夹具。
+  // 文件/图片结果不伪称已核对；手动模式候选保持未勾选，自动导入由独立命令处理。
   function normalize(raw, source) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('简历解析结果不是对象');
     const rows = [];
@@ -52,6 +52,8 @@
         // 只兼容模型结构化结果里的明确同义键，不利用代码猜测原文中的字段含义。
         const key = kind === 'basic' && birthAliases.has(fieldKey) ? 'birthDate' : kind === 'basic' && politicalAliases.has(fieldKey) ? 'politicalStatus' : fieldKey;
         if (!Object.hasOwn(labels, key)) continue;
+        // 模型显式缺失值只表示没有提取到资料，自动导入也不得用它清空已有值。
+        if (cell === null || (cell && typeof cell === 'object' && !Array.isArray(cell) && cell.value === null)) continue;
         if (!cell || typeof cell !== 'object' || typeof cell.value !== 'string' || cell.value.length > 10000) throw new Error('简历字段值格式错误');
         const value = key === 'birthDate' ? normalizeBirthDate(cell.value) : key === 'politicalStatus' ? normalizePoliticalStatus(cell.value) : cell.value.trim(); if (!value) continue;
         if (['birthDate', 'politicalStatus'].includes(key) && rows.some((row) => row.kind === kind && row.index === index && row.key === key)) {
@@ -66,9 +68,9 @@
           evidence: { kind: source.mode === 'vision' ? 'vision' : source.type, excerpt, page, verified } });
       }
     }
-    if (raw.basic !== undefined) append(raw.basic, 'basic', 0);
+    if (raw.basic !== undefined && raw.basic !== null) append(raw.basic, 'basic', 0);
     for (const kind of Object.keys(kinds)) {
-      if (raw[kind] === undefined) continue;
+      if (raw[kind] === undefined || raw[kind] === null) continue;
       if (!Array.isArray(raw[kind]) || raw[kind].length > 100) throw new Error('重复经历数量或格式错误');
       raw[kind].forEach((fields, index) => append(fields, kind, index));
     }

@@ -388,6 +388,7 @@ for (const withExtension of [true, false]) {
       await detectModel(page);
       api.modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成 Responses 姓名', evidence: '合成 Responses 姓名', page: 1 } } });
       await workspacePage(page, 'pdfCard');
+      await page.locator('#autoImportResume').uncheck(); // 保留原有可选手动校对回归。
       await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
       await page.locator('#sendResume').waitFor({ state: 'visible' }); await page.locator('#sendResume').click();
       await page.locator('#importRow').waitFor({ state: 'visible' });
@@ -444,6 +445,7 @@ for (const withExtension of [true, false]) {
     // 真实上传并本地预览，证明明确发送前没有聊天请求。
     const prepare = async (name, buffer) => {
       await workspacePage(page, 'pdfCard');
+      await page.locator('#autoImportResume').uncheck(); // 此组仍验证可选逐项校对流程。
       const count = api.calls.length;
       await page.locator('#pdfFile').setInputFiles({ name, mimeType: name.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer });
       await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
@@ -1136,6 +1138,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       await detectModel(page);
       await workspacePage(page, 'pdfCard');
       modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成文件姓名', evidence: '合成文件姓名', page: 1 } } });
+      await page.locator('#autoImportResume').uncheck();
       await page.locator('#pdfFile').setInputFiles(path.join(ROOT, 'test-pages/fake-scan.pdf'));
       await page.waitForFunction(() => !document.getElementById('btnExtract').disabled);
       assert.ok(!await page.locator('#sendResume').isHidden(), await page.locator('#pdfStatus').textContent());
@@ -2207,6 +2210,7 @@ for (const withExtension of [true, false]) {
       // 上传仅校验和生成预览，不能自动发送简历、获取模型列表或执行能力探针。
       const prepare = async (type) => {
         await workspacePage(page, 'pdfCard'); const before = api.calls.length;
+        await page.locator('#autoImportResume').uncheck(); // 协议回归独立验证手动模式不自动入库。
         await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-direct.' + type, mimeType: type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures[type]() });
         await page.waitForFunction(() => !document.getElementById('btnExtract').disabled && !document.getElementById('sendResume').hidden);
         assert.equal(api.calls.length, before); assert.ok((await page.locator('#pdfStatus').textContent()).includes('无需预先检测'));
@@ -2248,7 +2252,7 @@ for (const withExtension of [true, false]) {
       await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-birth-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
       api.modelApi.chatContent = JSON.stringify({ basic: { birthYearMonth: { value: '1997 年 8 月', evidence: '出生年月：1997 年 8 月', page: 1 } } });
       const before = (await page.evaluate(() => dataRequest('localapply:read'))).database;
-      await workspacePage(page, 'pdfCard'); await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-birth.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures.docx('出生年月：1997 年 8 月。') });
+      await workspacePage(page, 'pdfCard'); await page.locator('#autoImportResume').uncheck(); await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-birth.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures.docx('出生年月：1997 年 8 月。') });
       await page.waitForFunction(() => !document.getElementById('btnExtract').disabled && !document.getElementById('sendResume').hidden); assert.equal(api.calls.length, 0);
       await page.locator('#sendResume').click(); await page.waitForFunction(() => !document.getElementById('sendResume').disabled && document.getElementById('pdfStatus').textContent.includes('解析完成'));
       const review = page.locator('#pdfReview .review-cell'); assert.equal(await review.count(), 1); assert.ok((await review.textContent()).includes('出生日期')); assert.equal(await review.locator('input:not([type="checkbox"])').inputValue(), '1997-08'); assert.equal(await review.locator('input[type="checkbox"]').isChecked(), false);
@@ -2266,6 +2270,76 @@ for (const withExtension of [true, false]) {
   });
 }
 
+// 默认自动导入走真实存储；覆盖、缺失保留、取消及恢复只使用合成文档和本地 Mock。
+for (const withExtension of [true, false]) {
+  test(`自动导入简历：${withExtension ? '扩展' : 'file://'}覆盖、保留、重试和重启恢复`, { timeout: 120000 }, async (t) => {
+    const fixtures = require('./resume-fixtures.cjs'); const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'auto-resume-')); const api = await serve(); let context; let page; const errors = [];
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'aiSettings');
+      await page.locator('#provider').fill(api.base + '/v1'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves()); await page.locator('#apiKey').fill('synthetic-auto-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
+      await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-auto-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+      const ids = await page.evaluate(async () => {
+        const first = (await dataRequest('localapply:read')).database.activeProfileId;
+        const other = (await dataCommand('createProfile', { name: '合成其他简历' })).result;
+        for (const [fieldId, value] of [['builtin.name', '合成原姓名'], ['builtin.phone', '13900000000'], ['builtin.email', 'keep@example.test'], ['builtin.birthDate', '1991-01-01'], ['builtin.politicalStatus', '群众']]) await dataCommand('setValue', { profileId: first, fieldId, value });
+        await dataCommand('setValue', { profileId: other, fieldId: 'builtin.name', value: '合成其他姓名' }); await reloadDataState(); return { first, other };
+      });
+      await workspacePage(page, 'pdfCard'); assert.equal(await page.locator('#autoImportResume').isChecked(), true); assert.equal(await page.locator('#targetProfile').isVisible(), true);
+      await page.locator('#targetProfile').selectOption(ids.first);
+      // 不读取真实简历：Mock 的空值故意与原资料不同，验证它们不会触发清空。
+      api.modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成简历新姓名', evidence: '姓名：合成简历新姓名', page: 1 }, birthDate: { value: '1994 年 6 月', evidence: '出生年月：1994 年 6 月', page: 1 }, politicalStatus: { value: '团员', evidence: '政治面貌：团员', page: 1 }, phone: null, email: { value: null }, gpa: { value: '  ' } }, education: null });
+      // 两种文件都通过真实选择、渲染和发送入口；预览本身不发请求或写入资料。
+      const prepare = async (type = 'docx') => {
+        await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-auto.' + type, mimeType: type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: type === 'pdf' ? fixtures.pdf() : fixtures.docx('姓名：合成简历新姓名；出生年月：1994 年 6 月；政治面貌：团员。') });
+        await page.waitForFunction(() => !document.getElementById('btnExtract').disabled && !document.getElementById('sendResume').hidden);
+      };
+      // 页面读取只经正式 RPC，字段比较不依赖 DOM 是否碰巧显示了新文字。
+      const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      const field = (database, key, profileId = ids.first) => database.fieldValues.find((row) => row.profileId === profileId && row.fieldId === 'builtin.' + key && row.entryId === null);
+      let imported;
+      await t.test('默认自动覆盖非空结果，缺失内容及其他简历保留，导入目标不随刷新变化', async () => {
+        const before = await read(); await prepare(); assert.equal(api.calls.length, 0); assert.equal((await read()).revision, before.revision);
+        api.modelApi.chatHold = true; const started = new Promise((resolve) => { api.modelApi.onChat = resolve; }); await page.locator('#sendResume').click(); await started;
+        await page.evaluate(() => reloadDataState()); assert.equal(await page.locator('#targetProfile').inputValue(), ids.first); assert.equal(await page.locator('#targetProfile').isDisabled(), true);
+        api.modelApi.chatHold = false; api.modelApi.releaseChat(); await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('已自动导入'));
+        imported = await read(); assert.equal(imported.revision, before.revision + 1); assert.equal(field(imported, 'name').value, '合成简历新姓名'); assert.equal(field(imported, 'birthDate').value, '1994-06'); assert.equal(field(imported, 'politicalStatus').value, '共青团员');
+        assert.equal(field(imported, 'phone').value, '13900000000'); assert.equal(field(imported, 'email').value, 'keep@example.test'); assert.equal(field(imported, 'name', ids.other).value, '合成其他姓名');
+        assert.equal(field(imported, 'name').source, 'ai-imported'); assert.equal(field(imported, 'name').evidence.verified, false); assert.deepEqual(imported.fieldDefinitions, before.fieldDefinitions);
+        assert.equal(await page.locator('#pdfReview .review-cell').count(), 0); assert.equal(await page.locator('#importRow').isVisible(), false); assert.equal(api.calls.length, 1);
+        await page.locator('#pdfCard').screenshot({ path: path.join(testRoot, `auto-resume-${withExtension ? 'extension' : 'file'}.png`) });
+      });
+      await t.test('解析取消及迟到响应不会写入资料', async () => {
+        const before = await read(); await prepare('pdf'); api.modelApi.chatHold = true; const started = new Promise((resolve) => { api.modelApi.onChat = resolve; }); await page.locator('#sendResume').click(); await started;
+        await page.locator('#cancelResume').click(); api.modelApi.chatHold = false; api.modelApi.releaseChat(); await page.waitForFunction(() => !document.getElementById('autoImportResume').disabled);
+        assert.ok((await page.locator('#pdfStatus').textContent()).includes('未写入')); assert.deepEqual(await read(), before); assert.equal(await page.locator('#retryResumeImport').isVisible(), false);
+      });
+      await t.test('错误结构不产生覆盖，界面可以继续解析', async () => {
+        const before = await read(); api.modelApi.chatContent = '{"basic":{"name":{"value":123}}}'; await prepare(); await page.locator('#sendResume').click();
+        await page.waitForFunction(() => !document.getElementById('sendResume').disabled && document.getElementById('pdfStatus').textContent.includes('解析失败'));
+        assert.deepEqual(await read(), before); assert.equal(await page.locator('#retryResumeImport').isVisible(), false); await page.locator('#cancelResume').click();
+      });
+      await t.test('保存传输失败保留解析结果，重试不重复调用模型', async () => {
+        api.modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成重试姓名', evidence: '合成重试姓名', page: 1 } } }); await prepare('pdf'); await page.locator('#targetProfile').selectOption(ids.first);
+        // 只故障注入一次 UI 命令传输；实际磁盘失败与原子写入由数据层测试另行验证。
+        await page.evaluate(() => { const original = dataCommand; let failOnce = true; dataCommand = async function (action, ...args) { if (action === 'autoImportResume' && failOnce) { failOnce = false; throw new Error('合成命令传输失败'); } return original(action, ...args); }; });
+        const before = await read(); await page.locator('#sendResume').click(); await page.locator('#retryResumeImport').waitFor({ state: 'visible' }); assert.deepEqual(await read(), before);
+        const count = api.calls.length; await page.locator('#retryResumeImport').click(); await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('已自动导入'));
+        assert.equal(api.calls.length, count); const after = await read(); assert.equal(after.revision, before.revision + 1); assert.equal(field(after, 'name').value, '合成重试姓名'); assert.equal(field(after, 'birthDate').value, '1994-06');
+      });
+      await t.test('刷新及整个浏览器重启保留结果，并可恢复覆盖前内容', async () => {
+        await page.reload(); await workspacePage(page, 'pdfCard'); assert.equal(field(await read(), 'name').value, '合成重试姓名'); assert.equal(await page.locator('#autoImportResume').isChecked(), true);
+        await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'pdfCard');
+        assert.equal(field(await read(), 'name').value, '合成重试姓名'); await workspacePage(page, 'privacySettings'); await page.locator('#btnRestoreRecovery').click(); await page.waitForFunction(() => document.getElementById('backupMsg').textContent.includes('已恢复'));
+        const restored = await read(); assert.deepEqual(restored.fieldValues, imported.fieldValues); assert.deepEqual(restored.fieldDefinitions, imported.fieldDefinitions); assert.equal(field(restored, 'name', ids.other).value, '合成其他姓名');
+        assert.equal(api.calls.length, 4); assert.ok(api.calls.every((call) => !call.probe)); assert.deepEqual(errors, []);
+      });
+    } finally { api.modelApi.releaseChat?.(); if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
 // 合成政治面貌通过模型、校对与原有下拉框完整导入；未列入公共选项的原文不得被丢失。
 for (const withExtension of [true, false]) {
   test(`政治面貌导入：${withExtension ? '扩展' : 'file://'}标准选项、原文保留与重启`, { timeout: 90000 }, async () => {
@@ -2280,7 +2354,7 @@ for (const withExtension of [true, false]) {
       // 每次只确认模型明确给出的政治面貌；覆盖已有值也通过原有覆盖复选框。
       const importStatus = async (raw, key, expected, overwrite = false) => {
         api.modelApi.chatContent = JSON.stringify({ basic: { [key]: { value: raw, evidence: '政治面貌：' + raw, page: 1 } } });
-        await workspacePage(page, 'pdfCard'); await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-political.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures.docx('政治面貌：' + raw + '。') });
+        await workspacePage(page, 'pdfCard'); await page.locator('#autoImportResume').uncheck(); await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-political.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures.docx('政治面貌：' + raw + '。') });
         await page.waitForFunction(() => !document.getElementById('btnExtract').disabled && !document.getElementById('sendResume').hidden); const revision = (await page.evaluate(() => dataRequest('localapply:read'))).database.revision;
         await page.locator('#sendResume').click(); await page.waitForFunction(() => !document.getElementById('sendResume').disabled && document.getElementById('pdfStatus').textContent.includes('解析完成'));
         const review = page.locator('#pdfReview .review-cell'); assert.equal(await review.count(), 1); assert.ok((await review.textContent()).includes('政治面貌')); assert.equal(await review.locator('input:not([type="checkbox"])').inputValue(), expected); assert.equal(await review.locator('input[type="checkbox"]').isChecked(), false);

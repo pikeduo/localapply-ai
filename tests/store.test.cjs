@@ -767,3 +767,37 @@ test('政治面貌导入写入既有下拉字段，来源、覆盖和自定义�
   assert.equal((await command(env.repo, 'importResume', changed, db.revision)).result.kept, 1); assert.equal(value(await env.repo.read(), 'p1', definition.fieldId), '共青团员');
   await command(env.repo, 'importResume', { ...changed, overwrite: true }, (await env.repo.read()).revision); db = await env.restart().read(); assert.equal(value(db, 'p1', definition.fieldId), '无党派人士'); assert.deepEqual(db.fieldDefinitions.find((field) => field.fieldId === definition.fieldId).options, definition.options);
 });
+
+// 模型缺失值只代表没有提供资料，不能替代原值；畸形非空字段仍按契约拒绝。
+test('简历缺失、null 与空白字段跳过，不转换为清空或推断值', () => {
+  const { resume } = fixture(); const source = { type: 'docx', mode: 'vision', pages: ['合成页面'] };
+  const rows = resume.normalize({ basic: { name: { value: '合成新姓名', evidence: '合成新姓名', page: 1 }, phone: null, email: { value: null }, gpa: { value: '  ' } }, education: null }, source);
+  assert.equal(rows.length, 1); assert.equal(rows[0].key, 'name'); assert.equal(rows[0].checked, false);
+  assert.throws(() => resume.normalize({ basic: { phone: { value: 123 } } }, source), /格式/);
+  assert.throws(() => resume.normalize({ basic: null, education: [] }, source), /没有符合/);
+});
+
+// 自动导入只覆盖返回的非空行，保留缺失字段及其他档案；来源不能冒充人工已核对。
+test('简历自动导入优先覆盖已提取值，缺失保留，写前恢复点可撤销', async () => {
+  const env = fixture(); await env.repo.initialize(); const other = (await command(env.repo, 'createProfile', { name: '合成保留档案' })).result;
+  for (const [fieldId, content] of [['builtin.name', '合成旧姓名'], ['builtin.phone', '13900000000'], ['builtin.email', 'keep@example.test'], ['builtin.birthDate', '1988'], ['builtin.politicalStatus', '群众']]) await command(env.repo, 'setValue', { profileId: 'p1', fieldId, value: content });
+  await command(env.repo, 'setValue', { profileId: other, fieldId: 'builtin.name', value: '合成另一姓名' });
+  const cell = (value) => ({ value, evidence: '合成明确资料', page: 1 });
+  const normalized = env.resume.normalize({ basic: { name: cell('合成新姓名'), birthDate: cell('1994年6月'), politicalStatus: cell('团员'), phone: null, email: { value: null }, gpa: cell(' ') } }, { type: 'docx', mode: 'vision', pages: ['合成页面'] });
+  const before = await env.repo.read(); const result = await command(env.repo, 'autoImportResume', { profileId: 'p1', fingerprint: 'd'.repeat(64), rows: normalized.map(({ kind, index, key, value, evidence }) => ({ kind, index, key, value, evidence })), overwrite: true }, before.revision);
+  assert.equal(result.result.saved, 3); assert.equal(result.result.overwritten, 3); const after = await env.restart().read();
+  assert.equal(value(after, 'p1', 'builtin.name'), '合成新姓名'); assert.equal(value(after, 'p1', 'builtin.birthDate'), '1994-06'); assert.equal(value(after, 'p1', 'builtin.politicalStatus'), '共青团员'); assert.equal(value(after, 'p1', 'builtin.phone'), '13900000000'); assert.equal(value(after, 'p1', 'builtin.email'), 'keep@example.test');
+  assert.equal(after.fieldValues.find((row) => row.profileId === 'p1' && row.fieldId === 'builtin.name').source, 'ai-imported'); assert.equal(after.fieldValues.find((row) => row.profileId === 'p1' && row.fieldId === 'builtin.name').evidence.verified, false);
+  assert.deepEqual(after.fieldDefinitions, before.fieldDefinitions); assert.deepEqual(after.fieldValues.filter((row) => row.profileId === other), before.fieldValues.filter((row) => row.profileId === other)); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
+  await command(env.repo, 'restoreRecovery', {}); assert.deepEqual((await env.repo.read()).fieldValues, before.fieldValues);
+});
+
+// 自动覆盖必须具备有效目标、版本和完整行契约；恢复点或主库失败均不能出现部分写入。
+test('自动导入的版本、结构和写入失败保护原资料', async () => {
+  for (const failureAt of [0, 1]) {
+    const env = fixture(); await env.repo.initialize(); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成原值' }); const before = await env.repo.read();
+    const payload = { profileId: 'p1', fingerprint: 'e'.repeat(64), overwrite: true, rows: [{ kind: 'basic', index: 0, key: 'name', value: '合成新值', evidence: { kind: 'vision', excerpt: '合成新值', page: 1, verified: false } }] };
+    await assert.rejects(command(env.repo, 'autoImportResume', payload)); await assert.rejects(command(env.repo, 'autoImportResume', payload, before.revision - 1)); await assert.rejects(command(env.repo, 'autoImportResume', { ...payload, overwrite: false }, before.revision)); await assert.rejects(command(env.repo, 'autoImportResume', { ...payload, rows: [] }, before.revision));
+    env.fail(failureAt); await assert.rejects(command(env.repo, 'autoImportResume', payload, before.revision), /模拟磁盘/); assert.deepEqual(await env.restart().read(), before);
+  }
+});

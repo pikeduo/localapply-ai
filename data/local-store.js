@@ -716,13 +716,17 @@
             keys(input, ['entryId', 'title'], '编辑经历'); string(input.title, '经历标题', 500, true);
             const entry = db.entries.find((row) => row.entryId === input.entryId); check(entry, '经历不存在'); entry.title = input.title; break;
           }
+          // 简历导入共用严格结构校验；自动模式按非空结果覆盖并保留写入前恢复点。
+          case 'autoImportResume':
           case 'importResume': {
+            const automatic = request.action === 'autoImportResume';
             keys(input, ['profileId', 'fingerprint', 'rows', 'overwrite'], '简历导入');
-            check(request.expectedRevision !== undefined, '简历导入必须先校对并携带版本');
+            check(request.expectedRevision !== undefined, '简历导入必须携带读取时的版本');
             check(db.profiles.some((p) => p.profileId === input.profileId), '目标档案不存在');
             check(/^[a-f0-9]{64}$/.test(input.fingerprint) && typeof input.overwrite === 'boolean', '简历导入参数错误');
+            if (automatic) check(input.overwrite === true, '自动导入应按简历内容覆盖已提取字段');
             global.LocalApplyResume.validateRows(input.rows);
-            result = { saved: 0, kept: 0 };
+            result = automatic ? { saved: 0, kept: 0, overwritten: 0 } : { saved: 0, kept: 0 };
             for (const cell of input.rows) {
               const builtinId = 'builtin.' + cell.key;
               const fieldId = db.fieldDefinitions.some((d) => d.fieldId === builtinId) ? builtinId : 'resume.' + cell.key;
@@ -746,14 +750,17 @@
               }
               const index = db.fieldValues.findIndex((v) => v.profileId === input.profileId && v.fieldId === fieldId && v.entryId === entryId);
               if (index >= 0 && db.fieldValues[index].value !== '' && db.fieldValues[index].value !== null && !input.overwrite) { result.kept++; continue; }
+              if (automatic && index >= 0 && db.fieldValues[index].value !== '' && db.fieldValues[index].value !== null) result.overwritten++;
               // 日期精度和明确的下拉同义值仅做无损规范，不改变原始来源片段或猜测个人身份。
               const value = cell.kind === 'basic' && cell.key === 'birthDate' ? global.LocalApplyResume.normalizeBirthDate(cell.value)
                 : cell.kind === 'basic' && cell.key === 'politicalStatus' ? global.LocalApplyResume.normalizePoliticalStatus(cell.value) : cell.value;
-              const row = { profileId: input.profileId, fieldId, entryId, value, updatedAt: now(), source: 'ai-confirmed',
+              const row = { profileId: input.profileId, fieldId, entryId, value, updatedAt: now(), source: automatic ? 'ai-imported' : 'ai-confirmed',
                 evidence: { ...clone(cell.evidence), fingerprint: input.fingerprint } };
               if (index >= 0) db.fieldValues[index] = row; else db.fieldValues.push(row);
               result.saved++;
             }
+            // 自动覆盖前保留完整恢复点；校验或落盘失败不会产生部分导入。
+            if (automatic) { await commit(db, null, previous, true); return { result, revision: db.revision }; }
             break;
           }
           case 'deleteEntry': {

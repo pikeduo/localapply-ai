@@ -142,24 +142,28 @@
       </div>
       <p id="resumeFileInfo" class="muted" role="status">尚未选择文件</p>
       <div class="row">
+        <label class="lbl" for="targetProfile">导入到简历</label><select id="targetProfile"></select>
+        <label><input id="autoImportResume" type="checkbox" checked /> 解析后自动导入，简历内容优先</label>
+      </div>
+      <p class="muted">识别到的非空字段自动覆盖原值，简历未提供的字段保留。导入前保存恢复点（替换上一次恢复点）；可取消自动导入，改为先校对。</p>
+      <div class="row">
         <input type="file" id="pdfFile" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden />
         <button id="btnExtract" class="btn plain">重新生成预览</button>
         <button id="btnDetectImport" class="btn plain">检测识别能力（可选）</button>
-        <button id="sendResume" class="btn" hidden>发送内容给当前模型解析</button>
+        <button id="sendResume" class="btn" hidden>解析并自动导入</button>
+        <button id="retryResumeImport" class="btn" hidden>重试自动导入</button>
         <button id="cancelResume" class="btn ghost">取消并清理草稿</button>
       </div>
       <div id="pdfStatus" class="muted" style="margin-top:8px" role="status"></div>
       <details id="resumePreview"><summary>简历预览（完整页面，含文档内嵌图片）</summary><div id="sourcePreview"></div></details>
       <div id="pdfReview"></div>
       <div class="row" id="importRow" style="display:none">
-        <label class="lbl">导入到档案</label>
-        <select id="targetProfile"></select>
         <label><input id="overwriteResume" type="checkbox" /> 覆盖勾选项已有值</label>
         <button id="refreshReview" class="btn ghost">刷新差异</button>
         <button id="selectAllResume" class="btn ghost">已逐项校对，全部勾选</button>
         <button id="btnImport" class="btn">确认导入勾选字段</button>
       </div>
-      <p class="muted">PDF/DOCX 最多 10 MiB、30 页/图。代码只检查文件和转页面图片，不抽取正文或识别简历字段。可直接发送完整页面图片给所选视觉模型（未配置时使用主模型），无需预先检测；近期可选诊断已验证支持原文件时优先直传。不支持时显示实际调用错误，不自动换模型重试。所有模型引用和字段值仍须人工核对；原文件及页面图片不持久化，同一文件重复导入复用经历，默认仅补空白。</p>
+      <p class="muted">PDF/DOCX 最多 10 MiB、30 页/图。代码只检查文件和转页面图片，不抽取正文或识别简历字段。可直接发送完整页面图片给所选视觉模型（未配置时使用主模型），无需预先检测；近期可选诊断已验证支持原文件时优先直传。不支持时显示实际调用错误，不自动换模型重试。自动导入会保留模型来源，识别有误可在简历中心修改或从“数据与备份”恢复；原文件及页面图片不持久化，同一文件重复导入复用经历。</p>
     </section>
     </section>
 

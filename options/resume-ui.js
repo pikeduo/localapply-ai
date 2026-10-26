@@ -1,9 +1,10 @@
-// 简历中心与导入审核：本地读取→明确发送→逐项校对→一次提交，不保存原文件。
+// 简历中心与导入：本地预览→用户发起解析→默认自动覆盖非空候选，保留可选手动校对。
 'use strict';
 let resumeJob = null;
 let resumeSource = null;
 let resumeRows = [];
 let resumeDatabase = null;
+let resumeCommitBusy = false; // 原子写入期间不接收新文件，避免把已提交操作误当作可取消任务。
 let selectedResumeFile = null; // 仅留在当前页面内存，取消或识别完成后释放。
 // 清理旧任务及其草稿，迟到响应不能重建已取消的审核结果。
 function clearResume(message = '', keepFile = false) {
@@ -17,11 +18,13 @@ function clearResume(message = '', keepFile = false) {
   $('#sourcePreview').textContent = ''; $('#pdfReview').replaceChildren();
   $('#resumePreview').open = false; $('#resumeFileInfo').textContent = '尚未选择文件';
   $('#importRow').style.display = 'none'; $('#sendResume').hidden = true;
+  $('#retryResumeImport').hidden = true;
   $('#sendResume').disabled = false;
   $('#pdfStatus').textContent = message; $('#btnExtract').disabled = false;
 }
 // 本地仅生成页面预览，包含所有可渲染文字和图片；不做字段抽取和文字识别。
 async function prepareResume(file = selectedResumeFile || $('#pdfFile').files[0]) {
+  if (resumeCommitBusy) { $('#pdfStatus').textContent = '正在保存导入资料，请稍候再更换文件。'; return; }
   if (!file) { $('#pdfStatus').textContent = '请先选择 PDF 或 DOCX'; return; }
   clearResume();
   selectedResumeFile = file;
@@ -38,15 +41,17 @@ async function prepareResume(file = selectedResumeFile || $('#pdfFile').files[0]
       $('#sourcePreview').append(image);
     }
     $('#resumePreview').open = true;
-    $('#pdfStatus').textContent = `已生成 ${source.pages.length} 张页面预览，文字和嵌入图片均交由模型识别。尚未发送，可直接点击“发送内容给当前模型解析”，无需预先检测。`;
+    $('#pdfStatus').textContent = `已生成 ${source.pages.length} 张页面预览，尚未发送。可直接点击“${$('#sendResume').textContent}”，无需预先检测。`;
     $('#sendResume').hidden = false;
   } catch (error) { if (resumeJob === job) clearResume('读取失败：' + error.message); }
   finally { if (resumeJob === job) $('#btnExtract').disabled = false; }
 }
-// 解析失败或取消都不写入数据库，所有结果必须经过人工选择。
+// 用户点击后才发送文件；结果默认自动导入，失败或取消不清空原有资料。
 async function analyzeResume() {
   const job = resumeJob; const source = resumeSource;
-  if (!job || !source) return;
+  if (!job || !source || resumeCommitBusy) return;
+  const automatic = $('#autoImportResume').checked; const profileId = $('#targetProfile').value;
+  $('#targetProfile').disabled = $('#autoImportResume').disabled = true;
   $('#sendResume').disabled = true; $('#btnExtract').disabled = true;
   $('#pdfStatus').textContent = '正在调用当前模型解析，最长每次请求 2 分钟，可随时取消…';
   try {
@@ -65,17 +70,56 @@ async function analyzeResume() {
     // 文件识别结束释放原字节，页面预览仅留在本次内存供人工核对。
     source.bytes = source.renderBytes = selectedResumeFile = null;
     $('#sendResume').hidden = true;
-    $('#pdfStatus').textContent = '解析完成。所有字段均由模型识别，默认不勾选；请对照页面图片核对引用、字段值及目标档案后选择导入。';
-    $('#importRow').style.display = '';
-    await renderResumeReview();
+    if (automatic) await autoImportResume(job, profileId);
+    else {
+      $('#targetProfile').value = profileId;
+      $('#pdfStatus').textContent = '解析完成，当前为手动校对模式。请核对并勾选需要导入的字段。';
+      $('#importRow').style.display = ''; await renderResumeReview();
+    }
   } catch (error) {
     if (resumeJob === job) { $('#pdfStatus').textContent = '解析失败：' + error.message; $('#sendResume').hidden = false; }
   } finally {
+    // 旧任务取消后可能立即开始新解析，旧回调不得解除新任务的目标锁定。
+    if (!resumeJob || resumeJob === job) $('#targetProfile').disabled = $('#autoImportResume').disabled = false;
     if (resumeJob === job) { $('#sendResume').disabled = false; $('#btnExtract').disabled = false; }
   }
 }
+// 将完整的非空解析结果一次写入点击时指定的档案；失败保留结果，重试不再调用模型。
+async function autoImportResume(job = resumeJob, profileId = $('#targetProfile').value) {
+  const source = resumeSource; if (!job || !source || !resumeRows.length || resumeCommitBusy) return;
+  let writing = false;
+  $('#retryResumeImport').hidden = true;
+  try {
+    await resumeSaveQueue;
+    if (resumeJob !== job || job.controller.signal.aborted) return;
+    if (workspaceDirty()) throw new Error('存在未保存的资料编辑，请先保存或处理草稿，再重试自动导入');
+    const { database } = await dataRequest('localapply:read');
+    if (resumeJob !== job || job.controller.signal.aborted) return;
+    const profile = database.profiles.find((item) => item.profileId === profileId); if (!profile) throw new Error('目标简历已被删除，请重新选择目标简历');
+    writing = resumeCommitBusy = true; $('#cancelResume').disabled = $('#pdfFile').disabled = $('#targetProfile').disabled = $('#autoImportResume').disabled = true;
+    $('#pdfStatus').textContent = '解析完成，正在自动导入并保存恢复点…';
+    const rows = resumeRows.map(({ kind, index, key, value, evidence }) => ({ kind, index, key, value, evidence }));
+    const { result } = await dataCommand('autoImportResume', { profileId, fingerprint: source.fingerprint, rows, overwrite: true }, database.revision);
+    if (resumeJob !== job) return;
+    clearResume(`解析完成，已自动导入到“${profile.name}”：${result.saved} 项（覆盖 ${result.overwritten} 项）。未识别字段保留；可在“数据与备份”恢复。`);
+    await reloadDataState();
+  } catch (error) {
+    if (resumeJob === job) { $('#pdfStatus').textContent = '解析成功，自动导入未完成：' + error.message + '。解析结果已保留，可重试导入，无需再次调用模型。'; $('#retryResumeImport').hidden = false; }
+  } finally {
+    if (writing) resumeCommitBusy = false;
+    if (!resumeJob || resumeJob === job) $('#cancelResume').disabled = $('#pdfFile').disabled = $('#targetProfile').disabled = $('#autoImportResume').disabled = false;
+  }
+}
+// 自动导入默认开启；切换只改变待执行方式，不因勾选开关直接写入资料。
+function updateResumeImportMode() {
+  const automatic = $('#autoImportResume').checked; $('#sendResume').textContent = automatic ? '解析并自动导入' : '解析并校对';
+  if (!resumeRows.length) return;
+  $('#importRow').style.display = automatic ? 'none' : ''; $('#retryResumeImport').hidden = !automatic;
+  if (!automatic) renderResumeReview().catch((error) => { $('#pdfStatus').textContent = '读取校对结果失败：' + error.message; });
+}
 // 文件选择和拖放使用同一入口；一次只接收一份简历，预览不会调用模型。
 function acceptResumeFiles(files) {
+  if (resumeCommitBusy) { $('#pdfStatus').textContent = '正在保存导入资料，请稍候再更换文件。'; return; }
   if (files.length !== 1) { clearResume('请每次选择或拖入一份 PDF/DOCX 简历'); return; }
   return prepareResume(files[0]);
 }
@@ -255,6 +299,8 @@ function initResume() {
   $('#btnExtract').addEventListener('click', () => prepareResume());
   $('#sendResume').addEventListener('click', analyzeResume);
   $('#btnImport').addEventListener('click', confirmResume);
+  $('#retryResumeImport').addEventListener('click', () => autoImportResume());
+  $('#autoImportResume').addEventListener('change', updateResumeImportMode); updateResumeImportMode();
   $('#selectAllResume').addEventListener('click', () => {
     resumeRows.forEach((row) => { row.checked = true; });
     document.querySelectorAll('#pdfReview input[type="checkbox"]').forEach((control) => { control.checked = true; });

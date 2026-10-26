@@ -304,13 +304,15 @@ function renderTemplates() {
   }
 }
 
-// 校对目标切换后重新显示该档案已有的字段值。
+// 有待处理简历时保留已选导入目标，避免资料刷新或活动档案变化把结果写入另一份简历。
 function renderTargetProfiles() {
   const sel = $('#targetProfile');
+  const selected = typeof resumeJob !== 'undefined' && resumeJob ? sel.value : state.activeProfileId;
   sel.innerHTML = '';
   for (const p of state.profiles) sel.appendChild(new Option(p.name, p.id));
-  // 默认选中当前活跃档案，减少误导入
-  if (state.profiles.some((p) => p.id === state.activeProfileId)) {
+  if (state.profiles.some((p) => p.id === selected)) {
+    sel.value = selected;
+  } else if (state.profiles.some((p) => p.id === state.activeProfileId)) {
     sel.value = state.activeProfileId;
   }
 }
