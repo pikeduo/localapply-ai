@@ -1,7 +1,7 @@
 // 阶段三纯函数：脱敏元数据、稳定语义指纹、本地字段及重复经历匹配。
 (function (global) {
   'use strict';
-  const kinds = ['education', 'internship', 'employment', 'project'];
+  const kinds = Object.keys(global.WangshenTemplates.RECORD_GROUPS);
   const types = ['text', 'textarea', 'number', 'email', 'tel', 'url', 'date', 'month', 'datetime-local', 'select', 'radio', 'checkbox', 'combobox', 'contenteditable'];
   const layouts = ['date:year-month', 'date:year-month-day', 'phone:country-number', 'address:province-city-district'];
 
@@ -76,13 +76,14 @@
   // 根据明确学历/经历语义缩小来源；只有唯一来源才可匹配，不默认拿最高学历覆盖第一学历。
   function targetsFor(db, profileId, field, fieldId) {
     let entries = db.entries.filter((entry) => entry.profileId === profileId && (!field.kind || entry.kind === field.kind));
-    const repeated = field.kind || (field.degree ? 'education' : '');
+    const definedGroup = db.fieldDefinitions.find((definition) => definition.fieldId === fieldId)?.group;
+    const definedKind = global.WangshenTemplates.recordKind(definedGroup);
+    const repeated = field.kind || (field.degree ? 'education' : '') || definedKind || '';
     if (!repeated) return [{ fieldId, entryId: null }];
     entries = entries.filter((entry) => entry.kind === repeated);
     // 目录首段保存在模块基础字段，与附加记录一起参与语义筛选；多个来源不确定时仍交用户选择。
-    const group = { education: '教育背景', internship: '实习经历', employment: '工作经历', project: '项目经历' }[repeated];
     const primary = db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === fieldId && row.entryId === null && row.value !== null && row.value !== '');
-    if (primary && db.fieldDefinitions.some((definition) => definition.fieldId === fieldId && definition.group === group)) entries.push({ profileId, entryId: null, kind: repeated });
+    if (primary && definedKind === repeated) entries.push({ profileId, entryId: null, kind: repeated });
     if (['first', 'undergrad'].includes(field.degree)) entries = entries.filter((entry) => degreeOf(db, entry) === 2);
     if (field.degree === 'master') entries = entries.filter((entry) => degreeOf(db, entry) === 3);
     if (field.degree === 'doctor') entries = entries.filter((entry) => degreeOf(db, entry) === 4);
@@ -95,8 +96,8 @@
     const normalize = global.WangshenTemplates.normalizeLabel;
     const norm = normalize(field.label);
     const exact = db.fieldDefinitions.filter((def) => [def.label, ...def.aliases].some((alias) => normalize(alias) === norm));
-    const group = { education: '教育背景', internship: '实习经历', employment: '工作经历', project: '项目经历' }[field.kind];
-    const contextual = group ? exact.filter((definition) => definition.group === group) : [];
+    const group = global.WangshenTemplates.RECORD_GROUPS[field.kind];
+    const contextual = group ? exact.filter((definition) => global.WangshenTemplates.recordKind(definition.group) === field.kind) : [];
     if (contextual.length === 1) return { definition: contextual[0], reason: '字段及经历模块精确匹配' };
     if (exact.length === 1) return { definition: exact[0], reason: '标准字段或别名精确匹配' };
     let key = '';

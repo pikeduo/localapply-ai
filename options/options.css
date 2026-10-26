@@ -223,3 +223,10 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 #resumeReport pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font: inherit; }
 .resume-record { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 .resume-record > summary { cursor: pointer; font-weight: 600; margin-bottom: 16px; }
+/* 同一模块的所有记录使用一致容器，首条也可收起；控件节点保留，避免收起时丢失草稿。 */
+.resume-group-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.resume-group-header .center-group-heading { margin-right: auto; }
+.resume-record { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.resume-record > summary { margin-bottom: 0; }
+.resume-record[open] > summary { margin-bottom: 16px; }
+.resume-record > [data-module-action="delete"] { margin-bottom: 16px; }

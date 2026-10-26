@@ -53,6 +53,10 @@ async function renderEntries(profileId) {
 
 // 挂载备份确认、恢复点和公共包入口，并初始化简历选择。
 async function initDataManagement() {
+  document.getElementById('btnExportV3').addEventListener('click', async () => {
+    try { await flushSaves(); const response = await dataRequest('localapply:exportBackup', { version: 3 }); downloadJson(response.backup, 'localapply-v3-backup.json'); backupMsg('已导出兼容 v3 备份；新增类型的附加记录转为私有平面字段，完整结构请另存普通备份。'); }
+    catch (error) { backupMsg(escapeHtml('兼容导出失败：' + error.message)); }
+  });
   document.getElementById('restoreMode').addEventListener('change', () => {
     if (pendingRestore) prepareRestore(pendingRestore.text).catch((error) => backupMsg(escapeHtml(error.message)));
   });

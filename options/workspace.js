@@ -259,7 +259,7 @@ function renderFieldLibrary() {
     function action(label, work) { const button = workspaceNode('button', label, 'btn ghost'); button.type = 'button'; button.addEventListener('click', async () => { button.disabled = true; try { await work(); } catch (error) { document.getElementById('fieldStatus').textContent = error.message; } finally { button.disabled = false; } }); actions.append(button); }
     const binding = db.bindings.find((item) => item.profileId === profileId && item.fieldId === def.fieldId);
     if (binding) action('移除当前档案字段', async () => {
-      if (!confirm(`仅移除当前档案的“${def.label}”平面字段和值？其他档案与独立经历保留。`)) return;
+      if (!confirm(`从当前简历的模块共享模板移除“${def.label}”？各条记录均不再展示此字段；平面值删除，附加记录已有值及其他简历保留。`)) return;
       const latest = await getState(); const profile = latest.profiles.find((item) => item.id === profileId); profile.fields = profile.fields.filter((item) => item.fid !== binding.fid); await saveState(latest); await reloadDataState(); document.getElementById('fieldStatus').textContent = '已从当前档案移除，其他档案及经历保留。';
     });
     else action('添加到当前档案', async () => {
@@ -291,7 +291,7 @@ async function beginFieldEdit(fieldId) {
 }
 // 取消编辑不写数据库，保留旧字段的稳定 ID 和实际值。
 function cancelFieldEdit() { workspaceEditing = null; document.getElementById('fieldForm').reset(); document.getElementById('fieldForm').dataset.dirty = ''; document.getElementById('fieldSave').textContent = '确认新增字段'; }
-// 旧分类别名定位到统一分类；已移除的经历链接回到资料入口，不再生成经历模块。
+// 分类链接仍定位模块；新模块记录链接展开对应条目，历史经历链接保持回到资料入口。
 async function locateWorkspace() {
   const params = new URLSearchParams(location.search); const profileId = params.get('profile');
   if (profileId && workspaceDatabase.profiles.some((item) => item.profileId === profileId)) { const next = await getState(); next.activeProfileId = profileId; await saveState(next); document.getElementById('entryProfile').value = profileId; await reloadDataState(); }
@@ -302,7 +302,16 @@ async function locateWorkspace() {
       .find((item) => item.group === original || item.items.some(({ definition }) => definition.group === original));
     if (group) key = 'group:' + group.group;
   }
-  if (key?.startsWith('entry:')) key = 'center';
+  if (key?.startsWith('entry:')) {
+    const entry = workspaceDatabase.entries.find((item) => item.entryId === key.slice(6) && item.profileId === document.getElementById('entryProfile').value && item.entryId.startsWith('catalog.'));
+    if (entry && workspaceRoute() === 'resumeCenter') {
+      locateResumeSection('group:' + WangshenTemplates.RECORD_GROUPS[entry.kind]);
+      const record = Array.from(document.querySelectorAll('.resume-record')).find((node) => node.dataset.entryId === entry.entryId);
+      if (record) { record.open = true; record.scrollIntoView({ block: 'start' }); }
+      return;
+    }
+    key = 'center';
+  }
   if (workspaceRoute() === 'resumeCenter' && (key === 'center' || key?.startsWith('group:'))) locateResumeSection(key);
 }
 // 工作台导航、字段定义和简历管理只挂载一次，沿用旧设置页的初始化顺序。

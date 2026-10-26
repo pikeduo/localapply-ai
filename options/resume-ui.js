@@ -207,7 +207,7 @@ function initResumeDrop() {
 // 计算规范字段与稳定经历 ID，和数据库入口采用相同去重规则。
 function resumeExisting(row, database, profileId) {
   if (resumeCatalogMode) {
-    const entryId = row.kind === 'basic' || row.index === 0 ? null : LocalApplyStore.catalogEntryId(profileId, resumeSource.fingerprint, row.kind, row.index);
+    const entryId = LocalApplyStore.catalogTarget(database, profileId, resumeSource.fingerprint, row.kind, row.index);
     return database.fieldValues.find((item) => item.profileId === profileId && item.fieldId === row.fieldId && item.entryId === entryId);
   }
   const fieldId = database.fieldDefinitions.some((d) => d.fieldId === 'builtin.' + row.key) ? 'builtin.' + row.key : 'resume.' + row.key;
@@ -228,7 +228,7 @@ async function renderResumeReview() {
     const label = document.createElement('label'); label.className = 'review-label';
     const check = document.createElement('input'); check.type = 'checkbox'; check.checked = row.checked;
     check.addEventListener('change', () => { row.checked = check.checked; });
-    label.append(check, document.createTextNode(`${row.kind === 'basic' ? '基本信息' : LocalApplyResume.kinds[row.kind] + ' ' + (row.index + 1)} · ${row.label}`));
+    label.append(check, document.createTextNode(`${row.kind === 'basic' ? '基本信息' : (LocalApplyResumeCatalog.groups[row.kind] || LocalApplyResume.kinds[row.kind]) + ' ' + (row.index + 1)} · ${row.label}`));
     const definition = resumeCatalogMode && resumeCatalog.find((field) => field.fieldId === row.fieldId);
     const input = definition ? workspaceControl(definition, row.value) : document.createElement(row.key === 'description' ? 'textarea' : 'input'); if (!definition) input.value = row.value;
     (input.querySelector('[data-primary]') || input).setAttribute('aria-label', label.textContent);
@@ -260,14 +260,15 @@ async function confirmResume() {
 let resumeSaveQueue = Promise.resolve();
 // 展开状态只驻留当前设置页，按档案隔离；切换导航或重绘不影响未保存的字段草稿。
 const resumeExpandedGroups = new Map();
+const resumeRecordExpansion = new Map(); // 每条记录独立收起/展开，仅影响本页显示，不改字段值。
 // 大模块沿用参考页常用字段的分界；其他模块先展示少量字段，剩余内容由用户展开。
 const resumePrimaryFieldCounts = { '基本信息': 18, '求职意向': 8, '教育背景': 7, '实习经历': 7, '工作经历': 9, '项目经历': 7, '家庭成员': 4, '获奖经历': 4, '英语能力': 3, '证书信息': 4, '论文期刊': 4 };
-// 所有基础字段共用保存链路；地区提示区分搜索与确认，复合编辑失败保留草稿。
-function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = definition.label) {
+// 所有记录共用保存链路；显示标签可简化，accessibleLabel 保留模块语义避免家庭姓名与本人姓名冲突。
+function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = definition.label, accessibleLabel = displayLabel) {
   const multiline = definition.type === 'text' && typeof row?.value === 'string' && row.value.includes('\n');
   const input = workspaceControl(multiline ? { ...definition, type: 'textarea' } : definition, row?.value);
   const label = workspaceNode(input.tagName === 'DIV' ? 'div' : 'label', '', 'center-field'); label.dataset.fieldId = definition.fieldId;
-  (input.querySelector('[data-primary]') || input).setAttribute('aria-label', (entryId ? '经历字段 · ' : '简历中心 · ') + displayLabel);
+  (input.querySelector('[data-primary]') || input).setAttribute('aria-label', (entryId ? '经历字段 · ' : '简历中心 · ') + accessibleLabel);
   const hint = workspaceNode('small', input.classList.contains('workspace-region') ? '选择候选或“使用输入内容”后保存 · 搜索不改动资料' : '修改后离开输入框自动保存 · 保存失败保留输入'); hint.setAttribute('role', 'status');
   let saved = row ? structuredClone(row) : null;
   input.addEventListener('input', () => { input.dataset.dirty = 'true'; });
@@ -316,44 +317,72 @@ async function clearLegacyResumeEntries() {
   } catch (error) { status.textContent = '清理失败：' + error.message; }
   finally { button.disabled = false; }
 }
-// 分类保留全部编辑器与模块内额外记录，只通过显隐收起字段，不创建独立经历模块或目录。
-function resumeGroupEditor(profileId, group, index) {
-  const section = workspaceNode('section', '', 'resume-group'); section.dataset.group = group.group;
-  const header = workspaceNode('div', '', 'resume-group-header');
-  const heading = workspaceNode('h3', group.group, 'center-group-heading'); heading.id = 'resumeGroupHeading' + index;
-  section.setAttribute('aria-labelledby', heading.id); header.append(heading); section.append(header);
+// 共享模块字段模板生成一条记录的全部控件；各记录仅值和展开状态不同，不复制定义。
+function resumeRecordFields(profileId, group, items, entryId, index, ordinal) {
+  const root = workspaceNode('div', '', 'resume-record-fields'); const key = group.group + ':' + (entryId || 'primary');
   const limit = Object.hasOwn(resumePrimaryFieldCounts, group.group) ? resumePrimaryFieldCounts[group.group] : group.items.length > 4 ? 4 : 2;
   const fields = workspaceNode('div', '', 'basic-grid');
-  const extra = workspaceNode('div', '', 'basic-grid resume-more-fields'); extra.id = 'resumeMoreFields' + index;
-  group.items.forEach(({ definition, row }, position) => (position < limit ? fields : extra).append(resumeFieldEditor(profileId, null, definition, row)));
-  section.append(fields);
+  const extra = workspaceNode('div', '', 'basic-grid resume-more-fields'); extra.id = 'resumeMoreFields' + index + 'Record' + ordinal;
+  items.forEach(({ definition, row }, position) => {
+    const label = group.group === '家庭成员' ? definition.label.replace(/^家庭成员一[·・]/, '') : definition.label;
+    (position < limit ? fields : extra).append(resumeFieldEditor(profileId, entryId, definition, row, label, group.group === '家庭成员' ? '家庭成员 · ' + label : label));
+  });
+  root.append(fields);
   if (extra.childElementCount) {
     const toggle = workspaceNode('button', '', 'resume-more-toggle'); toggle.type = 'button'; toggle.setAttribute('aria-controls', extra.id);
     const text = workspaceNode('span'); const arrow = workspaceNode('span', '⌄', 'resume-more-arrow'); arrow.setAttribute('aria-hidden', 'true'); toggle.append(text, arrow);
     // 切换只改本页显示状态，数量来自字段节点，不读取或展示个人值。
     function update(expanded) { extra.hidden = !expanded; toggle.setAttribute('aria-expanded', String(expanded)); text.textContent = (expanded ? '收起更多内容' : '展开更多内容') + '（' + extra.childElementCount + ' 项）'; }
-    update(resumeExpandedGroups.get(profileId)?.has(group.group) || false);
+    update(resumeExpandedGroups.get(profileId)?.has(key) || false);
     toggle.addEventListener('click', () => {
       if (!resumeExpandedGroups.has(profileId)) resumeExpandedGroups.set(profileId, new Set());
       const expanded = extra.hidden; const groups = resumeExpandedGroups.get(profileId);
-      if (expanded) groups.add(group.group); else groups.delete(group.group);
+      if (expanded) groups.add(key); else groups.delete(key);
       update(expanded); scheduleResumePosition();
     });
-    section.append(toggle, extra);
+    root.append(toggle, extra);
   }
-  for (const record of group.records || []) {
-    const details = workspaceNode('details', '', 'resume-record'); details.dataset.entryId = record.entryId;
-    details.append(workspaceNode('summary', `第 ${record.order + 1} 条${group.group} · 展开编辑`));
-    const grid = workspaceNode('div', '', 'basic-grid');
-    record.items.forEach(({ definition, row }) => grid.append(resumeFieldEditor(profileId, record.entryId, definition, row)));
-    details.append(grid); section.append(details);
-  }
+  return root;
+}
+// 添加空记录或确认删除附加记录，复用串行保存和最新 revision，失败不丢失当前输入。
+async function manageModuleRecord(profileId, group, entryId, button) {
+  button.disabled = true;
+  try {
+    await resumeSaveQueue; if (workspaceDirty()) throw new Error('请先处理未保存的字段编辑，再管理记录');
+    const { database } = await dataRequest('localapply:read');
+    if (entryId && !confirm(`删除当前简历“${group}”中的这条记录及其内容、映射？其他记录及共享字段保留。删除前保存恢复点。`)) return;
+    const out = await dataCommand(entryId ? 'deleteModuleRecord' : 'addModuleRecord', entryId ? { profileId, entryId, confirmed: true } : { profileId, group }, database.revision);
+    if (!entryId) { if (!resumeRecordExpansion.has(profileId)) resumeRecordExpansion.set(profileId, new Map()); resumeRecordExpansion.get(profileId).set(group + ':' + out.result, true); }
+    await reloadDataState(profileId); $('#centerStatus').textContent = entryId ? '已删除此条记录，共享字段及其他记录保留，可在数据与备份恢复。' : '已添加空白记录，与同模块其他记录共享字段。';
+    if (!entryId) Array.from($('#basicFields').querySelectorAll('[data-entry-id]')).find((node) => node.dataset.entryId === out.result)?.scrollIntoView({ block: 'start' });
+  } catch (error) { $('#centerStatus').textContent = '记录未变更：' + error.message; }
+  finally { button.disabled = false; }
+}
+// 八个重复模块内逐条展开/收起，首条兼容原有平面值，其他条目共享相同字段模板。
+function resumeGroupEditor(profileId, group, index) {
+  const section = workspaceNode('section', '', 'resume-group'); section.dataset.group = group.group;
+  const header = workspaceNode('div', '', 'resume-group-header'); const heading = workspaceNode('h3', group.group, 'center-group-heading'); heading.id = 'resumeGroupHeading' + index;
+  section.setAttribute('aria-labelledby', heading.id); header.append(heading); section.append(header);
+  if (!Object.values(WangshenTemplates.RECORD_GROUPS).includes(group.group)) { section.append(resumeRecordFields(profileId, group, group.items, null, index, 0)); return section; }
+  const add = workspaceNode('button', group.group === '教育背景' ? '添加教育经历' : '添加' + (group.group === '证书信息' ? '证书' : group.group), 'btn ghost'); add.type = 'button'; add.dataset.moduleAction = 'add'; add.addEventListener('click', () => manageModuleRecord(profileId, group.group, null, add)); header.append(add);
+  const records = [{ entryId: null, items: group.items }, ...(group.records || [])];
+  records.forEach((record, ordinal) => {
+    const details = workspaceNode('details', '', 'resume-record' + (record.entryId ? '' : ' resume-primary-record')); details.dataset.entryId = record.entryId || 'primary';
+    const key = group.group + ':' + (record.entryId || 'primary'); details.open = resumeRecordExpansion.get(profileId)?.get(key) ?? !record.entryId;
+    details.append(workspaceNode('summary', `第 ${ordinal + 1} 条${group.group} · 展开 / 收起`));
+    details.addEventListener('toggle', () => { if (!details.isConnected) return; if (!resumeRecordExpansion.has(profileId)) resumeRecordExpansion.set(profileId, new Map()); resumeRecordExpansion.get(profileId).set(key, details.open); scheduleResumePosition(); });
+    if (record.entryId) { const remove = workspaceNode('button', '删除此条记录', 'btn ghost'); remove.type = 'button'; remove.dataset.moduleAction = 'delete'; remove.addEventListener('click', () => manageModuleRecord(profileId, group.group, record.entryId, remove)); details.append(remove); }
+    details.append(resumeRecordFields(profileId, group, record.items, record.entryId, index, ordinal)); section.append(details);
+  });
   return section;
 }
 // 渲染基础模块及目录经历；旧契约经历保留清理提示，各模块先显示常用字段。
 async function renderResumeCenter() {
   const { database } = await dataRequest('localapply:read'); const profileId = $('#entryProfile').value;
-  const root = $('#basicFields'); root.replaceChildren();
+  const root = $('#basicFields');
+  // 切档案/重绘前保存旧视图的真实状态，按旧档案隔离，不依赖尚未派发的 toggle 事件。
+  if (root.dataset.profileId) { const previousId = root.dataset.profileId; if (!resumeRecordExpansion.has(previousId)) resumeRecordExpansion.set(previousId, new Map()); root.querySelectorAll('.resume-record').forEach((record) => { const group = record.closest('.resume-group').dataset.group; resumeRecordExpansion.get(previousId).set(group + ':' + record.dataset.entryId, record.open); }); }
+  root.dataset.profileId = profileId; root.replaceChildren();
   const legacyCount = database.entries.filter((entry) => entry.profileId === profileId && !entry.entryId.startsWith('catalog.')).length;
   $('#legacyEntriesNotice').hidden = legacyCount === 0;
   $('#legacyEntriesHint').textContent = `当前简历保留 ${legacyCount} 条旧经历记录，已停止显示独立经历卡片。可清空后按基础字段重新整理。`;

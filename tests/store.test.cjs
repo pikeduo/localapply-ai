@@ -64,6 +64,7 @@ async function oldCatalogFixture() {
   db.fieldValues = db.fieldValues.filter((row) => !row.fieldId.startsWith('builtin.') || retained.has(row.fieldId));
   db.bindings = db.bindings.filter((binding) => binding.profileId !== 'p1' || binding.fieldId !== 'builtin.name');
   db.fieldValues = db.fieldValues.filter((row) => row.profileId !== 'p1' || row.fieldId !== 'builtin.name');
+  db.schemaVersion = 3; // 明确构造历史版本，不能用新库冒充迁移夹具。
   return { env: fixture({ [seed.store.DB_KEY]: JSON.parse(JSON.stringify(db)), [seed.store.API_KEY]: seed.disk[seed.store.API_KEY] }), before: JSON.parse(JSON.stringify(db)) };
 }
 
@@ -95,7 +96,7 @@ test('离线地区数据提供完整三级候选，保留原许可证且不包�
 
 test('旧 v3 目录只补新空字段，保留旧值、已删除字段、私有定义及全部档案', async () => {
   const { env, before } = await oldCatalogFixture(); const db = await env.repo.read();
-  assert.equal(db.schemaVersion, 3); assert.equal(db.revision, before.revision + 1);
+  assert.equal(db.schemaVersion, 4); assert.equal(db.revision, before.revision + 1);
   for (const old of before.fieldValues) assert.deepEqual(JSON.parse(JSON.stringify(db.fieldValues.find((row) => row.profileId === old.profileId && row.fieldId === old.fieldId && row.entryId === old.entryId))), old);
   assert.deepEqual(JSON.parse(JSON.stringify(db.profiles)), before.profiles);
   assert.equal(value(db, 'p1', 'builtin.birthDate'), '2000.02（原有文本）'); assert.equal(value(db, 'p1', 'builtin.ethnic'), '汉');
@@ -278,7 +279,7 @@ test('迁移写失败保留原数据，重新初始化可恢复', async () => {
   const before = JSON.stringify(env.disk.wangshenAutofill); env.fail();
   await assert.rejects(env.repo.initialize(), /模拟磁盘/);
   assert.equal(JSON.stringify(env.disk.wangshenAutofill), before);
-  assert.equal((await env.restart().initialize()).schemaVersion, 3);
+  assert.equal((await env.restart().initialize()).schemaVersion, 4);
 });
 
 test('完整备份往返恢复重复经历、自定义字段和映射；默认排除 Key', async () => {
@@ -517,19 +518,19 @@ test('简历来源校验、确认导入、重复文件去重、档案隔离及�
   assert.equal((await env.repo.read()).revision, revision);
 });
 
-test('Schema v2 数据/备份/恢复点升级到 v3，失败不改原版本，未知版本拒绝', async () => {
+test('Schema v2 数据/备份/恢复点升级到 v4，失败不改原版本，未知版本拒绝', async () => {
   const seed = fixture(); await seed.repo.initialize();
   const v2 = structuredClone(seed.disk); v2['localapply.database'].schemaVersion = 2;
   const env = fixture(v2); env.fail();
   await assert.rejects(env.repo.read(), /模拟磁盘/);
   assert.equal(env.disk['localapply.database'].schemaVersion, 2);
-  const db = await env.repo.read(); assert.equal(db.schemaVersion, 3); assert.equal(db.revision, 1);
+  const db = await env.repo.read(); assert.equal(db.schemaVersion, 4); assert.equal(db.revision, 1);
   assert.equal((await env.restart().read()).revision, 1);
   const backup = await seed.repo.exportBackup(); backup.schemaVersion = backup.database.schemaVersion = 2;
   const preview = await env.repo.previewImport(backup, 'replace');
   await command(env.repo, 'importBackup', { backup, mode: 'replace' }, preview.revision);
   env.disk['localapply.recovery'].schemaVersion = 2;
-  await command(env.repo, 'restoreRecovery', {}); assert.equal((await env.repo.read()).schemaVersion, 3);
+  await command(env.repo, 'restoreRecovery', {}); assert.equal((await env.repo.read()).schemaVersion, 4);
   const future = fixture({ ...v2, 'localapply.database': { ...v2['localapply.database'], schemaVersion: 100 } });
   await assert.rejects(future.repo.read(), /版本/); assert.equal(future.disk['localapply.database'].schemaVersion, 100);
 });
@@ -699,7 +700,7 @@ async function obsoleteCatalogFixture() {
 
 test('目录 v2 删除六个旧模块及字段引用，保留参考字段、删除选择与恢复点', async () => {
   const { env, before } = await obsoleteCatalogFixture(); const db = await env.repo.read();
-  assert.equal(db.fieldDefinitions.length, 155); assert.equal(db.schemaVersion, 3); assert.equal(db.revision, before.revision + 1);
+  assert.equal(db.fieldDefinitions.length, 155); assert.equal(db.schemaVersion, 4); assert.equal(db.revision, before.revision + 1);
   assert.equal(db.mappingRules.length, 0); assert.ok(db.fieldDefinitions.every((field) => !env.templates.REMOVED_PROFILE_GROUPS.includes(field.group)));
   assert.equal(value(db, 'p1', 'builtin.name'), '合成保留姓名'); assert.ok(!db.fieldValues.some((row) => row.value === '合成旧分类内容'));
   assert.ok(!db.bindings.some((row) => row.profileId === 'p1' && row.fieldId === 'builtin.paperName'), '新版本不能重新补回已移除的参考字段');
@@ -838,14 +839,14 @@ test('解析报告区分未匹配、缺失、错误类型及冲突，旧结构�
 });
 
 // 同一模块首段覆盖基础字段，其余段按稳定 ID 保留；不生成新定义，也不覆盖缺失值和其他简历。
-test('目录导入原子写回模块、保留多段及类型，备份重启和恢复完整兼容 v3', async () => {
+test('目录导入原子写回模块、保留多段及类型，备份重启和恢复完整兼容 v4', async () => {
   const env = fixture(); await env.repo.initialize(); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.phone', value: '13900000000' }); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.school', value: '合成旧学校' });
   const other = (await command(env.repo, 'createProfile', { name: '合成隔离' })).result; const before = await env.repo.read(); const catalog = env.catalog.catalog(before, 'p1');
   const raw = { fields: [{ fieldId: 'builtin.school', value: '合成第一学校' }, { fieldId: 'builtin.school', record: 1, value: '合成第二学校' }, { fieldId: 'builtin.major', record: 1, value: '合成第二专业' }, { fieldId: 'builtin.employmentCompany', value: '合成工作单位' }, { fieldId: 'builtin.projectName', value: '合成项目' }, { fieldId: 'builtin.currentSalary', value: 0 }, { fieldId: 'builtin.expectedCities', value: ['合成城市'] }] };
   const rows = env.catalog.analyze(raw, { type: 'pdf', mode: 'vision', pages: ['合成图'] }, catalog).rows; const payload = { profileId: 'p1', fingerprint: 'f'.repeat(64), overwrite: true, catalog, rows };
   const out = await command(env.repo, 'autoImportResume', payload, before.revision); assert.equal(out.result.saved, 7); assert.equal(out.result.overwritten, 1); assert.equal(out.result.details.find((row) => row.fieldId === 'builtin.school' && row.index === 0).status, 'overwritten');
   const db = await env.restart().read(); assert.equal(value(db, 'p1', 'builtin.school'), '合成第一学校'); assert.equal(value(db, 'p1', 'builtin.phone'), '13900000000'); assert.equal(value(db, 'p1', 'builtin.employmentCompany'), '合成工作单位'); assert.equal(value(db, 'p1', 'builtin.currentSalary'), 0); assert.equal(db.entries.length, 1); const entryId = db.entries[0].entryId; assert.equal(value(db, 'p1', 'builtin.school', entryId), '合成第二学校'); assert.equal(value(db, 'p1', 'builtin.major', entryId), '合成第二专业'); assert.ok(!db.fieldValues.some((row) => row.profileId === other && row.value === '合成第一学校')); assert.deepEqual(db.fieldDefinitions, before.fieldDefinitions);
-  const backup = env.store.parseBackup(await env.repo.exportBackup()); assert.deepEqual(backup.fieldValues, db.fieldValues); assert.equal(db.schemaVersion, 3);
+  const backup = env.store.parseBackup(await env.repo.exportBackup()); assert.deepEqual(backup.fieldValues, db.fieldValues); assert.equal(db.schemaVersion, 4);
   await command(env.repo, 'autoImportResume', payload, db.revision); assert.equal((await env.repo.read()).entries.length, 1); await command(env.repo, 'restoreRecovery', {}); assert.deepEqual((await env.repo.read()).fieldValues, db.fieldValues);
   const old = (await command(env.repo, 'createEntry', { profileId: 'p1', kind: 'education', title: '合成旧记录' })).result; await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.school', entryId: old, value: '合成待清理学校' }); const latest = await env.repo.read();
   const cleared = await command(env.repo, 'clearResumeEntries', { profileId: 'p1', confirmed: true }, latest.revision); assert.equal(cleared.result.entries, 1); assert.equal((await env.repo.read()).entries[0].entryId, entryId); assert.equal(value(await env.repo.read(), 'p1', 'builtin.school', entryId), '合成第二学校');
@@ -865,4 +866,63 @@ test('目录自动导入恢复点或主库写入失败均保留原库', async ()
     const env = fixture(); const before = await env.repo.read(); const catalog = env.catalog.catalog(before, 'p1'); const rows = env.catalog.analyze({ fields: [{ fieldId: 'builtin.englishScore', value: '合成分数' }] }, { type: 'docx', mode: 'vision', pages: ['合成图'] }, catalog).rows;
     env.fail(failAt); await assert.rejects(command(env.repo, 'autoImportResume', { profileId: 'p1', fingerprint: '2'.repeat(64), catalog, rows, overwrite: true }, before.revision), /模拟磁盘/); assert.deepEqual(await env.restart().read(), before);
   }
+});
+
+// v3→v4 只扩展模块类型，必须在单次落盘中保留旧恢复点；失败不得动资料或凭据。
+test('模块 Schema v4 原子迁移 v3 数据、备份及恢复点，不改旧字段/值/凭据', async () => {
+  const seed = fixture(); await seed.repo.initialize(); await command(seed.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成升级保留' }); await seed.repo.vaultCommand('setKey', { providerId: 'zhipu', key: 'synthetic-schema-key', revision: 0 });
+  const disk = structuredClone(seed.disk); disk[seed.store.DB_KEY].schemaVersion = 3; const old = structuredClone(disk[seed.store.DB_KEY]); const env = fixture(disk); env.fail(); await assert.rejects(env.repo.read(), /模拟磁盘/); assert.deepEqual(env.disk, disk);
+  const db = await env.restart().read(); assert.equal(db.schemaVersion, 4); assert.equal(db.revision, old.revision + 1); for (const table of ['profiles','fieldDefinitions','fieldValues','entries','bindings','mappingRules']) assert.deepEqual(JSON.parse(JSON.stringify(db[table])), old[table]); assert.deepEqual(env.disk[env.store.RECOVERY_KEY], old); assert.deepEqual(env.disk[env.store.DEVICE_KEY], disk[seed.store.DEVICE_KEY]); assert.equal((await env.restart().read()).revision, db.revision);
+  const oldBackup = { kind: 'localapply-ai-backup', formatVersion: 1, schemaVersion: 3, exportedAt: new Date().toISOString(), database: old }; assert.equal(env.store.parseBackup(oldBackup).schemaVersion, 4); await command(env.repo, 'restoreRecovery', {}); assert.equal(value(await env.repo.read(), 'p1', 'builtin.name'), '合成升级保留'); assert.equal((await env.repo.readAiSettings()).apiKeys.zhipu, 'synthetic-schema-key');
+});
+
+// 所有可重复模块共用定义；新增空记录不创建字段或复制其他记录的值。
+test('八个模块可添加独立空记录，版本/档案/模块边界严格，共享定义不增殖', async () => {
+  const env = fixture(); const before = await env.repo.read(); const catalog = env.catalog.catalog(before, 'p1'); assert.equal(Object.keys(env.templates.RECORD_GROUPS).length, 8); assert.ok(!Object.values(env.templates.RECORD_GROUPS).includes('英语能力'));
+  for (const [kind, group] of Object.entries(env.templates.RECORD_GROUPS)) {
+    const latest = await env.repo.read(); const added = await command(env.repo, 'addModuleRecord', { profileId: 'p1', group }, latest.revision); const entry = (await env.repo.read()).entries.find((entry) => entry.entryId === added.result); assert.equal(entry.kind, kind); assert.ok(entry.entryId.startsWith('catalog.')); assert.equal(entry.order, 1);
+  }
+  const db = await env.repo.read(); assert.equal(db.entries.length, 8); assert.deepEqual(db.fieldDefinitions, before.fieldDefinitions); assert.deepEqual(db.fieldValues, before.fieldValues); assert.equal(JSON.stringify(env.catalog.catalog(db, 'p1')), JSON.stringify(catalog));
+  await assert.rejects(command(env.repo, 'addModuleRecord', { profileId: 'p1', group: '教育背景' })); await assert.rejects(command(env.repo, 'addModuleRecord', { profileId: 'other-profile', group: '教育背景' }, db.revision)); await assert.rejects(command(env.repo, 'addModuleRecord', { profileId: 'p1', group: '基本信息' }, db.revision));
+});
+
+// 三条不同奖项必须使用独立 record；乱序字段和预先手动添加的空槽位不能造成混写。
+test('三条获奖记录乱序导入无冲突，复用手动槽位且所有字段按条目正确保存', async () => {
+  const env = fixture(); let db = await env.repo.read(); const slot = (await command(env.repo, 'addModuleRecord', { profileId: 'p1', group: '获奖经历' }, db.revision)).result; db = await env.repo.read(); const catalog = env.catalog.catalog(db, 'p1');
+  const raw = { fields: [2,0,1].flatMap((record) => [['awardName','合成奖项' + record], ['awardCategory','合成类别' + record], ['awardRank','合成等级' + record], ['awardLevel','合成级别' + record]].map(([key, value]) => ({ fieldId: 'builtin.' + key, record, value, evidence: value, page: 1 }))) };
+  const analysis = env.catalog.analyze(raw, { type: 'pdf', mode: 'vision', pages: ['合成页面'] }, catalog); assert.equal(analysis.rows.length, 12); assert.ok(!analysis.items.some((item) => item.status === 'conflict')); assert.match(env.catalog.prompt(catalog), /获奖经历/); assert.match(env.catalog.prompt(catalog), /不同记录必须使用不同 record/);
+  const payload = { profileId: 'p1', fingerprint: '4'.repeat(64), catalog, rows: analysis.rows, overwrite: true }; await command(env.repo, 'autoImportResume', payload, db.revision); db = await env.restart().read(); assert.equal(db.entries.length, 2); assert.equal(value(db, 'p1', 'builtin.awardName'), '合成奖项0'); assert.equal(value(db, 'p1', 'builtin.awardName', slot), '合成奖项1');
+  const third = db.entries.find((entry) => entry.entryId !== slot); assert.equal(value(db, 'p1', 'builtin.awardName', third.entryId), '合成奖项2'); assert.equal(value(db, 'p1', 'builtin.awardRank', slot), '合成等级1'); assert.equal(value(db, 'p1', 'builtin.awardRank', third.entryId), '合成等级2'); assert.equal(db.fieldDefinitions.length, catalog.length);
+  await command(env.repo, 'autoImportResume', { ...payload, fingerprint: '5'.repeat(64) }, db.revision); assert.equal((await env.repo.read()).entries.length, 2); assert.ok(!JSON.stringify(await env.repo.exportPublicFields()).includes('合成奖项'));
+});
+
+// 同一 record 内重复但矛盾的字段仍需拒绝，不能为了消除冲突擅自拆成新的奖项。
+test('多记录导入不放宽真实冲突检查，家庭/证书/论文按各自模板隔离', async () => {
+  const env = fixture(); const db = await env.repo.read(); const catalog = env.catalog.catalog(db, 'p1'); const source = { type: 'docx', mode: 'vision', pages: ['合成图'] };
+  const conflicting = env.catalog.analyze({ fields: [{ fieldId: 'builtin.awardName', record: 0, value: '合成甲' }, { fieldId: 'builtin.awardName', record: 0, value: '合成乙' }] }, source, catalog); assert.equal(conflicting.rows.length, 0); assert.equal(conflicting.items.filter((item) => item.status === 'conflict').length, 2);
+  const raw = { fields: [0,1].flatMap((record) => [['familyName1','合成家庭' + record], ['certificateName','合成证书' + record], ['paperName','合成论文' + record]].map(([key,value]) => ({ fieldId: 'builtin.' + key, record, value }))) }; const rows = env.catalog.analyze(raw, source, catalog).rows;
+  await command(env.repo, 'autoImportResume', { profileId: 'p1', fingerprint: '6'.repeat(64), catalog, rows, overwrite: true }, db.revision); const after = await env.repo.read(); assert.equal(after.entries.length, 3); for (const kind of ['family','certificate','publication']) assert.equal(after.entries.filter((entry) => entry.kind === kind).length, 1); assert.equal(value(after, 'p1', 'builtin.name'), value(db, 'p1', 'builtin.name'));
+});
+
+// 兼容备份用 v3 可表达的私有平面字段保存新增记录，原 v4 库和公开定义绝不能被降级改写。
+test('v4 新模块兼容导出 v3 保留值/证据/映射，可再次导入且不含凭据', async () => {
+  const env = fixture(); let db = await env.repo.read(); const entryId = (await command(env.repo, 'addModuleRecord', { profileId: 'p1', group: '获奖经历' }, db.revision)).result;
+  await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.awardName', entryId, value: '合成回滚奖项' }); await command(env.repo, 'saveMapping', { profileId: 'p1', fieldId: 'builtin.awardName', entryId, origin: 'https://example.test', path: '/apply', label: '合成奖项' }); db = await env.repo.read();
+  const backup = await env.repo.exportBackup(3); assert.equal(backup.schemaVersion, 3); env.store.validate(backup.database, 3); assert.ok(backup.database.entries.every((entry) => ['education','internship','employment','project'].includes(entry.kind))); const row = backup.database.fieldValues.find((row) => row.value === '合成回滚奖项'); assert.equal(row.entryId, null); assert.ok(row.fieldId.startsWith('compat.')); assert.ok(backup.database.bindings.some((binding) => binding.profileId === 'p1' && binding.fieldId === row.fieldId)); assert.ok(!backup.database.publicFieldIds.includes(row.fieldId)); assert.equal(backup.database.mappingRules[0].fieldId, row.fieldId); assert.equal(backup.database.mappingRules[0].entryId, null);
+  assert.deepEqual(await env.repo.read(), db); assert.equal(env.store.parseBackup(backup).schemaVersion, 4); const plan = await env.repo.previewImport(backup, 'replace'); await command(env.repo, 'importBackup', { backup, mode: 'replace' }, plan.revision); assert.ok((await env.repo.read()).fieldValues.some((row) => row.value === '合成回滚奖项')); await assert.rejects(env.repo.exportBackup(99));
+});
+
+// 删除附加条目需明确确认，级联仅影响该记录；恢复点和落盘失败均有独立验证。
+test('模块记录删除保护共享字段与其他记录，确认/版本/故障和恢复均正确', async () => {
+  for (const failureAt of [null,0,1]) {
+    const env = fixture(); let db = await env.repo.read(); const entryId = (await command(env.repo, 'addModuleRecord', { profileId: 'p1', group: '证书信息' }, db.revision)).result; await command(env.repo, 'setValue', { profileId: 'p1', entryId, fieldId: 'builtin.certificateName', value: '合成证书内容' }); db = await env.repo.read(); const payload = { profileId: 'p1', entryId, confirmed: true };
+    await assert.rejects(command(env.repo, 'deleteModuleRecord', { ...payload, confirmed: false }, db.revision)); await assert.rejects(command(env.repo, 'deleteModuleRecord', { ...payload, profileId: 'other' }, db.revision)); await assert.rejects(command(env.repo, 'deleteModuleRecord', payload));
+    if (failureAt !== null) { env.fail(failureAt); await assert.rejects(command(env.repo, 'deleteModuleRecord', payload, db.revision), /模拟磁盘/); assert.deepEqual(await env.restart().read(), db); }
+    else { await command(env.repo, 'deleteModuleRecord', payload, db.revision); assert.equal((await env.repo.read()).entries.length, 0); assert.deepEqual((await env.repo.read()).fieldDefinitions, db.fieldDefinitions); await command(env.repo, 'restoreRecovery', {}); assert.deepEqual((await env.repo.read()).fieldValues, db.fieldValues); }
+  }
+});
+
+// v3 数据不得偷渡 v4 类型；只有经过已知版本校验和原子升级后才能使用新增模块。
+test('伪装 v3 的新增模块及未知版本在写入前拒绝', async () => {
+  const seed = fixture(); const db = await seed.repo.read(); db.schemaVersion = 3; db.entries.push({ entryId: 'catalog.invalid', profileId: 'p1', kind: 'award', title: '', order: 1 }); const env = fixture({ [seed.store.DB_KEY]: db }); await assert.rejects(env.repo.read(), /类型/); assert.deepEqual(env.disk[seed.store.DB_KEY], JSON.parse(JSON.stringify(db)));
 });

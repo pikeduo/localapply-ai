@@ -427,7 +427,7 @@ test('共享存储首次初始化和再次读取保持档案一致', async () =>
   const first = await context.getState();
   const second = await context.getState();
   assert.equal(first.profiles[0].id, second.profiles[0].id);
-  assert.equal(storage['localapply.database'].schemaVersion, 3);
+  assert.equal(storage['localapply.database'].schemaVersion, 4); // 模块类型扩展后，规范库使用 v4。
 });
 
 test('AI 回复 JSON 围栏可解析，异常文本返回空结果', () => {

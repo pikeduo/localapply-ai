@@ -1,7 +1,7 @@
 // 个人档案的界面投影：保持经历 ID、类型和值，不修改存储，也不处理原始简历。
 (function (global) {
   'use strict';
-  const kinds = { education: '教育背景', internship: '实习经历', employment: '工作经历', project: '项目经历' };
+  const kinds = global.WangshenTemplates.RECORD_GROUPS;
   // 保留 false/0；只有空字符串、null 和空数组视为没有资料。
   function hasValue(value) { return value !== null && value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0); }
   // 布尔和多选在预览中使用可读中文，存储仍保持原类型。
@@ -52,11 +52,11 @@
       add(row || null, definitions.get(binding.fieldId));
     }
     for (const row of database.fieldValues.filter((item) => item.profileId === profileId && item.entryId === null)) add(row, definitions.get(row.fieldId));
-    // 仅目录导入的标准字段进入模块内多条记录，避免重新展示历史独立经历卡片。
+    // 每条模块记录从同一绑定模板生成全部编辑器；空记录/自定义字段也保留，旧契约记录不冒充新模块。
     for (const entry of database.entries.filter((item) => item.profileId === profileId && item.entryId.startsWith('catalog.')).sort((a, b) => a.order - b.order)) {
-      const items = database.fieldValues.filter((row) => row.profileId === profileId && row.entryId === entry.entryId && row.fieldId.startsWith('builtin.') && definitions.get(row.fieldId)?.group === kinds[entry.kind]).map((row) => ({ row, definition: definitions.get(row.fieldId) }));
-      if (!items.length) continue;
-      const section = group(kinds[entry.kind]); if (!section.records) section.records = [];
+      const section = groups.get(kinds[entry.kind]); if (!section || !section.items.length) continue;
+      const items = section.items.map(({ definition }) => ({ definition, row: database.fieldValues.find((row) => row.profileId === profileId && row.entryId === entry.entryId && row.fieldId === definition.fieldId) || null }));
+      if (!section.records) section.records = [];
       section.records.push({ entryId: entry.entryId, order: entry.order, items });
     }
     const catalog = global.WangshenTemplates?.PROFILE_TEMPLATE || [];
@@ -64,7 +64,7 @@
     const groupOrder = [...new Set(catalog.map((field) => editorGroup(field.group)))];
     // 旧档案新增字段后仍按完整模块排序；用户自定义模块及其中的字段保留相对顺序。
     const result = [...groups.values()];
-    result.forEach((section) => section.items.sort((a, b) => (fieldOrder.get(a.definition.fieldId) ?? Infinity) - (fieldOrder.get(b.definition.fieldId) ?? Infinity)));
+    result.forEach((section) => { const compare = (a, b) => (fieldOrder.get(a.definition.fieldId) ?? Infinity) - (fieldOrder.get(b.definition.fieldId) ?? Infinity); section.items.sort(compare); (section.records || []).forEach((record) => record.items.sort(compare)); });
     return result.sort((a, b) => (groupOrder.includes(a.group) ? groupOrder.indexOf(a.group) : Infinity) - (groupOrder.includes(b.group) ? groupOrder.indexOf(b.group) : Infinity));
   }
   global.LocalApplyProfileView = { hasValue, text, sensitive, sections, editorSections };

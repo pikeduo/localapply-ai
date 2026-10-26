@@ -124,7 +124,7 @@
       <p id="profileManageHint" class="muted">下方可直接修改当前简历的资料；清空内容保留字段并保存恢复点，删除整份简历至少保留一份。两项操作均需确认。</p>
       <div id="legacyEntriesNotice" hidden><p id="legacyEntriesHint" class="muted"></p><button id="clearResumeEntries" class="btn ghost" type="button">清空当前简历的旧经历</button></div>
       </div>
-      <details open><summary>编辑简历全部字段</summary><div id="basicFields" class="resume-groups"></div></details>
+      <details open id="resumeFieldsEditor"><summary>编辑简历全部字段</summary><div id="basicFields" class="resume-groups"></div></details>
       <p id="centerStatus" class="muted" role="status"></p>
       <div id="entryStatus" class="muted" role="status"></div>
     </section>
@@ -182,6 +182,7 @@
       <h2>数据与隐私</h2>
       <div class="row">
         <button id="btnBackup" class="btn plain">导出档案备份（JSON）</button>
+        <button id="btnExportV3" class="btn ghost">导出兼容 v3 备份</button>
         <button id="btnRestore" class="btn ghost">从备份恢复</button>
         <label>导入方式 <select id="restoreMode"><option value="merge">合并（冲突保留当前）</option><option value="replace">覆盖（保存恢复点）</option></select></label>
         <input type="file" id="backupFile" accept="application/json,.json" style="display:none" />

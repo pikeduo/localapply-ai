@@ -31,7 +31,7 @@
         const def = db.fieldDefinitions.find((item) => item.fieldId === row.fieldId);
         const entry = db.entries.find((item) => item.entryId === row.entryId);
         return { ref: 'source.' + index, fieldId: row.fieldId, entryId: row.entryId, value: row.value,
-          label: def.label + (entry ? ' · ' + ({ education: '教育', internship: '实习', employment: '工作', project: '项目' }[entry.kind]) + '第' + (entry.order + 1) + '条' : ''),
+          label: def.label + (entry ? ' · ' + (global.WangshenTemplates.RECORD_GROUPS[entry.kind] || '记录') + '第' + (entry.order + 1) + '条' : ''),
           kind: entry?.kind || '', hasValue: M.hasValue(row.value) };
       });
     }
@@ -125,7 +125,7 @@
         rebuild(item, db); sessions.set(item.sessionId, item); return view(item, db);
       }
       if (msg.type === 'learning:rules') { const db = await repository.read(); return { rules: db.mappingRules, definitions: db.fieldDefinitions, profiles: db.profiles, entries: db.entries, revision: db.revision, canUndo: !!undo }; }
-      if (msg.type === 'learning:exportV3') { const backup = await repository.exportBackup(); backup.database.mappingRules = backup.database.mappingRules.map(({ mappingId, origin, path, label, fieldId, profileId, entryId }) => ({ mappingId, origin, path, label, fieldId, profileId, entryId })); return { backup }; }
+      if (msg.type === 'learning:exportV3') { const backup = await repository.exportBackup(3); backup.database.mappingRules = backup.database.mappingRules.map(({ mappingId, origin, path, label, fieldId, profileId, entryId }) => ({ mappingId, origin, path, label, fieldId, profileId, entryId })); return { backup }; }
       if (['learning:editRule', 'learning:deleteRule', 'learning:undoRule'].includes(msg.type)) {
         check(msg.confirmed === true, '规则操作需要明确确认'); const db = await repository.read(); check(msg.revision === db.revision, '规则或资料已变化，请重新预览');
         if (msg.type === 'learning:undoRule') { check(undo?.revision === db.revision, '撤销点已过期，请刷新规则'); const previous = undo; await repository.command({ action: 'restoreMappings', payload: { rules: previous.before, confirmed: true }, expectedRevision: db.revision }); undo = null; }

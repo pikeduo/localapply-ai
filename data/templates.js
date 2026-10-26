@@ -3,6 +3,15 @@
 (function (global) {
   'use strict';
 
+  // 参考简历页允许重复的八个模块；所有记录共用字段定义，英语能力等单份模块不在此列。
+  const RECORD_GROUPS = { education: '教育背景', internship: '实习经历', employment: '工作经历', project: '项目经历', family: '家庭成员', award: '获奖经历', certificate: '证书信息', publication: '论文期刊' };
+  // 只统一已知模块别名，用户自定义分类不按文字相似度猜测为经历模块。
+  function recordKind(group) {
+    const aliases = { '教育经历': '教育背景', '教育': '教育背景', '工作经验': '工作经历', '实习经验': '实习经历', '项目经验': '项目经历' };
+    const name = Object.hasOwn(aliases, group) ? aliases[group] : group;
+    return Object.keys(RECORD_GROUPS).find((kind) => RECORD_GROUPS[kind] === name);
+  }
+
   // ============ 工具 ============
 
   // label 归一化：去空格/冒号/星号/必填标记/请输入提示，转小写
@@ -558,6 +567,8 @@
   };
 
   global.WangshenTemplates = {
+    RECORD_GROUPS,
+    recordKind,
     SYNONYMS,
     TEMPLATES,
     SHORT_FORM_TEMPLATE,

@@ -2,14 +2,14 @@
 (function (global) {
   'use strict';
   const $ = (id) => document.getElementById(id); const V = global.LocalApplyProfileView;
-  let database; let shown = false; let collapsed = false; let sectionKey = ''; let refreshing = 0; const expanded = new Map();
+  let database; let shown = false; let collapsed = false; let sectionKey = ''; let refreshing = 0; let renderedRevision = -1; let renderedProfileId = null; const expanded = new Map();
   // 外部标签和值只进入文本节点，不能形成 HTML 或可执行属性。
   function node(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
   // 仅记录脱敏错误分类，界面保留可读恢复提示。
   async function report(error) { $('panelStatus').textContent = error.message || '界面操作失败'; await sendMessage('diagnostics:uiError', { error: error.message, stack: error.stack }); }
   // 固定打开内部管理页，并将档案/分类定位交给后台校验。
   async function edit(destination = 'resumeCenter') { const result = await sendMessage('panel:edit', { profileId: database?.activeProfileId, section: sectionKey, destination }); if (!result.ok) throw new Error(result.error); }
-  // 刷新只读本地状态，不扫描网页、不联网；序号阻止迟到读取覆盖用户刚选择的档案。
+  // 刷新只读本地状态；相同版本不重建预览，避免延迟通知覆盖用户刚收起的记录。
   async function refresh() {
     const revision = ++refreshing; await flushSaves();
     const context = await sendMessage('panel:context'); if (!context.ok) throw new Error(context.error);
@@ -21,7 +21,7 @@
     $('panelWelcome').hidden = count > 0;
     $('panelStatus').textContent = count ? (context.presence?.kind === 'application' ? '已检测到网申表单 · 本地规则优先，AI 可选' : '当前页暂未检测到网申表单，可主动扫描。') : '当前档案暂无可填资料，请先录入或导入。';
     $('smartFillAll').dataset.emptyProfile = count ? '' : 'true';
-    if (shown) renderResume();
+    if (shown && (renderedRevision !== database.revision || renderedProfileId !== database.activeProfileId || !$('resumeContent').children.length)) renderResume();
   }
   // 用户点击后才复制指定字段；隐藏的敏感值不能绕过显示许可复制。
   async function copy(value, sensitive) {
@@ -31,9 +31,9 @@
     catch { const input = node('textarea'); input.value = content; input.style.position = 'fixed'; document.body.append(input); input.select(); const copied = document.execCommand('copy'); input.remove(); if (!copied) throw new Error('浏览器未允许复制，请手动选择文字。'); }
     $('previewStatus').textContent = '已复制所选字段。';
   }
-  // 预览使用稳定经历分区；筛选只检索标签、分类及项目名，不搜索隐藏的个人值。
+  // 重绘前同步保存真实折叠状态；筛选不搜索隐藏值，已移除节点的迟到 toggle 不得覆盖新状态。
   function renderResume() {
-    const root = $('resumeContent'); root.replaceChildren(); const profileId = database.activeProfileId;
+    const root = $('resumeContent'); root.querySelectorAll('details.resume-section').forEach((box) => expanded.set(box.dataset.sectionKey, box.open)); root.replaceChildren(); const profileId = database.activeProfileId;
     const profile = database.profiles.find((item) => item.profileId === profileId); root.append(node('h1', profile.name, 'resume-title'));
     const all = V.sections(database, profileId, $('previewEmpty').checked); const search = $('previewSearch').value.trim().toLowerCase();
     $('previewNav').replaceChildren(new Option('导航到分类 / 经历', ''), ...all.map((section) => new Option(section.group + (section.entryId ? ' · ' + section.title : ''), section.key)));
@@ -43,7 +43,7 @@
       const items = section.items.filter(({ definition }) => !search || broadMatch || (definition.label + definition.aliases.join(' ')).toLowerCase().includes(search));
       if (search && !items.length && !broadMatch) continue;
       const box = node(section.entryId ? 'details' : 'section', '', 'resume-section'); box.dataset.sectionKey = section.key; box.tabIndex = -1;
-      if (section.entryId) { box.open = search ? true : expanded.get(section.key) !== false; const summary = node('summary'); summary.append(node('h2', section.group + ' · ' + section.title)); box.append(summary); box.addEventListener('toggle', () => expanded.set(section.key, box.open)); }
+      if (section.entryId) { box.open = search ? true : expanded.get(section.key) !== false; const summary = node('summary'); summary.append(node('h2', section.group + ' · ' + section.title)); box.append(summary); box.addEventListener('toggle', () => { if (box.isConnected) expanded.set(section.key, box.open); }); }
       else box.append(node('h2', section.group));
       const list = node('dl');
       for (const { row, definition, sensitive } of items) {
@@ -54,6 +54,7 @@
       box.append(list); if (!items.length) box.append(node('p', '这段经历尚无字段值，可点击编辑资料补充。', 'muted')); root.append(box); visible++;
     }
     if (!visible) root.append(node('p', search ? '没有匹配的字段或项目，试试其他关键词。' : '当前档案还没有资料，请点击“编辑资料”录入或导入。', 'resume-empty'));
+    renderedRevision = database.revision; renderedProfileId = profileId;
   }
   // 分类跳转展开对应经历并高亮；键盘焦点随导航进入目标区。
   function navigate() { sectionKey = $('previewNav').value; const section = [...$('resumeContent').querySelectorAll('.resume-section')].find((item) => item.dataset.sectionKey === sectionKey); if (!section) return; if (section.tagName === 'DETAILS') section.open = true; document.querySelectorAll('.resume-section.is-target').forEach((item) => item.classList.remove('is-target')); section.classList.add('is-target'); section.scrollIntoView({ block: 'start', behavior: 'instant' }); section.focus({ preventScroll: true }); }

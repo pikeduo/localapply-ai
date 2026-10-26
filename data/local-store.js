@@ -8,9 +8,10 @@
   const VAULT_KEY = 'localapply.keyVault';
   const DEVICE_KEY = 'localapply.deviceKeys';
   const CATALOG_KEY = 'localapply.fieldCatalog'; // 独立升级标记，用户删掉字段后不再自动补回。
-  const SCHEMA_VERSION = 3;
+  const SCHEMA_VERSION = 4;
   const TYPES = ['text', 'textarea', 'select', 'number', 'boolean', 'date', 'multiSelect'];
-  const KINDS = ['education', 'internship', 'employment', 'project'];
+  const LEGACY_KINDS = ['education', 'internship', 'employment', 'project'];
+  const KINDS = Object.keys(global.WangshenTemplates.RECORD_GROUPS);
   const API_FIELDS = ['provider', 'model', 'visionModel', 'customBase', 'apiKeys', 'customProviders', 'providerModels'];
   const DEF_KEYS = ['fieldId', 'label', 'type', 'group', 'aliases', 'options', 'description', 'version'];
   const TABLES = ['fieldDefinitions', 'profiles', 'fieldValues', 'entries', 'bindings', 'mappingRules'];
@@ -41,6 +42,12 @@
   function resumeEntryId(profileId, fingerprint, kind, index) { return legacyFieldId(profileId, fingerprint + ':' + kind + ':' + index); }
   // 目录经历采用独立命名空间，防止新模块内记录与旧导入经历互相冒充或碰撞。
   function catalogEntryId(profileId, fingerprint, kind, index) { return resumeEntryId(profileId, fingerprint, kind, index).replace(/^legacy\./, 'catalog.'); }
+  // 导入按模块当前记录顺序填充，优先复用手动添加的槽位；不复制字段定义或重复创建相同文件记录。
+  function catalogTarget(database, profileId, fingerprint, kind, index) {
+    if (kind === 'basic' || index === 0) return null;
+    const records = database.entries.filter((entry) => entry.profileId === profileId && entry.kind === kind && entry.entryId.startsWith('catalog.')).sort((a, b) => a.order - b.order || a.entryId.localeCompare(b.entryId));
+    return records[index - 1]?.entryId || catalogEntryId(profileId, fingerprint, kind, index);
+  }
   // 统一生成 UTC 时间。
   function now() { return new Date().toISOString(); }
   // 对不符合 Schema 的输入抛出可读错误，不输出原始个人数据。
@@ -174,9 +181,9 @@
     return clone(value);
   }
   // 校验数据库完整性和所有引用；输入错误时不进行任何写入。
-  function validate(db) {
+  function validate(db, version = SCHEMA_VERSION) {
     keys(db, ['schemaVersion', 'revision', ...TABLES, 'publicFieldIds', 'activeProfileId', 'settings', 'ledger', 'drafts', 'onboardingDone'], '数据库');
-    check(db.schemaVersion === SCHEMA_VERSION, '不支持的数据库版本');
+    check([3, SCHEMA_VERSION].includes(version) && db.schemaVersion === version, '不支持的数据库版本');
     check(Number.isInteger(db.revision) && db.revision >= 0, '数据库 revision 错误');
     for (const table of [...TABLES, 'publicFieldIds', 'ledger']) list(db[table], table);
     const defs = new Map();
@@ -195,7 +202,7 @@
     db.entries.forEach((entry) => {
       keys(entry, ['entryId', 'profileId', 'kind', 'title', 'order'], '经历');
       string(entry.entryId, 'entryId'); string(entry.title, '经历标题', 500, true);
-      check(profiles.has(entry.profileId) && KINDS.includes(entry.kind), '经历引用或类型错误');
+      check(profiles.has(entry.profileId) && (version === 3 ? LEGACY_KINDS : KINDS).includes(entry.kind), '经历引用或类型错误');
       check(Number.isInteger(entry.order) && entry.order >= 0 && !entries.has(entry.entryId), '经历顺序或 ID 错误');
       entries.set(entry.entryId, entry);
     });
@@ -238,6 +245,7 @@
       if (rule.semanticId !== undefined) {
         // v3 可选复合结构参与指纹，防止普通电话/年月规则被误用于另一种布局。
         keys(rule.features, ['label', 'type', 'group', 'kind', 'degree', 'index', 'layout'], '映射结构');
+        if (version === 3) check(!rule.features.kind || LEGACY_KINDS.includes(rule.features.kind), '旧版本不支持此映射模块');
         global.FieldMatchingEngine.validateField({ scanId: 'scan.validation', semanticId: rule.semanticId, ...rule.features, name: '', placeholder: '', options: [] });
         check(rule.label === rule.features.label && typeof rule.confirmed === 'boolean' && typeof rule.enabled === 'boolean', '映射确认信息错误');
         check(Number.isInteger(rule.ruleVersion) && rule.ruleVersion >= 1, '映射版本错误');
@@ -264,14 +272,15 @@
     }
     return db;
   }
-  // v2→v3 只增加可选来源证据；旧记录不伪造证据，未知版本拒绝升级。
+  // v2→v3 保留来源边界，v3→v4 只扩展模块类型；先按旧结构完整校验，不改动任何旧资料。
   function upgradeDatabase(input) {
-    check(input && [2, SCHEMA_VERSION].includes(input.schemaVersion), '不支持的数据库版本');
+    check(input && [2, 3, SCHEMA_VERSION].includes(input.schemaVersion), '不支持的数据库版本');
     const db = clone(input);
     if (db.schemaVersion === 2) {
       check(Array.isArray(db.fieldValues) && db.fieldValues.every((row) => row.evidence === undefined), '旧版本不支持来源证据');
-      db.schemaVersion = SCHEMA_VERSION;
+      db.schemaVersion = 3;
     }
+    if (db.schemaVersion === 3) { validate(db, 3); db.schemaVersion = SCHEMA_VERSION; }
     return validate(db);
   }
   // 分离旧 API 配置，不改动原始对象。
@@ -406,7 +415,26 @@
   }
   // 备份只含规范个人库；API 设置及旧恢复源从不进入备份。
   function backup(db) {
-    return { kind: 'localapply-ai-backup', formatVersion: 1, schemaVersion: SCHEMA_VERSION, exportedAt: now(), database: clone(validate(db)) };
+    return { kind: 'localapply-ai-backup', formatVersion: 1, schemaVersion: db.schemaVersion, exportedAt: now(), database: clone(validate(db, db.schemaVersion)) };
+  }
+  // 降级备份把 v3 不认识的附加模块记录转为私有平面字段，值/证据/映射保留，完整 v4 备份仍保留原结构。
+  function downgradeV3(database) {
+    const db = clone(validate(database)); const extended = new Map(db.entries.filter((entry) => !LEGACY_KINDS.includes(entry.kind)).map((entry) => [entry.entryId, entry])); const converted = new Map();
+    // 每个旧版本不能表达的记录字段独立生成定义和绑定；名称只来自定义和序号，不复制用户实际内容。
+    function convert(entryId, fieldId) {
+      const key = JSON.stringify([entryId, fieldId]); if (converted.has(key)) return converted.get(key);
+      const entry = extended.get(entryId); const definition = db.fieldDefinitions.find((field) => field.fieldId === fieldId);
+      const nextId = 'compat.' + legacyFieldId(entryId, fieldId).slice(7);
+      const expected = { ...clone(definition), fieldId: nextId, label: definition.label.slice(0, 450) + '（第' + (entry.order + 1) + '条）', aliases: [] };
+      const existing = db.fieldDefinitions.find((field) => field.fieldId === nextId); check(!existing || equal(existing, expected), '兼容字段定义已变化，请先保留完整备份');
+      if (!existing) db.fieldDefinitions.push(expected);
+      if (!db.bindings.some((binding) => binding.profileId === entry.profileId && binding.fieldId === nextId)) db.bindings.push({ profileId: entry.profileId, fieldId: nextId, fid: nextId, key: nextId, sensitive: true, autoFill: false, material: false, custom: true }); converted.set(key, nextId); return nextId;
+    }
+    for (const row of [...db.fieldValues, ...db.mappingRules]) if (extended.has(row.entryId)) { row.fieldId = convert(row.entryId, row.fieldId); row.entryId = null; }
+    db.entries = db.entries.filter((entry) => !extended.has(entry.entryId));
+    // 旧代码不认识新增模块语义指纹；保留映射目标但移除验证状态，降级后必须重新确认。
+    db.mappingRules = db.mappingRules.map(({ mappingId, origin, path, label, fieldId, profileId, entryId }) => ({ mappingId, origin, path, label, fieldId, profileId, entryId })); db.schemaVersion = 3;
+    return validate(db, 3);
   }
   // 导入支持旧档案备份和新备份；所有校验在写入前完成。
   function parseBackup(input) {
@@ -419,7 +447,7 @@
       return migrate({ schemaVersion: 1, profiles: data.profiles, activeProfileId: data.activeProfileId || data.profiles?.[0]?.id }).db;
     }
     keys(data, ['kind', 'formatVersion', 'schemaVersion', 'exportedAt', 'database'], '备份');
-    check(data.kind === 'localapply-ai-backup' && data.formatVersion === 1 && [2, SCHEMA_VERSION].includes(data.schemaVersion)
+    check(data.kind === 'localapply-ai-backup' && data.formatVersion === 1 && [2, 3, SCHEMA_VERSION].includes(data.schemaVersion)
       && data.database?.schemaVersion === data.schemaVersion, '不支持的备份版本');
     return upgradeDatabase(data.database);
   }
@@ -466,7 +494,8 @@
       if (data[DB_KEY]) {
         const db = upgradeDatabase(data[DB_KEY]); const api = apiSettings(data[API_KEY]);
         const catalogUpgrade = data[CATALOG_KEY]?.version !== global.WangshenTemplates.CATALOG_VERSION;
-        const recovery = catalogUpgrade ? clone(db) : null; let removed = 0;
+        const schemaUpgrade = data[DB_KEY].schemaVersion !== SCHEMA_VERSION;
+        const recovery = schemaUpgrade ? clone(data[DB_KEY]) : catalogUpgrade ? clone(db) : null; let removed = 0;
         if (catalogUpgrade) {
           // v1 已补齐参考字段，v2 只精简旧模块，不重新添加用户已移除的参考字段。
           if (!data[CATALOG_KEY]?.version) upgradeFieldCatalog(db);
@@ -474,7 +503,7 @@
         }
         if (!equal(db, data[DB_KEY])) {
           db.revision++;
-          await storage.set({ [DB_KEY]: db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION }, ...(removed ? { [RECOVERY_KEY]: recovery } : {}) }); // 清理、恢复点和标记同批提交，失败可重试。
+          await storage.set({ [DB_KEY]: db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION }, ...(removed || schemaUpgrade ? { [RECOVERY_KEY]: recovery } : {}) }); // 迁移/清理、恢复点和标记同批提交，失败可重试。
         } else if (catalogUpgrade) {
           await storage.set({ [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } });
         }
@@ -713,6 +742,23 @@
               order: db.entries.filter((row) => row.profileId === input.profileId && row.kind === input.kind).length };
             db.entries.push(entry); result = entry.entryId; break;
           }
+          // 用户在模块内主动添加空记录，共用当前绑定字段；不复制定义或其他记录的值。
+          case 'addModuleRecord': {
+            keys(input, ['profileId', 'group'], '添加模块记录');
+            check(request.expectedRevision !== undefined && db.profiles.some((profile) => profile.profileId === input.profileId), '目标简历或版本错误');
+            const kind = KINDS.find((key) => global.WangshenTemplates.RECORD_GROUPS[key] === input.group); check(kind, '模块不支持多条记录');
+            check(db.bindings.some((binding) => binding.profileId === input.profileId && db.fieldDefinitions.some((field) => field.fieldId === binding.fieldId && global.WangshenTemplates.recordKind(field.group) === kind)), '模块没有可用字段');
+            const entries = db.entries.filter((entry) => entry.profileId === input.profileId && entry.kind === kind && entry.entryId.startsWith('catalog.')); check(entries.length < 99, '单个模块最多 100 条记录');
+            const entry = { entryId: id('catalog'), profileId: input.profileId, kind, title: '', order: Math.max(0, ...entries.map((entry) => entry.order)) + 1 }; db.entries.push(entry); result = entry.entryId; break;
+          }
+          // 删除仅限用户指定的附加模块记录，恢复点保护值及映射，其他记录和共享定义不变。
+          case 'deleteModuleRecord': {
+            keys(input, ['profileId', 'entryId', 'confirmed'], '删除模块记录');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '删除模块记录需要确认及版本');
+            check(db.entries.some((entry) => entry.profileId === input.profileId && entry.entryId === input.entryId && entry.entryId.startsWith('catalog.')), '模块记录不存在');
+            db.entries = db.entries.filter((entry) => entry.entryId !== input.entryId); db.fieldValues = db.fieldValues.filter((row) => row.entryId !== input.entryId); db.mappingRules = db.mappingRules.filter((row) => row.entryId !== input.entryId);
+            await commit(db, null, previous, true); return { result: true, revision: db.revision };
+          }
           // 只编辑经历标题，稳定 entryId、所属档案和所有映射关系保持一致。
           case 'editEntry': {
             keys(input, ['entryId', 'title'], '编辑经历'); string(input.title, '经历标题', 500, true);
@@ -729,11 +775,17 @@
               const catalog = global.LocalApplyResumeCatalog.catalog(db, input.profileId);
               check(equal(input.catalog, catalog), '目标字段目录已变化，请重新解析');
               global.LocalApplyResumeCatalog.validateRows(input.rows, catalog);
+              // 一次解析先固定所有记录目标，避免模型字段乱序时，新建记录改变后续候选的槽位。
+              const targets = new Map();
+              for (const cell of input.rows) {
+                const existing = db.entries.filter((entry) => entry.profileId === input.profileId && entry.kind === cell.kind && entry.entryId.startsWith('catalog.'));
+                targets.set(JSON.stringify([cell.kind, cell.index]), { entryId: catalogTarget(db, input.profileId, input.fingerprint, cell.kind, cell.index), order: Math.max(0, ...existing.map((entry) => entry.order)) + Math.max(1, cell.index - existing.length) });
+              }
               result = { saved: 0, kept: 0, overwritten: 0, details: [] };
               for (const cell of input.rows) {
                 // 每个模块首条直接写入基础字段，其余记录使用既有 v3 entryId，绝不合并不同经历。
-                const entryId = cell.kind === 'basic' || cell.index === 0 ? null : catalogEntryId(input.profileId, input.fingerprint, cell.kind, cell.index);
-                if (entryId && !db.entries.some((entry) => entry.entryId === entryId)) db.entries.push({ entryId, profileId: input.profileId, kind: cell.kind, title: '第 ' + (cell.index + 1) + ' 条', order: cell.index });
+                const { entryId, order } = targets.get(JSON.stringify([cell.kind, cell.index]));
+                if (entryId && !db.entries.some((entry) => entry.entryId === entryId)) db.entries.push({ entryId, profileId: input.profileId, kind: cell.kind, title: '', order });
                 const index = db.fieldValues.findIndex((row) => row.profileId === input.profileId && row.fieldId === cell.fieldId && row.entryId === entryId);
                 const prior = index >= 0 ? db.fieldValues[index] : null;
                 const occupied = prior && prior.value !== '' && prior.value !== null && (!Array.isArray(prior.value) || prior.value.length > 0);
@@ -912,12 +964,12 @@
         await commit(db, api, previous);
         return project({ db, api, vault: previous.vault, device: previous.device });
       }),
-      exportBackup: () => run(({ db }) => backup(db)),
+      exportBackup: (version = SCHEMA_VERSION) => run(({ db }) => { check([3, SCHEMA_VERSION].includes(version), '不支持的导出版本'); return backup(version === 3 ? downgradeV3(db) : db); }),
       previewImport: (input, mode) => run(({ db }) => ({ ...importPlan(db, parseBackup(input), mode).summary, revision: db.revision })),
       exportPublicFields: () => run(({ db }) => ({ kind: 'localapply-public-fields', version: 1,
         fields: db.fieldDefinitions.filter((def) => db.publicFieldIds.includes(def.fieldId)).map(definition) })),
       command,
     };
   }
-  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, DEVICE_KEY, CATALOG_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId, catalogEntryId };
+  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, DEVICE_KEY, CATALOG_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId, catalogEntryId, catalogTarget, downgradeV3 };
 })(globalThis);

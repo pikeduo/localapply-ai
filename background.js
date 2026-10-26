@@ -189,7 +189,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         case 'localapply:command':
           sendResponse({ ok: true, ...await repository.command(msg.request || {}) }); return;
         case 'localapply:exportBackup':
-          sendResponse({ ok: true, backup: await repository.exportBackup() }); return;
+          sendResponse({ ok: true, backup: await repository.exportBackup(msg.version) }); return;
         case 'localapply:previewImport':
           sendResponse({ ok: true, preview: await repository.previewImport(msg.backup, msg.mode) }); return;
         case 'localapply:exportPublicFields':

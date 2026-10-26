@@ -65,7 +65,7 @@
       case 'localapply:read': return { database: await repository.read() };
       case 'localapply:vault': return { settings: await repository.vaultCommand(payload.action, payload.payload) };
       case 'localapply:command': return repository.command(payload.request || {});
-      case 'localapply:exportBackup': return { backup: await repository.exportBackup() };
+      case 'localapply:exportBackup': return { backup: await repository.exportBackup(payload.version) };
       case 'localapply:previewImport': return { preview: await repository.previewImport(payload.backup, payload.mode) };
       case 'localapply:exportPublicFields': return { fields: await repository.exportPublicFields() };
       case 'wsa:listModels': return ai.listAvailableModels(payload.providerId);
