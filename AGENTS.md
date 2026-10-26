@@ -54,6 +54,8 @@
 
 ## 测试
 
+- 2026-10-27：字段目录标记 `localapply.fieldCatalog` 升至 v3（数据库仍为 Schema v4）。已完成 v2 的库只清理 `resume.languages` 及“语言与技能证书”旧定义/值/绑定/映射，恢复点与标记同批保存，不补字段、不重删其他历史分类。单行控件不得继承横向表单的 `flex: 1` 而被相邻描述框撑高。
+
 - `npm test`：Node 语法/基础/数据与文档边界契约，需 npm ci 安装开发依赖，不需要下载浏览器。
 - `npm run test:e2e`：需开发者手动执行 npm ci 和 npx playwright install chromium。只能使用独立测试 profile，关闭自己资源，禁止按固定端口强杀用户进程。
 - Playwright 夹具只用合成资料；浏览器真实重启持久性不能用内存桩通过来替代。

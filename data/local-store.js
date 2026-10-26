@@ -135,12 +135,12 @@
     }
     return validate(db);
   }
-  // 一次性删除指定旧模块的定义与引用；参考目录字段即使旧分类不同也保留，避免误删有效资料。
-  function removeObsoleteGroups(db) {
+  // 删除旧模块定义及引用；languageOnly 用于已完成 v2 的库，仅清理本次指定的语言证书遗留项。
+  function removeObsoleteGroups(db, languageOnly = false) {
     const retained = new Set(global.WangshenTemplates.PROFILE_TEMPLATE.map((field) => 'builtin.' + field.key));
-    const retired = new Set(global.WangshenTemplates.SOE_LONG_TEMPLATE.filter((field) => !retained.has('builtin.' + field.key)).map((field) => 'builtin.' + field.key));
-    const groups = new Set(global.WangshenTemplates.REMOVED_PROFILE_GROUPS);
-    const removed = new Set(db.fieldDefinitions.filter((def) => retired.has(def.fieldId) || (!retained.has(def.fieldId) && groups.has(def.group))).map((def) => def.fieldId));
+    const retired = new Set(languageOnly ? [] : global.WangshenTemplates.SOE_LONG_TEMPLATE.filter((field) => !retained.has('builtin.' + field.key)).map((field) => 'builtin.' + field.key));
+    const groups = new Set(languageOnly ? ['语言与技能证书'] : global.WangshenTemplates.REMOVED_PROFILE_GROUPS);
+    const removed = new Set(db.fieldDefinitions.filter((def) => def.fieldId === 'resume.languages' || retired.has(def.fieldId) || (!retained.has(def.fieldId) && groups.has(def.group))).map((def) => def.fieldId));
     if (!removed.size) return 0;
     db.fieldDefinitions = db.fieldDefinitions.filter((def) => !removed.has(def.fieldId));
     db.publicFieldIds = db.publicFieldIds.filter((fieldId) => !removed.has(fieldId));
@@ -484,7 +484,7 @@
     let queue = Promise.resolve();
     let sessionKey = null; // 不落盘；后台回收或文件页关闭后须重新解锁。
     let sessionSalt = null; // 另一页面重设口令时，旧会话密钥必须失效。
-    // 初始化访问限制和数据；失败不删除/修改旧源，下次启动可重试。
+    // 初始化访问限制并升级目录；清理与恢复点同批写入，失败不删除旧数据，下次可重试。
     async function load() {
       await storage.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
       const data = await storage.get([DB_KEY, API_KEY, VAULT_KEY, DEVICE_KEY, CATALOG_KEY]);
@@ -497,9 +497,9 @@
         const schemaUpgrade = data[DB_KEY].schemaVersion !== SCHEMA_VERSION;
         const recovery = schemaUpgrade ? clone(data[DB_KEY]) : catalogUpgrade ? clone(db) : null; let removed = 0;
         if (catalogUpgrade) {
-          // v1 已补齐参考字段，v2 只精简旧模块，不重新添加用户已移除的参考字段。
+          // v1 已补齐参考字段，v2 精简旧模块；v3 仅清理语言证书，不补回用户已移除字段。
           if (!data[CATALOG_KEY]?.version) upgradeFieldCatalog(db);
-          removed = removeObsoleteGroups(db); validate(db);
+          removed = removeObsoleteGroups(db, data[CATALOG_KEY]?.version >= 2); validate(db);
         }
         if (!equal(db, data[DB_KEY])) {
           db.revision++;

@@ -68,6 +68,25 @@ async function oldCatalogFixture() {
   return { env: fixture({ [seed.store.DB_KEY]: JSON.parse(JSON.stringify(db)), [seed.store.API_KEY]: seed.disk[seed.store.API_KEY] }), before: JSON.parse(JSON.stringify(db)) };
 }
 
+// v2 库仅删除本次指定的语言遗留项，恢复点及目录标记原子保存，其他模块和用户删字段保持原样。
+test('目录 v3 清理旧语言证书及映射，保留英语能力、证书模块和其他自定义资料', async () => {
+  const seed = fixture(); await seed.repo.read();
+  await command(seed.repo, 'createField', { profileId: 'p1', definition: { ...def('resume.languages'), label: '语言证书', group: '简历资料' }, value: '合成旧语言证书' });
+  await command(seed.repo, 'createField', { profileId: 'p1', definition: { ...def('custom.old-language'), group: '语言与技能证书' }, value: '合成旧语言内容' });
+  await command(seed.repo, 'createField', { profileId: 'p1', definition: { ...def('custom.unrelated'), group: '技能与其他' }, value: '合成用户自建内容保留' });
+  await command(seed.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.englishScore', value: '合成英语保留' });
+  await command(seed.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.certificateName', value: '合成证书保留' });
+  await command(seed.repo, 'saveMapping', { mappingId: 'map.language', origin: 'https://synthetic.example', path: '/apply', label: '合成语言', fieldId: 'resume.languages', profileId: 'p1', entryId: null });
+  const disk = structuredClone(seed.disk); disk[seed.store.CATALOG_KEY] = { version: 2 }; const db = disk[seed.store.DB_KEY];
+  db.bindings = db.bindings.filter((row) => row.fieldId !== 'builtin.paperName'); db.fieldValues = db.fieldValues.filter((row) => row.fieldId !== 'builtin.paperName');
+  const env = fixture(disk); env.fail(); await assert.rejects(env.repo.read(), /模拟磁盘/); assert.deepEqual(env.disk, disk);
+  const after = await env.restart().read(); const removed = new Set(['resume.languages', 'custom.old-language']);
+  for (const table of ['fieldDefinitions', 'bindings', 'fieldValues', 'mappingRules']) assert.ok(after[table].every((row) => !removed.has(row.fieldId)));
+  assert.equal(value(after, 'p1', 'builtin.englishScore'), '合成英语保留'); assert.equal(value(after, 'p1', 'builtin.certificateName'), '合成证书保留'); assert.equal(value(after, 'p1', 'custom.unrelated'), '合成用户自建内容保留');
+  assert.ok(!after.bindings.some((row) => row.fieldId === 'builtin.paperName')); assert.equal(env.disk[seed.store.CATALOG_KEY].version, 3); assert.deepEqual(env.disk[seed.store.RECOVERY_KEY], db);
+  assert.deepEqual(await env.restart().read(), after); await command(env.repo, 'restoreRecovery', {}); assert.equal(JSON.stringify((await env.repo.read()).fieldValues), JSON.stringify(db.fieldValues));
+});
+
 // 静态目录覆盖全部参考模块；选项不因旧的 200 项限制而被截断。
 test('参考目录包含 155 项结构、12 个模块，日期/下拉/多选完整且不含个人值', async () => {
   const env = fixture(); const db = await env.repo.read(); const fields = env.templates.REFERENCE_FIELDS;
@@ -118,7 +137,7 @@ test('目录迁移写入失败保留旧库及升级标记，可重试且不覆�
   assert.deepEqual(env.disk, diskBefore); assert.equal(env.disk[env.store.CATALOG_KEY], undefined);
   const db = await env.restart().read(); assert.equal(db.revision, before.revision + 1);
   assert.equal(db.fieldDefinitions.find((field) => field.fieldId === 'builtin.ethnic').description, '合成用户修改');
-  assert.equal(env.disk[env.store.CATALOG_KEY].version, 2);
+  assert.equal(env.disk[env.store.CATALOG_KEY].version, env.templates.CATALOG_VERSION);
 });
 
 test('参考日期、数字及开放城市多选经校验保存、备份往返，新简历不复制旧值', async () => {
@@ -705,7 +724,7 @@ test('目录 v2 删除六个旧模块及字段引用，保留参考字段、删�
   assert.equal(value(db, 'p1', 'builtin.name'), '合成保留姓名'); assert.ok(!db.fieldValues.some((row) => row.value === '合成旧分类内容'));
   assert.ok(!db.bindings.some((row) => row.profileId === 'p1' && row.fieldId === 'builtin.paperName'), '新版本不能重新补回已移除的参考字段');
   assert.deepEqual(JSON.parse(JSON.stringify(db.profiles)), before.profiles); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
-  assert.equal(env.disk[env.store.CATALOG_KEY].version, 2); assert.deepEqual(await env.restart().read(), db);
+  assert.equal(env.disk[env.store.CATALOG_KEY].version, env.templates.CATALOG_VERSION); assert.deepEqual(await env.restart().read(), db);
   const recovery = structuredClone(env.disk['localapply.recovery']); await env.repo.read(); assert.deepEqual(env.disk['localapply.recovery'], recovery);
 });
 

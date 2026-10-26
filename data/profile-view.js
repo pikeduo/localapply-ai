@@ -39,12 +39,12 @@
       if (!groups.has(label)) groups.set(label, { group: label, items: [] });
       return groups.get(label);
     }
-    // 基本资料按定义分类，旧导入中笼统的“简历资料”复用明确的同名标准字段分类。
+    // 基本资料按定义分类，旧资料仅复用同名标准分类，不再额外生成已删除的语言证书模块。
     function add(row, definition) {
       if (!definition || seen.has(definition.fieldId)) return;
       seen.add(definition.fieldId);
       const standard = definition.group === '简历资料' && database.fieldDefinitions.find((item) => item.fieldId.startsWith('builtin.') && item.label === definition.label);
-      const name = standard?.group || (definition.fieldId === 'resume.languages' ? '语言与技能证书' : definition.group);
+      const name = standard?.group || definition.group;
       group(name).items.push({ row, definition });
     }
     for (const binding of database.bindings.filter((item) => item.profileId === profileId)) {

@@ -34,6 +34,9 @@ summary { cursor: pointer; color: var(--sub); padding: 10px 0; }
 #capabilityStatus { white-space: pre-line; overflow-wrap: anywhere; }
 .basic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 .center-field { display: flex; flex-direction: column; gap: 5px; color: var(--sub); }
+/* 网格按内容顶对齐，单行控件不继承横向表单的 flex: 1，避免被相邻多行描述撑高。 */
+.basic-grid { align-items: start; }
+.basic-grid .center-field > input, .basic-grid .center-field > select, .basic-grid .center-field > textarea { flex: none; }
 .review-cell { border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 10px 0; }
 .review-label { display: flex; gap: 8px; font-weight: 600; margin-bottom: 8px; }
 .review-cell > input, .review-cell textarea { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 9px; font: inherit; }

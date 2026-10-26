@@ -357,7 +357,7 @@
     ["paperDescription", "论文描述", "论文期刊", "textarea", []],
     ["selfIntroduction", "自我介绍", "自我介绍", "textarea", []],
   ];
-  const CATALOG_VERSION = 2;
+  const CATALOG_VERSION = 3; // v3 清理旧简历契约遗留的语言证书模块，不重新补齐已删字段。
   // 用户指定移除的旧分类；参考目录中的同名标准字段仍保留在其现有模块。
   const REMOVED_PROFILE_GROUPS = ['技能与其他', '开放题素材', '政治与个人情况', '语言与技能证书', '家庭与紧急联系', '补充声明'];
   // 只保留参考页 12 个模块，兼容其旧 key、标签及日期文本，不再追加旧分类。

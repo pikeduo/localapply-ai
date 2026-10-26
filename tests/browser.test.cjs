@@ -2143,6 +2143,10 @@ for (const withExtension of [true, false]) {
           db.bindings.push({ profileId, fieldId, fid: 'retired.' + field.key, key: field.key, sensitive: false, autoFill: false, material: !!field.material, custom: false });
           db.fieldValues.push({ profileId, fieldId, entryId: null, value: '合成旧模块资料', updatedAt: new Date().toISOString(), source: 'manual' });
         }
+        // 旧模型契约把语言证书存到“简历资料”，此前会绕过按分类清理并重新生成语言模块。
+        db.fieldDefinitions.push(LocalApplyStore.definition({ fieldId: 'resume.languages', label: '语言证书', type: 'text', group: '简历资料', aliases: [], options: [], description: '', version: 1 }));
+        db.bindings.push({ profileId, fieldId: 'resume.languages', fid: 'retired.resume-languages', key: 'languages', sensitive: false, autoFill: false, material: false, custom: true });
+        db.fieldValues.push({ profileId, fieldId: 'resume.languages', entryId: null, value: '合成旧语言证书', updatedAt: new Date().toISOString(), source: 'ai-confirmed' });
         db.bindings = db.bindings.filter((row) => row.fieldId !== 'builtin.paperName'); db.fieldValues = db.fieldValues.filter((row) => row.fieldId !== 'builtin.paperName'); LocalApplyStore.validate(db);
         const write = { 'localapply.database': db, 'localapply.fieldCatalog': { version: 1 } };
         // 仅用于合成夹具置入升级前快照；生产界面仍通过后台仓库写数据。
@@ -2156,6 +2160,7 @@ for (const withExtension of [true, false]) {
       // 数据库、正文、目录和字段库同时检查，避免仅靠隐藏旧模块伪装删除。
       const check = async () => {
         const database = (await page.evaluate(() => dataRequest('localapply:read'))).database; assert.equal(database.schemaVersion, 4); assert.equal(database.fieldDefinitions.length, 155);
+        assert.ok(!database.fieldDefinitions.some((field) => field.fieldId === 'resume.languages')); assert.ok(!database.fieldValues.some((row) => row.value === '合成旧语言证书'));
         assert.equal(await page.locator('#basicFields .center-field').count(), 154); assert.equal(await page.locator('#basicFields > .resume-group').count(), 12);
         for (const name of ['技能与其他', '开放题素材', '政治与个人情况', '语言与技能证书', '家庭与紧急联系', '补充声明', '填写偏好']) assert.equal(await page.locator('#resumeToc').getByRole('button', { name, exact: true }).count(), 0);
         assert.equal(await page.locator('#fillingPreferences,#autoThreshold,#privacyMask,#autoFloatbar').count(), 0);
@@ -2419,6 +2424,27 @@ for (const withExtension of [true, false]) {
         const cleaned = await read(); assert.equal(cleaned.entries.length, 2); assert.ok(cleaned.entries.every((entry) => entry.entryId.startsWith('catalog.'))); assert.equal(value(cleaned, 'school'), '合成第一学校'); assert.equal(api.calls.length, 2); assert.deepEqual(errors, []);
       });
     } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 真实布局回归覆盖全部单行控件，避免链接/日期/选择框随相邻描述框变高。
+for (const withExtension of [true, false]) {
+  test(`简历控件高度：${withExtension ? '扩展' : 'file://'}单行控件不随描述框拉伸`, { timeout: 60000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'field-height-')); let context;
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000); const page = await context.newPage();
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      for (const toggle of await page.locator('#basicFields .resume-more-toggle').all()) if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+      const link = page.locator('#basicFields [data-field-id="builtin.paperLink"] input'); const description = page.locator('#basicFields [data-field-id="builtin.paperDescription"] textarea');
+      assert.equal(await link.count(), 1); const initialHeight = (await link.boundingBox()).height; assert.ok(initialHeight >= 30 && initialHeight < 65);
+      await description.evaluate((element) => { element.style.height = '240px'; }); assert.ok(Math.abs((await link.boundingBox()).height - initialHeight) < 1);
+      // 检查所有可见单行控件，也包含复合日期/地区控件内的输入框；多选列表保留其合理高度。
+      const oversized = await page.locator('#basicFields .center-field input:not([type="checkbox"]), #basicFields .center-field select:not([multiple])').evaluateAll((nodes) => nodes.filter((node) => node.getClientRects().length && node.getBoundingClientRect().height >= 65).map((node) => node.closest('[data-field-id]').dataset.fieldId));
+      assert.deepEqual(oversized, []); assert.ok((await description.boundingBox()).height >= 240);
+      await page.locator('#themeToggle').click(); await link.scrollIntoViewIfNeeded(); await page.locator('.resume-group[data-group="论文期刊"]').screenshot({ path: path.join(testRoot, `field-height-${withExtension ? 'extension' : 'file'}.png`) });
+      await page.setViewportSize({ width: 390, height: 844 }); assert.ok((await link.boundingBox()).height < 65); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
 
