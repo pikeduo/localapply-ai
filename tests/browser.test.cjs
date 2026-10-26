@@ -1210,9 +1210,25 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
     const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
     await t.test('自动显示网申提示，但没有读取字段或调用模型', async () => {
       await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
+      const rect = await page.locator('#wsa-floatbar-host').boundingBox(); const viewport = page.viewportSize();
+      assert.ok(Math.abs(viewport.width - rect.x - rect.width - 18) < 2 && Math.abs(viewport.height - rect.y - rect.height - 18) < 2, '检测提示默认位于右下角');
       const result = await options.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'wsa:getState' }), tabId);
       assert.equal(result.state.authorized, false); assert.equal(result.state.fields.length, 0); assert.equal(api.calls.length, 0);
       assert.equal(await page.locator('#wsa-floatbar-host').evaluate((host) => host.shadowRoot), null);
+      await page.screenshot({ path: path.join(testRoot, 'application-prompt-bottom-right.png') });
+    });
+    await t.test('检测提示可拖动，松手不误打开，缩窗后仍在视口内', async () => {
+      const before = await page.locator('#wsa-floatbar-host').boundingBox(); const viewport = page.viewportSize();
+      await page.mouse.move(before.x + 45, before.y + 20); await page.mouse.down();
+      await page.mouse.move(before.x - 140, before.y - 120, { steps: 8 }); await page.mouse.up();
+      await page.waitForFunction((before) => { const rect = document.getElementById('wsa-floatbar-host').getBoundingClientRect(); return rect.left < before.x - 100 && rect.top < before.y - 100; }, before);
+      const probe = await options.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'wsa:floatingProbe' }), tabId);
+      assert.equal(probe.open, false); assert.equal((await options.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'wsa:getState' }), tabId)).state.authorized, false);
+      assert.equal(api.calls.length, 0);
+      await page.screenshot({ path: path.join(testRoot, 'application-prompt-dragged.png') });
+      await page.setViewportSize({ width: 375, height: 360 });
+      await page.waitForFunction(() => { const rect = document.getElementById('wsa-floatbar-host').getBoundingClientRect(); return rect.left >= 10 && rect.right <= innerWidth - 9 && rect.top >= 10 && rect.bottom <= innerHeight - 9; });
+      await page.setViewportSize(viewport);
     });
     const panelLoaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
     await page.locator('#wsa-floatbar-host').click();
@@ -1307,17 +1323,18 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
       await page.goto(api.base + '/test-pages/login-mock.html'); await page.locator('input[placeholder="请输入验证码"]').waitFor();
       await page.waitForFunction(() => document.getElementById('wsa-floatbar-host')?.style.display === 'none');
       assert.equal(await page.locator('#wsa-floatbar-host').isVisible(), false);
-      // 异步招聘表单先挂载后显现，自动检测也不能读取任何控件值。
+      // 非招聘标题的异步表单使用无障碍标签；持续样式更新不能饿死检测，也不能读取值。
       await page.evaluate(() => {
-        document.title = '动态候选人信息'; const form = document.createElement('form'); form.id = 'dynamic-application'; form.hidden = true;
+        document.title = '用户中心'; document.querySelector('h1')?.remove(); const form = document.createElement('form'); form.id = 'dynamic-application'; form.hidden = true;
         window.__presenceValueReads = 0;
-        for (const name of ['本科毕业院校','硕士专业','联系电话']) { const label = document.createElement('label'); label.textContent = name; const input = document.createElement('input'); Object.defineProperty(input, 'value', { get() { window.__presenceValueReads++; return '禁止读取'; } }); label.append(input); form.append(label); }
+        for (const [index, name] of ['本科毕业院校','硕士专业','联系电话'].entries()) { const label = document.createElement('span'); label.id = 'presence-label-' + index; label.textContent = name; const input = document.createElement('input'); input.setAttribute('aria-labelledby', label.id); Object.defineProperty(input, 'value', { get() { window.__presenceValueReads++; return '禁止读取'; } }); form.append(label, input); }
         document.body.append(form);
         document.querySelector('input[placeholder="请输入验证码"]').remove();
       });
       await options.waitForFunction(async (tabId) => (await chrome.tabs.sendMessage(tabId, { type: 'wsa:floatingProbe' })).presence.kind === 'other', tabId);
-      await page.locator('#dynamic-application').evaluate((form) => { form.hidden = false; });
+      await page.locator('#dynamic-application').evaluate((form) => { form.hidden = false; window.__presencePulse = setInterval(() => { form.style.opacity = form.style.opacity === '0.99' ? '1' : '0.99'; }, 80); });
       await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
+      await page.evaluate(() => clearInterval(window.__presencePulse));
       assert.equal(await page.evaluate(() => __presenceValueReads), 0);
     });
   } finally {

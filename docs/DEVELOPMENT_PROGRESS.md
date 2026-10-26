@@ -1,6 +1,6 @@
 # localapply-ai｜开发进度与阶段验收记录
 
-> **文档版本：** v2.5
+> **文档版本：** v2.6
 > **更新日期：** 2026-10-26
 > **对应计划：** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) **v2.0**（2026-10-25 起采用新版任务和阶段编号）
 > **项目：** `localapply-ai`（基于 [`xiaoxiaobaijiangjun/wangshen-autofill`](https://github.com/xiaoxiaobaijiangjun/wangshen-autofill) Fork）  
@@ -213,6 +213,10 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 
 最终 `npm test` **109/109**；`node --test --test-timeout=120000 --test-name-pattern='阶段二|简历管理|简历模块导航|设置快捷导航|工作台模块导航|阶段四' tests/browser.test.cjs` **48/48**（57.31 秒），均 0 失败/跳过。本轮未重复完整 E2E，所有资料与 AI 服务均为合成夹具/本地 Mock。日志 `.browser-tests/resume-management-unit-final.log`、`resume-management-final.log`；首轮及修复日志为同目录 `resume-management-unit.log`、`resume-management-ui.log`、`resume-management-store.log`、`resume-management-ui-repair.log`；截图 `resume-management-{extension,file}.png`。语法检查与 `git diff --check` 通过；未新增依赖、提交或推送。
 
+**右下角可拖动检测提示增补（2026-10-26）：** 修正检测提示仍在右上角且不能拖动的问题；检测到简历/网申表单后默认在右下角显示，按住可拖动，松手不误打开，点击进入原填写助手。提示位置只保留于当前页面，缩窗后限制在可见区域。完善 aria-labelledby、邻近标签和标题的识别，排除不可见控件；动态检测使用有界等待，避免持续样式更新导致提示始终不出现。仍只在本机读取控件元数据，不读取值或自动调用 AI。
+
+增加真实鼠标拖动、右下角坐标、缩窗边界及动态无障碍标签表单断言，保留填写/预览/日志/权限回归。首轮相关浏览器 17 通过 / 2 失败，发现拖动后缩窗时旧坐标影响自动宽度，修复宿主宽度后悬浮专项 10/10 通过。最终 `npm test` **109/109**；`node --test --test-timeout=120000 --test-name-pattern='悬浮卡片|阶段四' tests/browser.test.cjs` **26/26**（49.05 秒），均 0 失败/跳过，未重复完整 E2E。日志 `.browser-tests/floating-prompt-unit-final.log`、`floating-prompt-final.log`；首轮及专项日志 `floating-prompt-ui.log`、`floating-prompt-ui-repair.log`；截图 `application-prompt-bottom-right.png`、`application-prompt-dragged.png`。均使用合成资料及本地 Mock；真实 ATS 未抽检，未改 Schema、依赖或密钥模块，未提交或推送。
+
 ### 阶段 5｜岗位识别与投递记录工作台（新增，未开始）
 
 - [ ] 本地规则识别岗位与公司，用户确认记录内容。
@@ -286,6 +290,7 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 | 设置快捷操作增补（2026-10-26） | 基础 106/106、相关浏览器 20/20；截图定向复验 2/2，均 0 失败/跳过 | 上述增补段记录命令及 `.browser-tests/settings-*.log`；未重复全套 E2E | 是 |
 | 完整分类与滚动目录（2026-10-26） | 最终基础 106/106、相关浏览器 22/22，均 0 失败/跳过；首轮失败和专项复验单列保留 | 阶段四增补段；`.browser-tests/resume-sections-unit-final.log`、`resume-sections-final.log` | 是 |
 | 简历管理（2026-10-26） | 最终基础 109/109、阶段二/四与相关导航浏览器 48/48，均 0 失败/跳过；首轮测试断言问题已修正 | 阶段四简历管理增补；`.browser-tests/resume-management-unit-final.log`、`resume-management-final.log` | 是 |
+| 右下角可拖动检测提示（2026-10-26） | 基础 109/109、相关浏览器 26/26，均 0 失败/跳过；缩窗边界修复前后的结果单列保留 | 阶段四提示增补；`.browser-tests/floating-prompt-unit-final.log`、`floating-prompt-final.log` | 是 |
 | 真实第三方模型 | 待抽检 | 仅使用虚构简历 | 否 |
 | 真实招聘网站 | 待抽检 | 仅授权页面、人工提交 | 否 |
 | Chrome / Edge 发布验收 | 待开发 | 新版阶段 8 补录 | 否 |
@@ -366,5 +371,6 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 | 2026-10-26 | v2.3 | 增加顶部/底部快捷导航、持久化明暗切换和当前档案目录；基础 106、相关浏览器 20 项通过，截图定向复验 2 项通过；停止于阶段四 | 本地实际测试与截图；本文件阶段四增补 |
 | 2026-10-26 | v2.4 | 分类完整卡片、全字段定位及滚轮目录同步；修复页底短卡片误选与窗口缩小后的目录可见性，最终基础 106、相关浏览器 22 项通过 | 本地真实滚轮测试与明暗截图；本文件阶段四增补 |
 | 2026-10-26 | v2.5 | 移除整行分类/搜索/刷新工具，增加简历重命名、确认删除及关联数据清理，保留其他简历与目录；基础 109、相关浏览器 48 项通过 | 本地数据契约、两种入口及整个浏览器重启；本文件阶段四增补 |
+| 2026-10-26 | v2.6 | 检测提示改为右下角可拖动，修复缩窗边界及持续更新时的动态检测，完善无障碍标签识别；基础 109、相关浏览器 26 项通过 | 真实鼠标拖动与合成页面检测；本文件阶段四增补 |
 
 > **维护要求：** Codex 每次完成一个功能块、修复阻断性缺陷或结束阶段时，都应更新本文件。**以真实代码和实际运行记录为准，绝不虚构已完成项目或测试结果。**
