@@ -126,6 +126,18 @@
     }
     return validate(db);
   }
+  // 一次性删除指定旧模块的定义与引用；参考目录字段即使旧分类不同也保留，避免误删有效资料。
+  function removeObsoleteGroups(db) {
+    const retained = new Set(global.WangshenTemplates.PROFILE_TEMPLATE.map((field) => 'builtin.' + field.key));
+    const retired = new Set(global.WangshenTemplates.SOE_LONG_TEMPLATE.filter((field) => !retained.has('builtin.' + field.key)).map((field) => 'builtin.' + field.key));
+    const groups = new Set(global.WangshenTemplates.REMOVED_PROFILE_GROUPS);
+    const removed = new Set(db.fieldDefinitions.filter((def) => retired.has(def.fieldId) || (!retained.has(def.fieldId) && groups.has(def.group))).map((def) => def.fieldId));
+    if (!removed.size) return 0;
+    db.fieldDefinitions = db.fieldDefinitions.filter((def) => !removed.has(def.fieldId));
+    db.publicFieldIds = db.publicFieldIds.filter((fieldId) => !removed.has(fieldId));
+    for (const table of ['bindings', 'fieldValues', 'mappingRules']) db[table] = db[table].filter((row) => !removed.has(row.fieldId));
+    return removed.size;
+  }
   // 建立空数据库，API 设置不进入此对象。
   function emptyDatabase() {
     const defs = builtins();
@@ -452,10 +464,15 @@
       if (data[DB_KEY]) {
         const db = upgradeDatabase(data[DB_KEY]); const api = apiSettings(data[API_KEY]);
         const catalogUpgrade = data[CATALOG_KEY]?.version !== global.WangshenTemplates.CATALOG_VERSION;
-        if (catalogUpgrade) upgradeFieldCatalog(db);
+        const recovery = catalogUpgrade ? clone(db) : null; let removed = 0;
+        if (catalogUpgrade) {
+          // v1 已补齐参考字段，v2 只精简旧模块，不重新添加用户已移除的参考字段。
+          if (!data[CATALOG_KEY]?.version) upgradeFieldCatalog(db);
+          removed = removeObsoleteGroups(db); validate(db);
+        }
         if (!equal(db, data[DB_KEY])) {
           db.revision++;
-          await storage.set({ [DB_KEY]: db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } }); // 数据和升级标记同批提交，失败可重试。
+          await storage.set({ [DB_KEY]: db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION }, ...(removed ? { [RECOVERY_KEY]: recovery } : {}) }); // 清理、恢复点和标记同批提交，失败可重试。
         } else if (catalogUpgrade) {
           await storage.set({ [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } });
         }
@@ -464,9 +481,10 @@
       const legacy = await storage.get(LEGACY_KEY);
       const migrated = migrate(legacy[LEGACY_KEY] || global.WangshenTemplates.defaultState());
       upgradeFieldCatalog(migrated.db);
+      const recovery = clone(migrated.db); const removed = removeObsoleteGroups(migrated.db); validate(migrated.db);
       // 先持久化独立配置，再以单 DB 键作为迁移生效点；中断时旧源仍可重试。
       await storage.set({ [API_KEY]: migrated.api });
-      await storage.set({ [DB_KEY]: migrated.db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } });
+      await storage.set({ [DB_KEY]: migrated.db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION }, ...(removed ? { [RECOVERY_KEY]: recovery } : {}) });
       const saved = await storage.get([DB_KEY, API_KEY]);
       check(equal(saved[DB_KEY], migrated.db) && equal(saved[API_KEY], migrated.api), '迁移写入校验失败；旧数据仍保留');
       return { ...migrated, vault: data[VAULT_KEY] || null, device: data[DEVICE_KEY] || null };

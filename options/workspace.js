@@ -43,7 +43,6 @@ function renderResumeToc() {
   document.querySelectorAll('#basicFields .resume-group').forEach((target) => {
     items.push({ key: 'group:' + target.dataset.group, label: target.querySelector('h3').textContent, target });
   });
-  items.push({ key: 'preferences', label: '填写偏好', target: document.getElementById('fillingPreferences') });
   workspaceResumeSections = items;
   root.replaceChildren(...items.map(({ key, label }) => {
     const button = workspaceNode('button', label); button.type = 'button'; button.dataset.tocKey = key; button.title = label;

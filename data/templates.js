@@ -348,8 +348,10 @@
     ["paperDescription", "论文描述", "论文期刊", "textarea", []],
     ["selfIntroduction", "自我介绍", "自我介绍", "textarea", []],
   ];
-  const CATALOG_VERSION = 1;
-  // 合并同义字段并保留旧 key、标签、日期文本兼容性与原有素材；新增字段默认空白。
+  const CATALOG_VERSION = 2;
+  // 用户指定移除的旧分类；参考目录中的同名标准字段仍保留在其现有模块。
+  const REMOVED_PROFILE_GROUPS = ['技能与其他', '开放题素材', '政治与个人情况', '语言与技能证书', '家庭与紧急联系', '补充声明'];
+  // 只保留参考页 12 个模块，兼容其旧 key、标签及日期文本，不再追加旧分类。
   function referenceTemplate() {
     const existing = new Map(SOE_LONG_TEMPLATE.map((field) => [field.key, field]));
     const fields = REFERENCE_FIELDS.map(([key, label, group, widget, options]) => {
@@ -361,7 +363,7 @@
         autoFill: old ? old.autoFill : false,
         patterns: [...new Set([...(old?.patterns || []), label])] };
     });
-    return fields.concat(SOE_LONG_TEMPLATE.filter((field) => !fields.some((item) => item.key === field.key)));
+    return fields;
   }
   const PROFILE_TEMPLATE = referenceTemplate();
 
@@ -563,6 +565,7 @@
     PROFILE_TEMPLATE,
     REFERENCE_FIELDS,
     CATALOG_VERSION,
+    REMOVED_PROFILE_GROUPS,
     PROVIDERS,
     FIELD_INDEX,
     normalizeLabel,

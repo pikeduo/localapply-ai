@@ -1569,7 +1569,9 @@ for (const withExtension of [true, false]) {
       assert.equal(await page.locator('#newProfileName').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(25, 35, 50)');
       await page.screenshot({ path: path.join(testRoot, `workspace-dark-${mode}.png`) });
       await page.locator('#scrollBottom').click(); await page.waitForFunction(() => Math.abs(scrollY + innerHeight - document.documentElement.scrollHeight) < 2);
-      assert.equal(await page.locator('#fillingPreferences').evaluate((element) => { const rect = element.getBoundingClientRect(); return rect.bottom > 0 && rect.top < innerHeight; }), true);
+      // 填写偏好已移除，页面底部应显示最后一个保留的资料模块。
+      assert.equal(await page.locator('#fillingPreferences').count(), 0);
+      assert.equal(await page.locator('#basicFields > .resume-group').last().evaluate((element) => { const rect = element.getBoundingClientRect(); return rect.bottom > 0 && rect.top < innerHeight; }), true);
       await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0);
       await page.locator('#themeToggle').click(); assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
       // 等按钮颜色过渡完成再截图，避免把中间帧误记为明亮主题效果。
@@ -1736,14 +1738,14 @@ for (const withExtension of [true, false]) {
       await wheelTo(second, 'group:合成下一分类');
       assert.equal(await first.evaluate((element) => element.classList.contains('is-target')), false);
       await page.setViewportSize({ width: 1440, height: 520 });
-      await wheelTo(page.locator('#fillingPreferences'), 'preferences');
+      await wheelTo(second, 'group:合成下一分类');
       const toc = await page.locator('.resume-toc').boundingBox(); const active = await page.locator('#resumeToc [aria-current="location"]').boundingBox();
       assert.ok(active.y >= toc.y && active.y + active.height <= toc.y + toc.height, '目录自身滚动后仍显示当前条目');
       // 当前条目未改变时缩小窗口，也要让目录重新露出该条目。
       await page.setViewportSize({ width: 1440, height: 420 });
-      await page.waitForFunction(() => { const active = document.querySelector('#resumeToc [aria-current="location"]'); const box = document.querySelector('.resume-toc').getBoundingClientRect(); const item = active.getBoundingClientRect(); return active.dataset.tocKey === 'preferences' && item.top >= box.top && item.bottom <= box.bottom; });
+      await page.waitForFunction(() => { const active = document.querySelector('#resumeToc [aria-current="location"]'); const box = document.querySelector('.resume-toc').getBoundingClientRect(); const item = active.getBoundingClientRect(); return active.dataset.tocKey === 'group:合成下一分类' && item.top >= box.top && item.bottom <= box.bottom; });
       await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0 && document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === 'overview');
-      await page.locator('#scrollBottom').click(); await page.waitForFunction(() => document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === 'preferences');
+      await page.locator('#scrollBottom').click(); await page.waitForFunction(() => document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === 'group:合成下一分类');
       assert.equal(new URL(page.url()).hash, '#resumeCenter');
       assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, revision); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
@@ -1863,7 +1865,7 @@ for (const withExtension of [true, false]) {
       // 自动保存完成后才读取结果，不能把界面上的暂存值误报为持久化成功。
       const saved = async () => { await page.evaluate(() => resumeSaveQueue); assert.ok(!(await page.locator('#centerStatus').textContent()).includes('保存失败')); };
       const initial = (await page.evaluate(() => dataRequest('localapply:read'))).database; const profileId = initial.activeProfileId;
-      assert.equal(await page.locator('#basicFields .center-field').count(), 175);
+      assert.equal(await page.locator('#basicFields .center-field').count(), 155);
       // 完整候选、地区和多城市属于选填区，先按新交互显式展开再验证原有编辑链路。
       for (const name of ['基本信息', '教育背景', '求职意向']) await expandResumeGroup(page, name);
       for (const group of ['基本信息','求职意向','教育背景','实习经历','工作经历','项目经历','家庭成员','获奖经历','英语能力','证书信息','论文期刊','自我介绍']) {
@@ -2023,7 +2025,7 @@ for (const withExtension of [true, false]) {
       // 只读取后台版本和值，验证展开行为没有触发隐式保存。
       const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
       const before = await read(); const basic = page.locator('.resume-group[data-group="基本信息"]'); const education = page.locator('.resume-group[data-group="教育背景"]'); const job = page.locator('.resume-group[data-group="求职意向"]');
-      assert.equal(await page.locator('#basicFields .center-field').count(), 175);
+      assert.equal(await page.locator('#basicFields .center-field').count(), 155);
       for (const [section, visible] of [[basic, 18], [education, 7], [job, 8]]) {
         assert.equal(await section.locator('.center-field:visible').count(), visible); assert.equal(await section.locator('.resume-more-toggle').getAttribute('aria-expanded'), 'false');
         assert.ok(await section.locator('.center-field').count() > visible);
@@ -2099,6 +2101,51 @@ for (const withExtension of [true, false]) {
       assert.ok((await read()).fieldValues.filter((row) => row.profileId === seeded.profileId).every((row) => row.value === null));
       await workspacePage(page, 'privacySettings'); await page.locator('#btnRestoreRecovery').click(); await page.waitForFunction(() => document.getElementById('backupMsg').textContent.includes('已恢复'));
       assert.deepEqual((await read()).fieldValues, before.fieldValues); await workspacePage(page, 'resumeCenter'); assert.equal(await page.getByLabel('简历中心 · 姓名', { exact: true }).inputValue(), '合成清空姓名'); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 直接在独立测试存储植入 v1 快照，验证真实启动迁移及两种入口的刷新/进程重启。
+for (const withExtension of [true, false]) {
+  test(`旧模块删除：${withExtension ? '扩展' : 'file://'}目录迁移、删除保留与重启`, { timeout: 90000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'prune-modules-')); let context; const errors = []; const mode = withExtension ? 'extension' : 'file';
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      let page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.setViewportSize({ width: 1440, height: 900 }); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      assert.equal(await page.locator('#basicFields .center-field').count(), 155); assert.equal(await page.locator('#basicFields > .resume-group').count(), 12);
+      await page.evaluate(async () => {
+        const db = (await dataRequest('localapply:read')).database; const profileId = db.activeProfileId;
+        db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === 'builtin.name').value = '合成保留姓名';
+        const retained = new Set(WangshenTemplates.PROFILE_TEMPLATE.map((field) => field.key));
+        for (const field of WangshenTemplates.SOE_LONG_TEMPLATE.filter((field) => !retained.has(field.key))) {
+          const fieldId = 'builtin.' + field.key; db.fieldDefinitions.push(LocalApplyStore.definition({ fieldId, label: field.label, type: field.inputType, group: field.group, options: field.options || [], aliases: [], description: '', version: 1 })); db.publicFieldIds.push(fieldId);
+          db.bindings.push({ profileId, fieldId, fid: 'retired.' + field.key, key: field.key, sensitive: false, autoFill: false, material: !!field.material, custom: false });
+          db.fieldValues.push({ profileId, fieldId, entryId: null, value: '合成旧模块资料', updatedAt: new Date().toISOString(), source: 'manual' });
+        }
+        db.bindings = db.bindings.filter((row) => row.fieldId !== 'builtin.paperName'); db.fieldValues = db.fieldValues.filter((row) => row.fieldId !== 'builtin.paperName'); LocalApplyStore.validate(db);
+        const write = { 'localapply.database': db, 'localapply.fieldCatalog': { version: 1 } };
+        // 仅用于合成夹具置入升级前快照；生产界面仍通过后台仓库写数据。
+        if (location.protocol !== 'file:') await chrome.storage.local.set(write);
+        else await new Promise((resolve, reject) => {
+          const request = indexedDB.open('localapply-file:' + new URL('.', location.href).href, 1);
+          request.onerror = () => reject(request.error); request.onsuccess = () => { const database = request.result; const tx = database.transaction('storage', 'readwrite'); tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = tx.onabort = () => { database.close(); reject(tx.error); }; for (const [key, value] of Object.entries(write)) tx.objectStore('storage').put(value, key); };
+        });
+      });
+      await page.reload(); await workspacePage(page, 'resumeCenter');
+      // 数据库、正文、目录和字段库同时检查，避免仅靠隐藏旧模块伪装删除。
+      const check = async () => {
+        const database = (await page.evaluate(() => dataRequest('localapply:read'))).database; assert.equal(database.schemaVersion, 3); assert.equal(database.fieldDefinitions.length, 155);
+        assert.equal(await page.locator('#basicFields .center-field').count(), 154); assert.equal(await page.locator('#basicFields > .resume-group').count(), 12);
+        for (const name of ['技能与其他', '开放题素材', '政治与个人情况', '语言与技能证书', '家庭与紧急联系', '补充声明', '填写偏好']) assert.equal(await page.locator('#resumeToc').getByRole('button', { name, exact: true }).count(), 0);
+        assert.equal(await page.locator('#fillingPreferences,#autoThreshold,#privacyMask,#autoFloatbar').count(), 0);
+        assert.ok(!database.fieldValues.some((row) => row.value === '合成旧模块资料')); assert.equal(await page.getByLabel('简历中心 · 姓名', { exact: true }).inputValue(), '合成保留姓名'); assert.equal(await page.locator('[data-field-id="builtin.paperName"]').count(), 1, '字段库定义保留，但当前简历不重新绑定');
+        assert.equal(await page.locator('#basicFields [data-field-id="builtin.paperName"]').count(), 0);
+      };
+      await check(); await workspacePage(page, 'fieldLibrary'); assert.equal(await page.locator('.library-row[data-field-id="builtin.github"]').count(), 0); await workspacePage(page, 'resumeCenter');
+      await page.locator('#resumeToc').getByRole('button', { name: '自我介绍', exact: true }).click(); await page.screenshot({ path: path.join(testRoot, `modules-pruned-${mode}.png`) });
+      await page.reload(); await workspacePage(page, 'resumeCenter'); await check(); await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter'); await check(); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }

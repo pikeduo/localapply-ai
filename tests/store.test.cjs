@@ -71,9 +71,10 @@ async function oldCatalogFixture() {
 test('参考目录包含 155 项结构、12 个模块，日期/下拉/多选完整且不含个人值', async () => {
   const env = fixture(); const db = await env.repo.read(); const fields = env.templates.REFERENCE_FIELDS;
   assert.equal(fields.length, 155); assert.equal(new Set(fields.map((field) => field[2])).size, 12);
-  assert.equal(db.fieldDefinitions.length, 175); assert.equal(db.bindings.length, 175);
+  assert.equal(db.fieldDefinitions.length, 155); assert.equal(db.bindings.length, 155);
   assert.ok(db.fieldValues.every((row) => row.value === '' || row.value === null));
-  for (const field of env.templates.SOE_LONG_TEMPLATE) assert.ok(db.fieldDefinitions.some((item) => item.fieldId === 'builtin.' + field.key));
+  for (const field of env.templates.PROFILE_TEMPLATE) assert.ok(db.fieldDefinitions.some((item) => item.fieldId === 'builtin.' + field.key));
+  assert.ok(db.fieldDefinitions.every((item) => !env.templates.REMOVED_PROFILE_GROUPS.includes(item.group)));
   assert.equal(db.fieldDefinitions.find((item) => item.fieldId === 'builtin.majorCategory').options.length, 238);
   assert.equal(db.fieldDefinitions.find((item) => item.fieldId === 'builtin.ethnic').options.length, 56);
   for (const key of ['awardDate','certificateDate','publicationDate','familyBirthDate','employmentStartDate']) assert.equal(db.fieldDefinitions.find((item) => item.fieldId === 'builtin.' + key).type, 'date');
@@ -116,7 +117,7 @@ test('目录迁移写入失败保留旧库及升级标记，可重试且不覆�
   assert.deepEqual(env.disk, diskBefore); assert.equal(env.disk[env.store.CATALOG_KEY], undefined);
   const db = await env.restart().read(); assert.equal(db.revision, before.revision + 1);
   assert.equal(db.fieldDefinitions.find((field) => field.fieldId === 'builtin.ethnic').description, '合成用户修改');
-  assert.equal(env.disk[env.store.CATALOG_KEY].version, 1);
+  assert.equal(env.disk[env.store.CATALOG_KEY].version, 2);
 });
 
 test('参考日期、数字及开放城市多选经校验保存、备份往返，新简历不复制旧值', async () => {
@@ -126,7 +127,7 @@ test('参考日期、数字及开放城市多选经校验保存、备份往返�
   }
   await assert.rejects(command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.awardDate', value: '2027-02-29' }), /日期不存在/);
   const second = (await command(env.repo, 'createProfile', { name: '合成空白简历' })).result;
-  const db = await env.repo.read(); assert.equal(db.bindings.filter((binding) => binding.profileId === second).length, 175);
+  const db = await env.repo.read(); assert.equal(db.bindings.filter((binding) => binding.profileId === second).length, 155);
   assert.equal(value(db, second, 'builtin.awardDate'), '');
   const backup = await env.repo.exportBackup(); const restored = env.store.parseBackup(backup);
   assert.deepEqual(JSON.parse(JSON.stringify(restored.fieldValues)), JSON.parse(JSON.stringify(db.fieldValues)));
@@ -675,4 +676,40 @@ test('清空字段内容写入失败时保持原库及字段值', async () => {
     const env = fixture(); await env.repo.initialize(); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成失败保护值' }); const before = await env.repo.read(); env.fail(failureAt);
     await assert.rejects(command(env.repo, 'clearProfileValues', { profileId: 'p1', confirmed: true }, before.revision), /模拟磁盘/); assert.deepEqual(await env.restart().read(), before);
   }
+});
+
+// 构造目录 v1 的 175 字段合成库，含旧模块值、映射以及用户已移除的参考字段。
+async function obsoleteCatalogFixture() {
+  const seed = fixture(); await seed.repo.initialize(); await command(seed.repo, 'createProfile', { name: '合成第二简历' });
+  await command(seed.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成保留姓名' });
+  await command(seed.repo, 'createField', { profileId: 'p1', definition: { label: '合成旧模块自定义字段', group: '技能与其他' }, value: '合成旧分类内容' });
+  const db = await seed.repo.read(); const current = new Set(seed.templates.PROFILE_TEMPLATE.map((field) => field.key));
+  for (const field of seed.templates.SOE_LONG_TEMPLATE.filter((field) => !current.has(field.key))) {
+    const fieldId = 'builtin.' + field.key; db.fieldDefinitions.push(seed.store.definition({ fieldId, label: field.label, type: field.inputType, group: field.group, options: field.options || [], aliases: [], description: '', version: 1 })); db.publicFieldIds.push(fieldId);
+    for (const profile of db.profiles) {
+      db.bindings.push({ profileId: profile.profileId, fieldId, fid: 'retired.' + field.key, key: field.key, sensitive: false, autoFill: false, material: !!field.material, custom: false });
+      db.fieldValues.push({ profileId: profile.profileId, fieldId, entryId: null, value: '合成旧分类内容', updatedAt: new Date().toISOString(), source: 'manual' });
+    }
+  }
+  db.mappingRules.push({ mappingId: 'obsolete.mapping', profileId: 'p1', entryId: null, fieldId: 'builtin.github', origin: 'https://example.test', path: '/apply', label: '合成旧映射' });
+  db.bindings = db.bindings.filter((row) => row.profileId !== 'p1' || row.fieldId !== 'builtin.paperName'); db.fieldValues = db.fieldValues.filter((row) => row.profileId !== 'p1' || row.fieldId !== 'builtin.paperName');
+  seed.store.validate(db);
+  return { env: fixture({ ...seed.disk, [seed.store.DB_KEY]: JSON.parse(JSON.stringify(db)), [seed.store.CATALOG_KEY]: { version: 1 } }), before: JSON.parse(JSON.stringify(db)) };
+}
+
+test('目录 v2 删除六个旧模块及字段引用，保留参考字段、删除选择与恢复点', async () => {
+  const { env, before } = await obsoleteCatalogFixture(); const db = await env.repo.read();
+  assert.equal(db.fieldDefinitions.length, 155); assert.equal(db.schemaVersion, 3); assert.equal(db.revision, before.revision + 1);
+  assert.equal(db.mappingRules.length, 0); assert.ok(db.fieldDefinitions.every((field) => !env.templates.REMOVED_PROFILE_GROUPS.includes(field.group)));
+  assert.equal(value(db, 'p1', 'builtin.name'), '合成保留姓名'); assert.ok(!db.fieldValues.some((row) => row.value === '合成旧分类内容'));
+  assert.ok(!db.bindings.some((row) => row.profileId === 'p1' && row.fieldId === 'builtin.paperName'), '新版本不能重新补回已移除的参考字段');
+  assert.deepEqual(JSON.parse(JSON.stringify(db.profiles)), before.profiles); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
+  assert.equal(env.disk[env.store.CATALOG_KEY].version, 2); assert.deepEqual(await env.restart().read(), db);
+  const recovery = structuredClone(env.disk['localapply.recovery']); await env.repo.read(); assert.deepEqual(env.disk['localapply.recovery'], recovery);
+});
+
+test('旧模块清理及标记原子保存，失败不改变原资料或恢复点', async () => {
+  const { env, before } = await obsoleteCatalogFixture(); const disk = structuredClone(env.disk); env.fail();
+  await assert.rejects(env.repo.read(), /模拟磁盘/); assert.deepEqual(env.disk, disk); assert.deepEqual(env.disk[env.store.DB_KEY], before);
+  const db = await env.restart().read(); assert.equal(db.fieldDefinitions.length, 155); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
 });

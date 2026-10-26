@@ -355,12 +355,12 @@ test('未选主模型时不使用预设的第一个模型偷偷发起调用', as
   await assert.rejects(context.callGLM({ messages: [] }), /先获取模型列表/);
 });
 
-// 参考目录新增 124 个字段，原 51 个字段及隐私默认值继续保留。
-test('默认档案包含 175 个唯一基础字段及隐私默认值', () => {
+// 按最新要求只保留参考页 155 项字段，内部隐私默认值不随界面精简而改变。
+test('默认档案包含 155 个唯一基础字段及隐私默认值', () => {
   const state = sandbox().context.WangshenTemplates.defaultState();
   assert.equal(state.schemaVersion, 1);
-  assert.equal(state.profiles[0].fields.length, 175);
-  assert.equal(new Set(state.profiles[0].fields.map((field) => field.key)).size, 175);
+  assert.equal(state.profiles[0].fields.length, 155);
+  assert.equal(new Set(state.profiles[0].fields.map((field) => field.key)).size, 155);
   assert.equal(state.settings.privacyMask, true);
   assert.equal(Object.keys(state.settings.apiKeys).length, 0);
 });
@@ -393,7 +393,7 @@ test('旧档案升级保留已有值与自定义字段且可重复执行', () =>
   const snapshot = JSON.stringify(profile);
   templates.upgradeProfile(profile);
   assert.equal(JSON.stringify(profile), snapshot);
-  assert.equal(profile.fields.length, 176);
+  assert.equal(profile.fields.length, 156);
   assert.equal(profile.fields[0].value, '测试姓名');
   assert.equal(profile.fields[1].value, '测试内容');
 });

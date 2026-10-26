@@ -10,7 +10,7 @@ const $ = (s) => document.querySelector(s);
 
 // ============ 初始化 ============
 
-// 读取本地资料并挂载设置事件，服务商元数据交由共享解析器处理。
+// 读取本地资料并挂载设置事件；已移除填写偏好界面，内部阈值/隐私/检测设置继续兼容。
 async function init() {
   const standalone = globalThis.LocalApplyStandalone?.enabled;
   $('#standaloneNotice').hidden = !standalone;
@@ -65,11 +65,6 @@ async function init() {
     save();
   });
 
-  $('#autoThreshold').value = state.settings.autoThreshold;
-  $('#thresholdVal').textContent = Number(state.settings.autoThreshold).toFixed(2);
-  $('#privacyMask').checked = state.settings.privacyMask !== false;
-  $('#autoFloatbar').checked = state.settings.autoFloatbar !== false;
-
   $('#btnRevealKey').addEventListener('click', () => {
     const k = $('#apiKey');
     const show = k.type === 'password';
@@ -77,19 +72,6 @@ async function init() {
     $('#btnRevealKey').textContent = show ? '隐藏' : '显示';
   });
   $('#btnTestKey').addEventListener('click', testConnection);
-  $('#autoThreshold').addEventListener('input', () => {
-    state.settings.autoThreshold = Number($('#autoThreshold').value);
-    $('#thresholdVal').textContent = Number($('#autoThreshold').value).toFixed(2);
-    save();
-  });
-  $('#privacyMask').addEventListener('change', () => {
-    state.settings.privacyMask = $('#privacyMask').checked;
-    save();
-  });
-  $('#autoFloatbar').addEventListener('change', () => {
-    state.settings.autoFloatbar = $('#autoFloatbar').checked;
-    save();
-  });
 
   initResume();
   $('#btnBackup').addEventListener('click', doBackup);
