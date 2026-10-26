@@ -1,7 +1,7 @@
 // Service Worker：复用资料/AI 服务，编排右上角悬浮卡片及本地脱敏诊断。
 'use strict';
 
-importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/field-matching.js', 'data/field-suggestions.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js'); // 字段学习复用唯一仓库与加密凭据。
+importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/field-suggestions.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js'); // 字段学习复用唯一仓库与加密凭据。
 
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local);
@@ -34,7 +34,7 @@ async function notifySettings() {
 }
 
 // 扩展和文件管理页共享 AI 管线，后台只注入本扩展的配置读取器。
-const aiClient = LocalApplyAI.createClient(() => repository.readAiSettings());
+const aiClient = LocalApplyAI.createClient(() => repository.readAiSettings(), async (profileId) => LocalApplyResumeCatalog.catalog(await repository.read(), profileId)); // 只向解析器提供目标档案的字段元数据。
 const fieldLearning = FieldLearning.create(repository, aiClient, chrome);
 // 解析视觉模型，保留原后台接口供消息路由和回归测试使用。
 function resolveVisionModel() { return aiClient.resolveVisionModel(); }

@@ -35,3 +35,9 @@ test('简历编辑保留全部基础字段和动态分类，不生成旧经历�
   const rows = groups.flatMap((group) => group.items).filter((item) => item.row);
   assert.equal(rows.length, 4); assert.ok(rows.every((item) => item.row.profileId === 'p1' && item.row.entryId === null)); assert.deepEqual(db, before);
 });
+
+// 新契约的标准字段在同一模块内分条编辑，目录仍只有一个模块，不重新显示旧导入卡片。
+test('目录导入的多段标准经历归入已有模块，所有记录均可定位且不混入其他档案', () => {
+  const api = view(); const db = { fieldDefinitions: [{ fieldId: 'builtin.school', label: '学校', group: '教育背景' }], bindings: [{ profileId: 'p1', fieldId: 'builtin.school' }], entries: [{ entryId: 'catalog.e1', profileId: 'p1', kind: 'education', title: '第2条', order: 1 }, { entryId: 'other', profileId: 'p2', kind: 'education', title: '隔离', order: 1 }], fieldValues: [{ profileId: 'p1', fieldId: 'builtin.school', entryId: null, value: '合成第一学校' }, { profileId: 'p1', fieldId: 'builtin.school', entryId: 'catalog.e1', value: '合成第二学校' }, { profileId: 'p2', fieldId: 'builtin.school', entryId: 'other', value: '合成其他学校' }] };
+  const before = structuredClone(db); const groups = api.editorSections(db, 'p1'); assert.equal(groups.length, 1); assert.equal(groups[0].group, '教育背景'); assert.equal(groups[0].items[0].row.value, '合成第一学校'); assert.equal(groups[0].records.length, 1); assert.equal(groups[0].records[0].entryId, 'catalog.e1'); assert.equal(groups[0].records[0].items[0].row.value, '合成第二学校'); assert.deepEqual(db, before);
+});

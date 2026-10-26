@@ -39,6 +39,8 @@
   }
   // 文件指纹、档案和经历序号共同决定 ID，重复导入不会跨档案串数据。
   function resumeEntryId(profileId, fingerprint, kind, index) { return legacyFieldId(profileId, fingerprint + ':' + kind + ':' + index); }
+  // 目录经历采用独立命名空间，防止新模块内记录与旧导入经历互相冒充或碰撞。
+  function catalogEntryId(profileId, fingerprint, kind, index) { return resumeEntryId(profileId, fingerprint, kind, index).replace(/^legacy\./, 'catalog.'); }
   // 统一生成 UTC 时间。
   function now() { return new Date().toISOString(); }
   // 对不符合 Schema 的输入抛出可读错误，不输出原始个人数据。
@@ -720,6 +722,30 @@
           case 'autoImportResume':
           case 'importResume': {
             const automatic = request.action === 'autoImportResume';
+            if (input.catalog) {
+              keys(input, ['profileId', 'fingerprint', 'rows', 'overwrite', 'catalog'], '目录简历导入');
+              check(request.expectedRevision !== undefined, '简历导入必须携带读取时的版本');
+              check(/^[a-f0-9]{64}$/.test(input.fingerprint) && typeof input.overwrite === 'boolean' && (!automatic || input.overwrite), '简历导入参数错误');
+              const catalog = global.LocalApplyResumeCatalog.catalog(db, input.profileId);
+              check(equal(input.catalog, catalog), '目标字段目录已变化，请重新解析');
+              global.LocalApplyResumeCatalog.validateRows(input.rows, catalog);
+              result = { saved: 0, kept: 0, overwritten: 0, details: [] };
+              for (const cell of input.rows) {
+                // 每个模块首条直接写入基础字段，其余记录使用既有 v3 entryId，绝不合并不同经历。
+                const entryId = cell.kind === 'basic' || cell.index === 0 ? null : catalogEntryId(input.profileId, input.fingerprint, cell.kind, cell.index);
+                if (entryId && !db.entries.some((entry) => entry.entryId === entryId)) db.entries.push({ entryId, profileId: input.profileId, kind: cell.kind, title: '第 ' + (cell.index + 1) + ' 条', order: cell.index });
+                const index = db.fieldValues.findIndex((row) => row.profileId === input.profileId && row.fieldId === cell.fieldId && row.entryId === entryId);
+                const prior = index >= 0 ? db.fieldValues[index] : null;
+                const occupied = prior && prior.value !== '' && prior.value !== null && (!Array.isArray(prior.value) || prior.value.length > 0);
+                const detail = { fieldId: cell.fieldId, index: cell.index, status: occupied && !input.overwrite ? 'kept' : occupied ? 'overwritten' : 'saved' }; result.details.push(detail);
+                if (occupied && !input.overwrite) { result.kept++; continue; }
+                if (occupied) result.overwritten++;
+                const row = { profileId: input.profileId, fieldId: cell.fieldId, entryId, value: clone(cell.value), updatedAt: now(), source: automatic ? 'ai-imported' : 'ai-confirmed', evidence: { ...clone(cell.evidence), fingerprint: input.fingerprint } };
+                if (index >= 0) db.fieldValues[index] = row; else db.fieldValues.push(row);
+                result.saved++;
+              }
+              await commit(db, null, previous, automatic || input.overwrite); return { result, revision: db.revision };
+            }
             keys(input, ['profileId', 'fingerprint', 'rows', 'overwrite'], '简历导入');
             check(request.expectedRevision !== undefined, '简历导入必须携带读取时的版本');
             check(db.profiles.some((p) => p.profileId === input.profileId), '目标档案不存在');
@@ -770,12 +796,12 @@
             db.fieldValues = db.fieldValues.filter((row) => row.entryId !== input.entryId);
             db.mappingRules = db.mappingRules.filter((row) => row.entryId !== input.entryId); break;
           }
-          // 清理当前档案的旧经历，先保存完整个人库恢复点；定义、基础值及其他档案不变。
+          // 只清理旧契约经历，目录模块记录不属于旧数据；先保存恢复点，其他资料保持不变。
           case 'clearResumeEntries': {
             keys(input, ['profileId', 'confirmed'], '清空旧经历');
             check(input.confirmed === true && request.expectedRevision !== undefined, '清空旧经历必须确认并携带版本');
             check(db.profiles.some((profile) => profile.profileId === input.profileId), '目标档案不存在');
-            const entryIds = new Set(db.entries.filter((entry) => entry.profileId === input.profileId).map((entry) => entry.entryId));
+            const entryIds = new Set(db.entries.filter((entry) => entry.profileId === input.profileId && !entry.entryId.startsWith('catalog.')).map((entry) => entry.entryId));
             result = { entries: entryIds.size, values: db.fieldValues.filter((row) => entryIds.has(row.entryId)).length,
               mappings: db.mappingRules.filter((row) => entryIds.has(row.entryId)).length };
             // 空操作不覆盖先前恢复点，也不增加数据库版本。
@@ -893,5 +919,5 @@
       command,
     };
   }
-  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, DEVICE_KEY, CATALOG_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId };
+  global.LocalApplyStore = { DB_KEY, API_KEY, RECOVERY_KEY, LEGACY_KEY, VAULT_KEY, DEVICE_KEY, CATALOG_KEY, SCHEMA_VERSION, createRepository, validate, migrate, legacyState, parseBackup, definition, resumeEntryId, catalogEntryId };
 })(globalThis);

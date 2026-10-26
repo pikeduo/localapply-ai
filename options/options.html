@@ -155,6 +155,7 @@
         <button id="cancelResume" class="btn ghost">取消并清理草稿</button>
       </div>
       <div id="pdfStatus" class="muted" style="margin-top:8px" role="status"></div>
+      <details id="resumeReport" hidden><summary id="resumeReportSummary">查看解析报告</summary><p class="muted">第 1 段经历写入对应模块基础字段，后续段在同一模块内分别编辑。报告仅保留在当前页面，刷新或取消后清除；已导入资料持续保存在本机。报告含个人信息，请妥善保管。</p><button id="downloadResumeReport" class="btn ghost" type="button">下载解析报告 JSON</button><div id="resumeReportItems"></div><details><summary>查看模型返回 JSON</summary><pre id="resumeReportRaw"></pre></details></details>
       <details id="resumePreview"><summary>简历预览（完整页面，含文档内嵌图片）</summary><div id="sourcePreview"></div></details>
       <div id="pdfReview"></div>
       <div class="row" id="importRow" style="display:none">
@@ -232,6 +233,7 @@
   <script src="../data/providers.js"></script>
   <script src="../data/key-vault.js"></script>
   <script src="../data/resume.js"></script>
+  <script src="../data/resume-catalog.js"></script>
   <script src="../data/field-matching.js"></script>
   <script src="../data/local-store.js"></script>
   <script src="../data/model-capabilities.js"></script>

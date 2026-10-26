@@ -1,8 +1,8 @@
 // 扩展后台与本地文件页共用的 AI 客户端；配置通过注入函数读取，不依赖 Chrome API。
 (function (global) {
   'use strict';
-  // 为一种存储上下文创建独立客户端，不跨上下文读取或同步 Key。
-  function createClient(readSettings) {
+  // 为一种存储上下文创建独立客户端；可注入目标字段目录读取器，不跨上下文同步资料或 Key。
+  function createClient(readSettings, readResumeCatalog) {
     const DEFAULT_TIMEOUT_MS = 30000;
     const capabilities = global.LocalApplyCapabilities.create(readSettings, callGLM);
     // 兼容现有解析管线的数据形状。
@@ -96,6 +96,9 @@
       if (jobs.has(payload.requestId)) throw aiError('解析任务已存在');
       const controller = new AbortController(); jobs.set(payload.requestId, controller);
       try {
+        // 目录由后台从目标简历重建，不接受网页或模型自行扩展字段/指令。
+        const catalog = readResumeCatalog ? await readResumeCatalog(payload.profileId) : null;
+        if (catalog && JSON.stringify(catalog) !== JSON.stringify(payload.catalog)) throw aiError('目标简历字段已变化，请重新解析');
         const route = await capabilities.route(payload.type);
         if (payload.routeToken !== route.token || payload.mode !== route.mode) throw aiError('模型配置或发送方式已变化，请确认当前配置后重新发送');
         let attachments;
@@ -112,7 +115,7 @@
         }
         const { content } = await callGLM({ model: route.model, expectedContext: route.scope, signal: controller.signal, disableThinking: true,
           fileInput: route.mode === 'file', timeoutMs: 120000, maxTokens: 10000,
-          messages: [{ role: 'system', content: global.LocalApplyResume.prompt() }, { role: 'user', content: attachments }] });
+          messages: [{ role: 'system', content: catalog ? global.LocalApplyResumeCatalog.prompt(catalog) : global.LocalApplyResume.prompt() }, { role: 'user', content: attachments }] });
         const data = extractJson(content);
         if (!data) throw aiError('AI 返回的内容无法解析为 JSON，请重试。');
         if (data.error) throw aiError('模型未能读取简历，请检查识别能力、文件格式或更换模型后重试。');

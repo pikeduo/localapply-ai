@@ -29,7 +29,7 @@
     const aliases = { '教育经历': '教育背景', '教育': '教育背景', '基本资料': '基本信息', '个人信息': '基本信息', '工作经验': '工作经历', '实习经验': '实习经历', '项目经验': '项目经历' };
     return Object.hasOwn(aliases, group) ? aliases[group] : group;
   }
-  // 编辑视图按参考目录组织基础字段；旧经历不展成卡片，也不猜测多个记录应覆盖哪个基础值。
+  // 编辑视图按现有模块组织基础字段；新目录经历放在模块内部，旧契约经历保持兼容且不猜测平面值。
   function editorSections(database, profileId) {
     const definitions = new Map(database.fieldDefinitions.map((item) => [item.fieldId, item]));
     const groups = new Map(); const seen = new Set();
@@ -52,6 +52,13 @@
       add(row || null, definitions.get(binding.fieldId));
     }
     for (const row of database.fieldValues.filter((item) => item.profileId === profileId && item.entryId === null)) add(row, definitions.get(row.fieldId));
+    // 仅目录导入的标准字段进入模块内多条记录，避免重新展示历史独立经历卡片。
+    for (const entry of database.entries.filter((item) => item.profileId === profileId && item.entryId.startsWith('catalog.')).sort((a, b) => a.order - b.order)) {
+      const items = database.fieldValues.filter((row) => row.profileId === profileId && row.entryId === entry.entryId && row.fieldId.startsWith('builtin.') && definitions.get(row.fieldId)?.group === kinds[entry.kind]).map((row) => ({ row, definition: definitions.get(row.fieldId) }));
+      if (!items.length) continue;
+      const section = group(kinds[entry.kind]); if (!section.records) section.records = [];
+      section.records.push({ entryId: entry.entryId, order: entry.order, items });
+    }
     const catalog = global.WangshenTemplates?.PROFILE_TEMPLATE || [];
     const fieldOrder = new Map(catalog.map((field, index) => ['builtin.' + field.key, index]));
     const groupOrder = [...new Set(catalog.map((field) => editorGroup(field.group)))];

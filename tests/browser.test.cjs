@@ -228,6 +228,7 @@ async function serve() {
       const inputType = file ? file.filename.split('.').at(-1) : 'image';
       calls.push({ authorization: req.headers.authorization, model: request.model, probe, inputType,
         imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'image_url').length : 0, fileData: file?.file_data });
+      if (!probe) modelApi.lastResumeSystem = request.messages?.[0]?.content; // 仅在本地合成测试中检查发送的目录元数据。
       // 与 Responses 共用正式请求故障开关，保留可选诊断的独立行为。
       if (!probe && modelApi.chatStatus) { res.writeHead(modelApi.chatStatus); res.end('{}'); return; }
       if (probe) {
@@ -949,7 +950,11 @@ test('阶段三：授权、智能字段学习、真实框架、规则管理与�
   };
   // 每次明确授权当前招聘页；测试侧栏是扩展页面标签，因此先激活实际招聘页。
   const ready = () => sidebar.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
-  const scan = async () => { const old = await sidebar.locator('#tab-smart').getAttribute('data-session-id'); await page.bringToFront(); await sidebar.locator('#smartPageConsent').check(); await sidebar.locator('#smartScan').click(); await sidebar.waitForFunction((id) => document.getElementById('tab-smart').dataset.sessionId !== id && document.querySelectorAll('.smart-row').length > 0 && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', old); };
+  const scan = async () => {
+    const old = await sidebar.locator('#tab-smart').getAttribute('data-session-id'); await page.bringToFront(); await sidebar.locator('#smartPageConsent').check(); await sidebar.locator('#smartScan').click();
+    try { await sidebar.waitForFunction((id) => document.getElementById('tab-smart').dataset.sessionId !== id && document.querySelectorAll('.smart-row').length > 0 && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', old); }
+    catch (error) { throw new Error('扫描未完成：' + await sidebar.locator('#smartStatus').textContent(), { cause: error }); }
+  };
   // 模型调用始终先展示 payload，再通过复选框确认发送。
   const recognize = async () => { await selectUnknownAI(sidebar); const oldToken = await sidebar.locator('#smartAIReview').getAttribute('data-token'); await sidebar.locator('#smartAI').click(); await sidebar.waitForFunction((token) => document.getElementById('smartAIReview').dataset.token !== token && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', oldToken); await sidebar.locator('#smartAIConsent').check(); await sidebar.locator('#smartAISend').click(); };
   try {
@@ -1790,12 +1795,13 @@ for (const withExtension of [true, false]) {
         await dataRequest('localapply:vault', { action: 'setKey', payload: { providerId: 'zhipu', key: 'fake-cleanup-browser-key', revision: 0 } });
         await reloadDataState(profileId); return { profileId, other, entries };
       });
-      assert.equal(await page.locator('#entryKind,#entryTitle,#btnAddEntry,#entriesList,.entry-card,[data-add-entry-kind],.resume-entry-more').count(), 0);
+      assert.equal(await page.locator('#entryKind,#entryTitle,#btnAddEntry,#entriesList,.entry-card,[data-add-entry-kind],.resume-entry-more,.resume-record').count(), 0);
       assert.equal(await page.locator('#resumeToc [data-toc-key^="entry:"]').count(), 0);
       assert.equal(await page.locator('.resume-group[data-group="教育背景"]').count(), 1);
       // 参考目录已提供工作/实习/项目基础字段分类；仍不能按旧 entryId 生成独立经历卡片。
       assert.equal(await page.locator('.resume-group[data-group="教育经历"]').count(), 0);
-      for (const group of ['工作经历', '实习经历', '项目经历']) assert.equal(await page.locator(`.resume-group[data-group="${group}"] > .basic-grid`).count(), 1);
+      // 折叠选填区也沿用 basic-grid，只检查唯一的常用字段网格；旧数据仍不能生成目录记录。
+      for (const group of ['工作经历', '实习经历', '项目经历']) assert.equal(await page.locator(`.resume-group[data-group="${group}"] > .basic-grid:not(.resume-more-fields)`).count(), 1);
       assert.equal(await page.getByLabel('简历中心 · 毕业院校', { exact: true }).inputValue(), '合成基础学院', '旧经历不得自动覆盖基础字段');
       const before = (await page.evaluate(() => dataRequest('localapply:read'))).database;
       const settings = (await page.evaluate(() => getState())).settings;
@@ -2337,6 +2343,75 @@ for (const withExtension of [true, false]) {
         assert.equal(api.calls.length, 4); assert.ok(api.calls.every((call) => !call.probe)); assert.deepEqual(errors, []);
       });
     } finally { api.modelApi.releaseChat?.(); if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 完整目录实际通过模型 Mock、两种存储入口和 UI；报告含个人信息但不得夹带凭据或文件字节。
+for (const withExtension of [true, false]) {
+  test(`完整字段解析：${withExtension ? '扩展' : 'file://'}模块映射、报告、多段编辑和重启`, { timeout: 120000 }, async (t) => {
+    const fixtures = require('./resume-fixtures.cjs'); const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'catalog-resume-')); const api = await serve(); let context; let page; const errors = [];
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'aiSettings');
+      await page.locator('#provider').fill(api.base + '/v1'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves()); await page.locator('#apiKey').fill('synthetic-catalog-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials()); await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-catalog-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+      const setup = await page.evaluate(async () => {
+        const profileId = (await dataRequest('localapply:read')).database.activeProfileId;
+        await dataCommand('setValue', { profileId, fieldId: 'builtin.phone', value: '13900000000' }); await dataCommand('setValue', { profileId, fieldId: 'builtin.name', value: '合成仅本机保留的旧姓名' });
+        const custom = (await dataCommand('createField', { profileId, definition: { label: '合成布尔字段', group: '基本信息', type: 'boolean' }, value: null })).result;
+        const next = await getState(); next.profiles.find((item) => item.id === profileId).fields = next.profiles.find((item) => item.id === profileId).fields.filter((field) => field.key !== 'wechat'); await saveState(next); await reloadDataState(); return { profileId, custom };
+      });
+      // 候选涵盖此前遗漏的模块、控件和额外经历；未知/错误字段也故意返回以验证报告。
+      const raw = { fields: [
+        ['name', '合成新姓名'], ['gender', '男'], ['ethnic', '汉族'], ['hometown', '合成省 / 合成市'], ['expectedPosition', '合成岗位'], ['currentSalary', 0], ['expectedCities', ['合成城市甲', '合成城市乙']],
+        ['school', '合成第一学校'], ['major', '合成第一专业'], ['degree', '本科'], ['educationStartDate', '2016 年 9 月'],
+        ['school', '合成第二学校', 1], ['major', '合成第二专业', 1], ['degree', '硕士', 1], ['educationStartDate', '2020-09', 1],
+        ['internshipCompany', '合成实习单位'], ['internshipStartDate', '2021-03'], ['employmentCompany', '合成工作单位'], ['employmentPosition', '合成职位'],
+        ['projectName', '合成第一项目'], ['projectDescription', '合成项目说明'], ['projectName', '合成第二项目', 1], ['projectDescription', '合成额外项目说明', 1],
+        ['awardName', '合成奖项'], ['certificateName', '合成证书'], ['paperName', '合成论文'], ['englishScore', '600'], ['selfIntroduction', '<img src=x onerror="window.catalogExecuted=true">'],
+        ['phone', null], ['employmentEndDate', '至今'], ['currentAnnualSalary', '两万元'], ['wechat', '合成已移除字段'], ['unknownCatalog', '合成未匹配信息'],
+      ].map(([key, value, record = 0]) => ({ fieldId: 'builtin.' + key, record, value, evidence: '合成来源', page: 1 })) };
+      raw.fields.push({ fieldId: setup.custom, value: false, evidence: '合成明确否', page: 1 });
+      api.modelApi.chatContent = JSON.stringify(raw);
+      // 上传走实际 PDF/DOCX 渲染，不注入解析器或存储替身。
+      const prepare = async (type = 'docx') => { await workspacePage(page, 'pdfCard'); await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-catalog.' + type, mimeType: type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures[type]() }); await page.waitForFunction(() => !document.getElementById('btnExtract').disabled && !document.getElementById('sendResume').hidden); };
+      const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      const value = (database, key, entryId = null) => database.fieldValues.find((row) => row.profileId === setup.profileId && row.fieldId === 'builtin.' + key && row.entryId === entryId)?.value;
+      await t.test('完整目录自动导入现有模块，已移除/缺失/错误候选不写入', async () => {
+        const before = await read(); await prepare(); assert.equal(api.calls.length, 0); await page.locator('#sendResume').click(); await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('已自动导入'));
+        const db = await read(); assert.equal(db.revision, before.revision + 1); assert.equal(value(db, 'gender'), '男'); assert.equal(value(db, 'ethnic'), '汉族'); assert.equal(value(db, 'currentSalary'), 0); assert.deepEqual(value(db, 'expectedCities'), ['合成城市甲', '合成城市乙']); assert.equal(value(db, 'school'), '合成第一学校'); assert.equal(value(db, 'employmentCompany'), '合成工作单位'); assert.equal(value(db, 'internshipCompany'), '合成实习单位'); assert.equal(value(db, 'paperName'), '合成论文'); assert.equal(value(db, 'phone'), '13900000000'); assert.equal(db.fieldValues.find((row) => row.fieldId === setup.custom).value, false);
+        assert.equal(db.entries.length, 2); assert.ok(db.entries.every((entry) => entry.entryId.startsWith('catalog.'))); assert.deepEqual(db.fieldDefinitions, before.fieldDefinitions); assert.ok(!db.bindings.some((binding) => binding.fieldId === 'builtin.wechat')); assert.ok(!db.fieldValues.some((row) => row.fieldId === 'builtin.unknownCatalog'));
+        assert.match(api.modelApi.lastResumeSystem, /builtin\.paperName/); assert.match(api.modelApi.lastResumeSystem, /builtin\.internshipCompany/); assert.ok(!api.modelApi.lastResumeSystem.includes('合成仅本机保留的旧姓名')); assert.ok(!api.modelApi.lastResumeSystem.includes('13900000000')); assert.equal(api.calls.length, 1); assert.equal(api.calls[0].probe, false);
+      });
+      await t.test('解析报告可查看和下载，显示未写入原因，模型 HTML 仅作为文本', async () => {
+        await page.locator('#resumeReport > summary').click(); assert.equal(await page.locator('#resumeReport [data-report-status="unmatched"]').count(), 2); assert.equal(await page.locator('#resumeReport [data-report-status="invalid"]').count(), 2); assert.equal(await page.locator('#resumeReport [data-report-status="missing"]').count(), 1); assert.ok(await page.locator('#resumeReport [data-report-status="absent"]').count() > 100); assert.equal(await page.locator('#resumeReport img').count(), 0); assert.equal(await page.evaluate(() => window.catalogExecuted), undefined);
+        await page.locator('#resumeReport details > summary').click(); assert.ok((await page.locator('#resumeReportRaw').textContent()).includes('onerror')); assert.ok((await page.locator('#resumeReportItems').textContent()).includes('日期无法无损转换'));
+        const downloaded = page.waitForEvent('download'); await page.locator('#downloadResumeReport').click(); const download = await downloaded; const report = JSON.parse(await fs.readFile(await download.path(), 'utf8')); assert.deepEqual(report.raw, raw); assert.ok(report.items.some((item) => item.status === 'saved')); assert.ok(!JSON.stringify(report).includes('synthetic-catalog-key')); assert.ok(!JSON.stringify(report).includes('data:image'));
+        await page.locator('#resumeReport details > summary').click(); await page.locator('#pdfCard').screenshot({ path: path.join(testRoot, `resume-catalog-report-${withExtension ? 'extension' : 'file'}.png`) });
+      });
+      await t.test('基础模块下拉/日期已填，额外记录在同一模块可编辑', async () => {
+        await workspacePage(page, 'resumeCenter'); assert.equal(await page.locator('[data-field-id="builtin.gender"] select').inputValue(), '男'); assert.equal(await page.locator('[data-field-id="builtin.currentSalary"] input').inputValue(), '0');
+        const education = page.locator('.resume-group[data-group="教育背景"]'); assert.equal(await education.count(), 1); assert.equal(await education.locator('.resume-record').count(), 1); assert.equal(await education.locator(':scope > .basic-grid [data-field-id="builtin.school"] input').inputValue(), '合成第一学校');
+        await education.locator('.resume-record > summary').click(); assert.equal(await education.locator('.resume-record [data-field-id="builtin.school"] input').inputValue(), '合成第二学校'); assert.equal(await education.locator('.resume-record [data-field-id="builtin.degree"] select').inputValue(), '硕士'); assert.equal(await education.locator('.resume-record [data-field-id="builtin.educationStartDate"] [data-primary]').inputValue(), '2020-09');
+        await education.locator('.resume-record [data-field-id="builtin.major"] input').fill('合成修改后的第二专业'); await education.locator('.resume-record [data-field-id="builtin.major"] input').blur(); await page.evaluate(() => resumeSaveQueue);
+        const db = await read(); const entryId = db.entries.find((entry) => entry.kind === 'education').entryId; assert.equal(value(db, 'major', entryId), '合成修改后的第二专业'); assert.equal(value(db, 'major'), '合成第一专业'); assert.equal(await page.locator('#resumeToc').getByRole('button', { name: '教育背景', exact: true }).count(), 1);
+        await education.screenshot({ path: path.join(testRoot, `resume-catalog-module-${withExtension ? 'extension' : 'file'}.png`) });
+      });
+      await t.test('可选手动校对使用目录控件，未勾选项不被报告成已保存', async () => {
+        api.modelApi.chatContent = JSON.stringify({ fields: [{ fieldId: 'builtin.englishScore', value: '650', evidence: '合成新分数', page: 1 }, { fieldId: 'builtin.awardName', value: '合成不导入奖项' }] }); await prepare('pdf'); await page.locator('#autoImportResume').uncheck(); await page.locator('#sendResume').click(); await page.locator('#importRow').waitFor({ state: 'visible' });
+        assert.equal(await page.locator('#pdfReview input[type="checkbox"]:checked').count(), 0); const score = page.locator('#pdfReview .review-cell').filter({ hasText: '成绩' }); await score.locator('input[type="checkbox"]').check(); await page.locator('#overwriteResume').check(); await page.locator('#btnImport').click(); await page.waitForFunction(() => document.getElementById('importRow').style.display === 'none');
+        assert.equal(value(await read(), 'englishScore'), '650'); assert.equal(value(await read(), 'awardName'), '合成奖项'); await page.locator('#resumeReport > summary').click(); assert.equal(await page.locator('#resumeReport [data-report-status="skipped"]').count(), 1); assert.equal(await page.locator('#resumeReport [data-report-status="overwritten"]').count(), 1);
+      });
+      await t.test('刷新和浏览器重启后全部模块及记录保留，原始报告不进入数据库', async () => {
+        const before = await read(); await page.reload(); await workspacePage(page, 'pdfCard'); assert.equal(await page.locator('#resumeReport').isVisible(), false); assert.deepEqual((await read()).fieldValues, before.fieldValues);
+        await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter'); const db = await read(); assert.deepEqual(db.fieldValues, before.fieldValues); assert.equal(db.entries.length, 2); assert.equal(value(db, 'englishScore'), '650');
+        const backup = (await page.evaluate(() => dataRequest('localapply:exportBackup'))).backup; assert.ok(!JSON.stringify(backup).includes('synthetic-catalog-key')); assert.ok(!JSON.stringify(backup).includes('lastResumeReport'));
+        // 新旧数据混存时，真实“清空旧经历”按钮只能删除旧记录，不能删除目录导入的额外学校/项目。
+        await page.evaluate(async (profileId) => { const old = (await dataCommand('createEntry', { profileId, kind: 'education', title: '合成旧记录' })).result; await dataCommand('setValue', { profileId, fieldId: 'builtin.school', entryId: old, value: '合成待清理学校' }); await reloadDataState(); }, setup.profileId);
+        page.once('dialog', (dialog) => { assert.ok(dialog.message().includes('1 条旧经历')); dialog.accept(); }); await page.locator('#clearResumeEntries').click(); await page.waitForFunction(() => document.getElementById('entryStatus').textContent.includes('已清空 1 条旧经历'));
+        const cleaned = await read(); assert.equal(cleaned.entries.length, 2); assert.ok(cleaned.entries.every((entry) => entry.entryId.startsWith('catalog.'))); assert.equal(value(cleaned, 'school'), '合成第一学校'); assert.equal(api.calls.length, 2); assert.deepEqual(errors, []);
+      });
+    } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
 

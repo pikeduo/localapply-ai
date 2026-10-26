@@ -66,9 +66,9 @@
     return { target: { fieldId: rule.fieldId, entryId: rule.entryId }, confirmed: !!(rule.confirmed && rule.lastVerifiedAt), reason: rule.confirmed ? '用户确认且已验证的网站记忆' : '规则已编辑，需要重新确认及验证' };
   }
 
-  // 仅从学历枚举推断教育层级，不把院校名、经历标题等个人文本用于上下文规则。
+  // 仅从当前档案的学历枚举判断层级；目录首段使用平面值，不读取其他档案或从院校名猜测。
   function degreeOf(db, entry) {
-    const row = db.fieldValues.find((value) => value.entryId === entry.entryId && /\.(degree|education|educationLevel)$/.test(value.fieldId));
+    const row = db.fieldValues.find((value) => value.profileId === entry.profileId && value.entryId === entry.entryId && /\.(degree|education|educationLevel)$/.test(value.fieldId));
     const text = String(row?.value || '');
     return /博士/.test(text) ? 4 : /硕士|研究生/.test(text) ? 3 : /本科|学士/.test(text) ? 2 : /大专|专科/.test(text) ? 1 : 0;
   }
@@ -79,6 +79,10 @@
     const repeated = field.kind || (field.degree ? 'education' : '');
     if (!repeated) return [{ fieldId, entryId: null }];
     entries = entries.filter((entry) => entry.kind === repeated);
+    // 目录首段保存在模块基础字段，与附加记录一起参与语义筛选；多个来源不确定时仍交用户选择。
+    const group = { education: '教育背景', internship: '实习经历', employment: '工作经历', project: '项目经历' }[repeated];
+    const primary = db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === fieldId && row.entryId === null && row.value !== null && row.value !== '');
+    if (primary && db.fieldDefinitions.some((definition) => definition.fieldId === fieldId && definition.group === group)) entries.push({ profileId, entryId: null, kind: repeated });
     if (['first', 'undergrad'].includes(field.degree)) entries = entries.filter((entry) => degreeOf(db, entry) === 2);
     if (field.degree === 'master') entries = entries.filter((entry) => degreeOf(db, entry) === 3);
     if (field.degree === 'doctor') entries = entries.filter((entry) => degreeOf(db, entry) === 4);
@@ -91,6 +95,9 @@
     const normalize = global.WangshenTemplates.normalizeLabel;
     const norm = normalize(field.label);
     const exact = db.fieldDefinitions.filter((def) => [def.label, ...def.aliases].some((alias) => normalize(alias) === norm));
+    const group = { education: '教育背景', internship: '实习经历', employment: '工作经历', project: '项目经历' }[field.kind];
+    const contextual = group ? exact.filter((definition) => definition.group === group) : [];
+    if (contextual.length === 1) return { definition: contextual[0], reason: '字段及经历模块精确匹配' };
     if (exact.length === 1) return { definition: exact[0], reason: '标准字段或别名精确匹配' };
     let key = '';
     if (/院校|学校/.test(field.label) && (field.kind === 'education' || field.degree)) key = 'school';

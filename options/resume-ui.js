@@ -4,15 +4,20 @@ let resumeJob = null;
 let resumeSource = null;
 let resumeRows = [];
 let resumeDatabase = null;
+let resumeCatalog = null;
+let resumeCatalogMode = false;
+let lastResumeReport = null; // 仅当前页保留模型结构化结果，不放入日志、URL 或公共字段库。
 let resumeCommitBusy = false; // 原子写入期间不接收新文件，避免把已提交操作误当作可取消任务。
 let selectedResumeFile = null; // 仅留在当前页面内存，取消或识别完成后释放。
 // 清理旧任务及其草稿，迟到响应不能重建已取消的审核结果。
-function clearResume(message = '', keepFile = false) {
+function clearResume(message = '', keepFile = false, keepReport = false) {
   if (resumeJob) {
     resumeJob.controller.abort();
     sendMessage('wsa:cancelResume', { requestId: resumeJob.id });
   }
   resumeJob = resumeSource = resumeDatabase = null; resumeRows = [];
+  resumeCatalog = null; resumeCatalogMode = false;
+  if (!keepReport) { lastResumeReport = null; $('#resumeReport').hidden = true; $('#resumeReport').open = false; $('#resumeReportItems').replaceChildren(); $('#resumeReportRaw').textContent = ''; }
   selectedResumeFile = null;
   if (!keepFile) $('#pdfFile').value = '';
   $('#sourcePreview').textContent = ''; $('#pdfReview').replaceChildren();
@@ -57,16 +62,29 @@ async function analyzeResume() {
   try {
     await flushCredentials();
     if (resumeJob !== job) return;
+    const { database } = await dataRequest('localapply:read');
+    if (resumeJob !== job) return;
+    resumeCatalog = LocalApplyResumeCatalog.catalog(database, profileId);
     const { route } = await dataRequest('wsa:resumeRoute', { format: source.type });
     if (resumeJob !== job) return;
     const file = route.mode === 'file' ? { filename: 'resume.' + source.type,
       file_data: LocalApplyProbes.dataUrl(source.bytes, source.type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') } : undefined;
     source.mode = route.mode;
     $('#pdfStatus').textContent = `正在由 ${route.model} 识别${file ? '原文件（包括图片内容）' : source.pages.length + ' 张完整页面图片'}，可取消…`;
-    const response = await dataRequest('wsa:aiExtractResume', { payload: { requestId: job.id, type: source.type, routeToken: route.token,
+    const response = await dataRequest('wsa:aiExtractResume', { payload: { requestId: job.id, profileId, catalog: resumeCatalog, type: source.type, routeToken: route.token,
       mode: route.mode, file, pages: file ? undefined : source.pages } });
     if (resumeJob !== job) return;
-    resumeRows = LocalApplyResume.normalize(response.data, source);
+    lastResumeReport = { createdAt: new Date().toISOString(), profileId, raw: response.data, items: [] };
+    const analysis = LocalApplyResumeCatalog.analyze(response.data, source, resumeCatalog); lastResumeReport.items = analysis.items;
+    // 旧手动校对返回继续兼容历史契约；默认自动导入及新目录结果均使用完整字段映射。
+    let legacyRows;
+    if (!Object.hasOwn(response.data, 'fields') && !automatic) {
+      try { legacyRows = LocalApplyResume.normalize(response.data, source); } catch (error) { if (!analysis.rows.length) throw error; }
+    }
+    resumeCatalogMode = Object.hasOwn(response.data, 'fields') || automatic || !legacyRows || analysis.rows.length > legacyRows.length;
+    resumeRows = resumeCatalogMode ? analysis.rows.map((row) => ({ ...row, original: structuredClone(row.value), checked: false, label: resumeCatalog.find((field) => field.fieldId === row.fieldId).label })) : legacyRows;
+    renderResumeReport();
+    if (!resumeRows.length) throw new Error('没有可自动写入的字段，请展开解析报告查看原因');
     // 文件识别结束释放原字节，页面预览仅留在本次内存供人工核对。
     source.bytes = source.renderBytes = selectedResumeFile = null;
     $('#sendResume').hidden = true;
@@ -98,16 +116,56 @@ async function autoImportResume(job = resumeJob, profileId = $('#targetProfile')
     const profile = database.profiles.find((item) => item.profileId === profileId); if (!profile) throw new Error('目标简历已被删除，请重新选择目标简历');
     writing = resumeCommitBusy = true; $('#cancelResume').disabled = $('#pdfFile').disabled = $('#targetProfile').disabled = $('#autoImportResume').disabled = true;
     $('#pdfStatus').textContent = '解析完成，正在自动导入并保存恢复点…';
-    const rows = resumeRows.map(({ kind, index, key, value, evidence }) => ({ kind, index, key, value, evidence }));
-    const { result } = await dataCommand('autoImportResume', { profileId, fingerprint: source.fingerprint, rows, overwrite: true }, database.revision);
+    const rows = resumeImportRows(resumeRows);
+    const { result } = await dataCommand('autoImportResume', { profileId, fingerprint: source.fingerprint, rows, overwrite: true, ...(resumeCatalogMode ? { catalog: resumeCatalog } : {}) }, database.revision);
     if (resumeJob !== job) return;
-    clearResume(`解析完成，已自动导入到“${profile.name}”：${result.saved} 项（覆盖 ${result.overwritten} 项）。未识别字段保留；可在“数据与备份”恢复。`);
+    markResumeReport(result);
+    clearResume(`解析完成，已自动导入到“${profile.name}”：${result.saved} 项（覆盖 ${result.overwritten} 项）。未识别字段保留；可展开解析报告查看详情，在“数据与备份”恢复。`, false, true);
     await reloadDataState();
   } catch (error) {
     if (resumeJob === job) { $('#pdfStatus').textContent = '解析成功，自动导入未完成：' + error.message + '。解析结果已保留，可重试导入，无需再次调用模型。'; $('#retryResumeImport').hidden = false; }
   } finally {
     if (writing) resumeCommitBusy = false;
     if (!resumeJob || resumeJob === job) $('#cancelResume').disabled = $('#pdfFile').disabled = $('#targetProfile').disabled = $('#autoImportResume').disabled = false;
+  }
+}
+// 按当前契约构造保存行，用户修改过的值标记人工来源，不能继续冒充模型引用。
+function resumeImportRows(rows) {
+  return rows.map((row) => ({ kind: row.kind, index: row.index, ...(resumeCatalogMode ? { fieldId: row.fieldId } : { key: row.key }), value: row.value,
+    evidence: JSON.stringify(row.value) === JSON.stringify(row.original) ? row.evidence : { kind: 'manual', excerpt: '', page: 0, verified: false } }));
+}
+// 只按后台实际提交结果标记写入状态；未匹配和错误候选始终保留原始原因。
+function markResumeReport(result) {
+  if (!lastResumeReport) return;
+  lastResumeReport.result = result;
+  for (const item of lastResumeReport.items) {
+    const detail = result.details?.find((row) => row.fieldId === item.fieldId && row.index === item.index);
+    if (detail && item.status === 'ready') { item.status = detail.status; item.reason = detail.status === 'kept' ? '保留已有内容' : detail.status === 'overwritten' ? '已按简历内容覆盖' : '已写入本地资料'; }
+    else if (result.details && item.status === 'ready') { item.status = 'skipped'; item.reason = '手动模式未勾选此字段，保留原值'; }
+    else if (!result.details && item.status === 'ready') {
+      // 旧手动契约没有逐行返回状态，按本次勾选和校对版本展示，不将未勾选项冒充已写入。
+      const selected = resumeRows.find((row) => row.checked && ('builtin.' + row.key === item.fieldId) && row.index === item.index);
+      const prior = selected && resumeExisting(selected, resumeDatabase, $('#targetProfile').value);
+      item.status = !selected ? 'skipped' : prior?.value && !$('#overwriteResume').checked ? 'kept' : 'saved';
+      item.reason = !selected ? '手动模式未勾选此字段' : item.status === 'kept' ? '保留已有内容' : '已通过兼容导入保存';
+    }
+  }
+  renderResumeReport();
+}
+// 报告只使用 textContent 渲染模型值，恶意 HTML/脚本只能作为可见文本，不能执行。
+function renderResumeReport() {
+  if (!lastResumeReport) return;
+  const report = $('#resumeReport'); report.hidden = false;
+  const labels = { ready: '待写入', saved: '已写入', overwritten: '已覆盖', kept: '已保留', skipped: '未选择', absent: '未返回', unmatched: '未匹配', invalid: '格式不符', missing: '缺少内容', conflict: '结果冲突', duplicate: '重复合并' };
+  const items = lastResumeReport.items;
+  $('#resumeReportSummary').textContent = `查看解析报告（返回 ${items.filter((item) => item.status !== 'absent').length} 项${lastResumeReport.result ? ' · 已保存 ' + lastResumeReport.result.saved + ' 项' : ''} · 未返回 ${items.filter((item) => item.status === 'absent').length} 项）`;
+  $('#resumeReportRaw').textContent = JSON.stringify(lastResumeReport.raw, null, 2);
+  const root = $('#resumeReportItems'); root.replaceChildren();
+  for (const item of items) {
+    const row = document.createElement('div'); row.className = 'resume-report-item'; row.dataset.reportStatus = item.status;
+    const title = document.createElement('strong'); title.textContent = `${labels[item.status]} · ${item.group ? item.group + ' / ' : ''}${item.label}${item.index > 0 ? ' · 第 ' + (item.index + 1) + ' 条' : ''}`;
+    const value = document.createElement('pre'); value.textContent = typeof item.value === 'string' ? item.value : JSON.stringify(item.value);
+    const reason = document.createElement('p'); reason.className = 'muted'; reason.textContent = item.reason; row.append(title, value, reason); root.append(row);
   }
 }
 // 自动导入默认开启；切换只改变待执行方式，不因勾选开关直接写入资料。
@@ -148,6 +206,10 @@ function initResumeDrop() {
 }
 // 计算规范字段与稳定经历 ID，和数据库入口采用相同去重规则。
 function resumeExisting(row, database, profileId) {
+  if (resumeCatalogMode) {
+    const entryId = row.kind === 'basic' || row.index === 0 ? null : LocalApplyStore.catalogEntryId(profileId, resumeSource.fingerprint, row.kind, row.index);
+    return database.fieldValues.find((item) => item.profileId === profileId && item.fieldId === row.fieldId && item.entryId === entryId);
+  }
   const fieldId = database.fieldDefinitions.some((d) => d.fieldId === 'builtin.' + row.key) ? 'builtin.' + row.key : 'resume.' + row.key;
   // 重复经历按当前文件指纹查找已导入的来源行，基本信息直接按字段查询。
   return database.fieldValues.find((v) => v.profileId === profileId && v.fieldId === fieldId && (row.kind === 'basic' ? v.entryId === null
@@ -167,8 +229,10 @@ async function renderResumeReview() {
     const check = document.createElement('input'); check.type = 'checkbox'; check.checked = row.checked;
     check.addEventListener('change', () => { row.checked = check.checked; });
     label.append(check, document.createTextNode(`${row.kind === 'basic' ? '基本信息' : LocalApplyResume.kinds[row.kind] + ' ' + (row.index + 1)} · ${row.label}`));
-    const input = document.createElement(row.key === 'description' ? 'textarea' : 'input'); input.value = row.value;
-    input.setAttribute('aria-label', label.textContent); input.addEventListener('input', () => { row.value = input.value; evidence.textContent = '已编辑：将按人工校对保存'; });
+    const definition = resumeCatalogMode && resumeCatalog.find((field) => field.fieldId === row.fieldId);
+    const input = definition ? workspaceControl(definition, row.value) : document.createElement(row.key === 'description' ? 'textarea' : 'input'); if (!definition) input.value = row.value;
+    (input.querySelector('[data-primary]') || input).setAttribute('aria-label', label.textContent);
+    input.addEventListener(definition ? 'change' : 'input', () => { try { row.value = definition ? workspaceValue(input, definition) : input.value; evidence.textContent = '已编辑：将按人工校对保存'; } catch (error) { evidence.textContent = error.message; } });
     const evidence = document.createElement('p'); evidence.className = row.evidence.verified ? 'muted' : 'warn';
     evidence.textContent = `${row.evidence.verified ? '历史文本已核对' : '模型引用，待人工核对'} · ${row.evidence.page ? '页/图 ' + row.evidence.page : '未标页码'}：${row.evidence.excerpt || '模型没有提供来源'}`;
     const prior = document.createElement('p'); prior.className = 'muted';
@@ -183,11 +247,11 @@ async function confirmResume() {
   $('#btnImport').disabled = true;
   $('#cancelResume').disabled = true;
   try {
-    const rows = resumeRows.filter((row) => row.checked).map((row) => ({ kind: row.kind, index: row.index, key: row.key, value: row.value,
-      evidence: row.value === row.original ? row.evidence : { kind: 'manual', excerpt: '', page: 0, verified: false } }));
+    const rows = resumeImportRows(resumeRows.filter((row) => row.checked));
     const { result } = await dataCommand('importResume', { profileId: $('#targetProfile').value, fingerprint: resumeSource.fingerprint,
-      rows, overwrite: $('#overwriteResume').checked }, resumeDatabase.revision);
-    clearResume(`已确认保存 ${result.saved} 项，保留已有值 ${result.kept} 项；原文件和全文未保存。`);
+      rows, overwrite: $('#overwriteResume').checked, ...(resumeCatalogMode ? { catalog: resumeCatalog } : {}) }, resumeDatabase.revision);
+    markResumeReport(result);
+    clearResume(`已确认保存 ${result.saved} 项，保留已有值 ${result.kept} 项；可展开解析报告查看详情，原文件和全文未保存。`, false, true);
     await reloadDataState();
   } catch (error) { $('#pdfStatus').textContent = '未导入：' + error.message + '。数据变化时请点击「刷新差异」后重新核对。'; }
   finally { $('#btnImport').disabled = false; $('#cancelResume').disabled = false; }
@@ -232,7 +296,7 @@ function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = d
   label.append(workspaceNode('span', displayLabel), input, hint);
   return label;
 }
-// 用户明确清空后按预览版本删除旧经历；恢复点由后台保存，不将旧值自动搬到基础字段。
+// 用户明确清空后仅删除旧经历；目录记录和基础字段保留，恢复点由后台保存。
 async function clearLegacyResumeEntries() {
   const status = $('#entryStatus');
   const button = $('#clearResumeEntries'); button.disabled = true;
@@ -240,7 +304,7 @@ async function clearLegacyResumeEntries() {
     await resumeSaveQueue;
     if (workspaceDirty() && !confirm('存在未保存编辑，继续将丢弃这些编辑，是否继续？')) return;
     const { database } = await dataRequest('localapply:read'); const profileId = $('#entryProfile').value;
-    const entries = database.entries.filter((entry) => entry.profileId === profileId);
+    const entries = database.entries.filter((entry) => entry.profileId === profileId && !entry.entryId.startsWith('catalog.'));
     if (!entries.length) { await reloadDataState(profileId); status.textContent = '当前简历没有旧经历需要清理。'; return; }
     const entryIds = new Set(entries.map((entry) => entry.entryId));
     const values = database.fieldValues.filter((row) => entryIds.has(row.entryId)).length;
@@ -252,7 +316,7 @@ async function clearLegacyResumeEntries() {
   } catch (error) { status.textContent = '清理失败：' + error.message; }
   finally { button.disabled = false; }
 }
-// 分类保留全部编辑器，只通过显隐收起选填字段；不删除节点、清空值或触发保存。
+// 分类保留全部编辑器与模块内额外记录，只通过显隐收起字段，不创建独立经历模块或目录。
 function resumeGroupEditor(profileId, group, index) {
   const section = workspaceNode('section', '', 'resume-group'); section.dataset.group = group.group;
   const header = workspaceNode('div', '', 'resume-group-header');
@@ -277,13 +341,20 @@ function resumeGroupEditor(profileId, group, index) {
     });
     section.append(toggle, extra);
   }
+  for (const record of group.records || []) {
+    const details = workspaceNode('details', '', 'resume-record'); details.dataset.entryId = record.entryId;
+    details.append(workspaceNode('summary', `第 ${record.order + 1} 条${group.group} · 展开编辑`));
+    const grid = workspaceNode('div', '', 'basic-grid');
+    record.items.forEach(({ definition, row }) => grid.append(resumeFieldEditor(profileId, record.entryId, definition, row)));
+    details.append(grid); section.append(details);
+  }
   return section;
 }
-// 只渲染现有基础字段分类，旧经历仅提供清理提示；每个分类先显示常用字段。
+// 渲染基础模块及目录经历；旧契约经历保留清理提示，各模块先显示常用字段。
 async function renderResumeCenter() {
   const { database } = await dataRequest('localapply:read'); const profileId = $('#entryProfile').value;
   const root = $('#basicFields'); root.replaceChildren();
-  const legacyCount = database.entries.filter((entry) => entry.profileId === profileId).length;
+  const legacyCount = database.entries.filter((entry) => entry.profileId === profileId && !entry.entryId.startsWith('catalog.')).length;
   $('#legacyEntriesNotice').hidden = legacyCount === 0;
   $('#legacyEntriesHint').textContent = `当前简历保留 ${legacyCount} 条旧经历记录，已停止显示独立经历卡片。可清空后按基础字段重新整理。`;
   if (!database.profiles.some((profile) => profile.profileId === profileId)) { renderResumeToc(); return; }
@@ -299,6 +370,7 @@ function initResume() {
   $('#btnExtract').addEventListener('click', () => prepareResume());
   $('#sendResume').addEventListener('click', analyzeResume);
   $('#btnImport').addEventListener('click', confirmResume);
+  $('#downloadResumeReport').addEventListener('click', () => { if (lastResumeReport) downloadJson(lastResumeReport, 'localapply-resume-report.json'); });
   $('#retryResumeImport').addEventListener('click', () => autoImportResume());
   $('#autoImportResume').addEventListener('change', updateResumeImportMode); updateResumeImportMode();
   $('#selectAllResume').addEventListener('click', () => {

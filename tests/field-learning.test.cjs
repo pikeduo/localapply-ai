@@ -52,6 +52,17 @@ test('已有标准字段本地直接匹配，不调用 AI；0 和 false 不是�
   assert.equal(env.aiCalls.length, 0); assert.equal(env.context.FieldMatchingEngine.hasValue(false), true); assert.equal(env.context.FieldMatchingEngine.hasValue(0), true);
 });
 
+// 目录首段的平面值和后续记录共同匹配；只有明确学历/模块才能缩小来源，不能默认选最高学历。
+test('目录基础模块与附加经历均可匹配，本科硕士不混用，同名公司按模块区分', async () => {
+  const env = await fixture(); await env.setValue('builtin.school', '合成首段本科学校'); await env.setValue('builtin.degree', '本科');
+  const entry = (await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'education', title: '合成附加教育' } })).result;
+  await env.setValue('builtin.school', '合成附加硕士学校', entry); await env.setValue('builtin.degree', '硕士', entry); await env.setValue('builtin.employmentCompany', '合成工作单位'); await env.setValue('builtin.internshipCompany', '合成实习单位');
+  let view = await env.scan(env.field('学校', { kind: 'education', degree: 'undergrad' })); assert.equal(view.rows[0].status, 'matched'); assert.equal(view.rows[0].target.entryId, null); assert.equal(view.rows[0].value, '合成首段本科学校');
+  view = await env.scan(env.field('学校', { kind: 'education', degree: 'master' })); assert.equal(view.rows[0].target.entryId, entry); assert.equal(view.rows[0].value, '合成附加硕士学校');
+  view = await env.scan(env.field('学校', { kind: 'education' })); assert.equal(view.rows[0].status, 'needs_confirmation'); assert.equal(view.rows[0].candidates.length, 2);
+  view = await env.scan(env.field('公司名称', { kind: 'employment' })); assert.equal(view.rows[0].target.fieldId, 'builtin.employmentCompany'); assert.equal(view.rows[0].value, '合成工作单位'); assert.equal(env.aiCalls.length, 0);
+});
+
 // 选项本身不是模型调用许可，后台也必须校验明确的未知字段 ID 集合。
 test('新版 AI 只接收显式选中的未知字段，拒绝未选择、已匹配及伪造字段', async () => {
   const env = await fixture(); await env.setValue('builtin.name', '合成姓名');

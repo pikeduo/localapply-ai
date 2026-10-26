@@ -55,7 +55,7 @@
     },
   };
   const repository = global.LocalApplyStore.createRepository(storage);
-  const ai = global.LocalApplyAI.createClient(() => repository.readAiSettings());
+  const ai = global.LocalApplyAI.createClient(() => repository.readAiSettings(), async (profileId) => global.LocalApplyResumeCatalog.catalog(await repository.read(), profileId)); // 文件页也只读取所选档案的字段元数据。
 
   // 与扩展使用相同命令语义，文件页从不调用插件私有存储或网页填充权限。
   async function dispatch(type, payload) {

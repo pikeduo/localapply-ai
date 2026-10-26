@@ -11,7 +11,7 @@ const { webcrypto } = require('node:crypto');
 function fixture(initial = {}) {
   const disk = structuredClone(initial);
   const context = vm.createContext({ crypto: webcrypto, console, URL, TextEncoder, TextDecoder, btoa, atob });
-  for (const name of ['data/templates.js', 'data/key-vault.js', 'data/resume.js', 'data/field-matching.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
+  for (const name of ['data/templates.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
   let failCountdown = null;
   const storage = {
     get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))),
@@ -23,7 +23,7 @@ function fixture(initial = {}) {
     setAccessLevel: async (input) => { assert.equal(input.accessLevel, 'TRUSTED_CONTEXTS'); },
   };
   const store = context.LocalApplyStore;
-  return { disk, store, resume: context.LocalApplyResume, templates: context.WangshenTemplates, repo: store.createRepository(storage),
+  return { disk, store, resume: context.LocalApplyResume, catalog: context.LocalApplyResumeCatalog, templates: context.WangshenTemplates, repo: store.createRepository(storage),
     restart: () => store.createRepository(storage), fail: (after = 0) => { failCountdown = after; } };
 }
 
@@ -799,5 +799,70 @@ test('自动导入的版本、结构和写入失败保护原资料', async () =>
     const payload = { profileId: 'p1', fingerprint: 'e'.repeat(64), overwrite: true, rows: [{ kind: 'basic', index: 0, key: 'name', value: '合成新值', evidence: { kind: 'vision', excerpt: '合成新值', page: 1, verified: false } }] };
     await assert.rejects(command(env.repo, 'autoImportResume', payload)); await assert.rejects(command(env.repo, 'autoImportResume', payload, before.revision - 1)); await assert.rejects(command(env.repo, 'autoImportResume', { ...payload, overwrite: false }, before.revision)); await assert.rejects(command(env.repo, 'autoImportResume', { ...payload, rows: [] }, before.revision));
     env.fail(failureAt); await assert.rejects(command(env.repo, 'autoImportResume', payload, before.revision), /模拟磁盘/); assert.deepEqual(await env.restart().read(), before);
+  }
+});
+
+// 全目录只包含当前档案绑定的元数据，不把个人值、已移除字段或其他档案定义发给模型。
+test('完整简历解析目录覆盖 155 字段及自定义类型，移除后不补回，提示词不带个人值', async () => {
+  const env = fixture(); await env.repo.initialize(); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成不得发送的原姓名' });
+  const custom = (await command(env.repo, 'createField', { profileId: 'p1', definition: { label: '合成是非项', group: '自定义', type: 'boolean' }, value: false })).result;
+  let db = await env.repo.read(); let fields = env.catalog.catalog(db, 'p1'); assert.equal(fields.length, 156); assert.equal(fields.find((field) => field.fieldId === custom).type, 'boolean'); assert.ok(fields.some((field) => field.fieldId === 'builtin.paperName'));
+  assert.ok(!JSON.stringify(fields).includes('合成不得发送的原姓名')); assert.ok(!fields.some((field) => Object.hasOwn(field, 'value'))); assert.match(env.catalog.prompt(fields), /builtin\.employmentDepartment/); assert.match(env.catalog.prompt(fields), /record=0,1,2/);
+  const base = await env.repo.readLegacy(); const next = structuredClone(base); next.profiles.find((profile) => profile.id === 'p1').fields = next.profiles.find((profile) => profile.id === 'p1').fields.filter((field) => field.key !== 'wechat'); await env.repo.saveLegacy(base, next); db = await env.repo.read(); fields = env.catalog.catalog(db, 'p1'); assert.ok(!fields.some((field) => field.fieldId === 'builtin.wechat'));
+});
+
+// 对目录每一种控件类型生成合成候选，验证不再受旧的 12 基础字段白名单限制。
+test('155 项目录候选全部可解析，数字零、布尔否、多选及日期精度不丢失', async () => {
+  const env = fixture(); const db = await env.repo.read(); const fields = env.catalog.catalog(db, 'p1'); const source = { type: 'docx', mode: 'vision', pages: ['合成图'] };
+  const raw = { fields: fields.map((field) => ({ fieldId: field.fieldId, record: 0, value: field.type === 'number' ? 0 : field.type === 'multiSelect' ? ['合成城市'] : field.type === 'date' || field.fieldId === 'builtin.birthDate' ? '2001 年 2 月' : field.type === 'select' ? field.options[0] : '合成原文', evidence: '合成来源', page: 1 })) };
+  const result = env.catalog.analyze(raw, source, fields); assert.equal(result.rows.length, 155); assert.ok(result.items.every((item) => item.status === 'ready')); env.catalog.validateRows(result.rows, fields);
+  const saved = await command(env.repo, 'autoImportResume', { profileId: 'p1', fingerprint: '3'.repeat(64), catalog: fields, rows: result.rows, overwrite: true }, db.revision); assert.equal(saved.result.saved, 155); assert.equal((await env.repo.read()).fieldValues.filter((row) => row.value !== null && row.value !== '').length, 155);
+  assert.equal(result.rows.find((row) => row.fieldId === 'builtin.currentSalary').value, 0); assert.equal(result.rows.find((row) => row.fieldId === 'builtin.birthDate').value, '2001-02'); assert.equal(result.rows.find((row) => row.fieldId === 'builtin.certificateDate').value, '2001-02'); assert.equal(JSON.stringify(result.rows.find((row) => row.fieldId === 'builtin.expectedCities').value), '["合成城市"]');
+  const boolean = { fieldId: 'custom.boolean', label: '合成确认', group: '自定义', type: 'boolean', options: [], aliases: [], description: '', version: 1 };
+  assert.equal(env.catalog.analyze({ fields: [{ fieldId: boolean.fieldId, value: '否' }] }, source, [boolean]).rows[0].value, false);
+});
+
+// 错误候选保留可读原因，冲突不覆盖；未知或恶意文本不能扩展字段定义和执行代码。
+test('解析报告区分未匹配、缺失、错误类型及冲突，旧结构可按明确目录映射', async () => {
+  const env = fixture(); const fields = env.catalog.catalog(await env.repo.read(), 'p1'); const source = { type: 'pdf', mode: 'vision', pages: ['合成图'] };
+  const result = env.catalog.analyze({ fields: [
+    { fieldId: 'builtin.name', value: '合成甲' }, { fieldId: 'builtin.name', value: '合成乙' },
+    { fieldId: 'builtin.phone', value: null }, { fieldId: 'builtin.email', value: ' ' }, { fieldId: 'builtin.currentSalary', value: '两万元' },
+    { fieldId: 'builtin.internshipEndDate', value: '至今' }, { fieldId: 'builtin.expectedCities', value: '合成市' },
+    { fieldId: 'unknown', value: '<script>throw 1</script>' }, { fieldId: 'builtin.wechat', value: '<img src=x onerror=alert(1)>' },
+    { fieldId: 'builtin.projectName', record: 101, value: '合成项目' },
+  ], unmapped: [{ label: '合成未映射', value: '原文保留' }] }, source, fields);
+  assert.equal(result.rows.length, 1); assert.equal(result.rows[0].fieldId, 'builtin.wechat'); assert.equal(result.items.filter((item) => item.status === 'conflict').length, 2); assert.equal(result.items.filter((item) => item.status === 'missing').length, 2); assert.equal(result.items.filter((item) => item.status === 'invalid').length, 4); assert.equal(result.items.filter((item) => item.status === 'unmatched').length, 2);
+  const old = env.catalog.analyze({ basic: { gender: { value: '男' }, ethnic: { value: '汉族' } }, employment: [{ company: { value: '合成企业' }, role: { value: '合成岗位' } }] }, source, fields);
+  assert.equal(old.rows.length, 4); assert.ok(old.rows.some((row) => row.fieldId === 'builtin.employmentCompany' && row.index === 0));
+});
+
+// 同一模块首段覆盖基础字段，其余段按稳定 ID 保留；不生成新定义，也不覆盖缺失值和其他简历。
+test('目录导入原子写回模块、保留多段及类型，备份重启和恢复完整兼容 v3', async () => {
+  const env = fixture(); await env.repo.initialize(); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.phone', value: '13900000000' }); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.school', value: '合成旧学校' });
+  const other = (await command(env.repo, 'createProfile', { name: '合成隔离' })).result; const before = await env.repo.read(); const catalog = env.catalog.catalog(before, 'p1');
+  const raw = { fields: [{ fieldId: 'builtin.school', value: '合成第一学校' }, { fieldId: 'builtin.school', record: 1, value: '合成第二学校' }, { fieldId: 'builtin.major', record: 1, value: '合成第二专业' }, { fieldId: 'builtin.employmentCompany', value: '合成工作单位' }, { fieldId: 'builtin.projectName', value: '合成项目' }, { fieldId: 'builtin.currentSalary', value: 0 }, { fieldId: 'builtin.expectedCities', value: ['合成城市'] }] };
+  const rows = env.catalog.analyze(raw, { type: 'pdf', mode: 'vision', pages: ['合成图'] }, catalog).rows; const payload = { profileId: 'p1', fingerprint: 'f'.repeat(64), overwrite: true, catalog, rows };
+  const out = await command(env.repo, 'autoImportResume', payload, before.revision); assert.equal(out.result.saved, 7); assert.equal(out.result.overwritten, 1); assert.equal(out.result.details.find((row) => row.fieldId === 'builtin.school' && row.index === 0).status, 'overwritten');
+  const db = await env.restart().read(); assert.equal(value(db, 'p1', 'builtin.school'), '合成第一学校'); assert.equal(value(db, 'p1', 'builtin.phone'), '13900000000'); assert.equal(value(db, 'p1', 'builtin.employmentCompany'), '合成工作单位'); assert.equal(value(db, 'p1', 'builtin.currentSalary'), 0); assert.equal(db.entries.length, 1); const entryId = db.entries[0].entryId; assert.equal(value(db, 'p1', 'builtin.school', entryId), '合成第二学校'); assert.equal(value(db, 'p1', 'builtin.major', entryId), '合成第二专业'); assert.ok(!db.fieldValues.some((row) => row.profileId === other && row.value === '合成第一学校')); assert.deepEqual(db.fieldDefinitions, before.fieldDefinitions);
+  const backup = env.store.parseBackup(await env.repo.exportBackup()); assert.deepEqual(backup.fieldValues, db.fieldValues); assert.equal(db.schemaVersion, 3);
+  await command(env.repo, 'autoImportResume', payload, db.revision); assert.equal((await env.repo.read()).entries.length, 1); await command(env.repo, 'restoreRecovery', {}); assert.deepEqual((await env.repo.read()).fieldValues, db.fieldValues);
+  const old = (await command(env.repo, 'createEntry', { profileId: 'p1', kind: 'education', title: '合成旧记录' })).result; await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.school', entryId: old, value: '合成待清理学校' }); const latest = await env.repo.read();
+  const cleared = await command(env.repo, 'clearResumeEntries', { profileId: 'p1', confirmed: true }, latest.revision); assert.equal(cleared.result.entries, 1); assert.equal((await env.repo.read()).entries[0].entryId, entryId); assert.equal(value(await env.repo.read(), 'p1', 'builtin.school', entryId), '合成第二学校');
+});
+
+// 目录和每条行必须由后台重验；客户端不能补回已删除字段、伪造类型或宣称已人工核实。
+test('目录导入拒绝过期目录、断裂目标、伪造行及来源，手动模式仍保留未授权覆盖', async () => {
+  const env = fixture(); const before = await env.repo.read(); const catalog = env.catalog.catalog(before, 'p1'); const rows = env.catalog.analyze({ fields: [{ fieldId: 'builtin.name', value: '合成姓名' }] }, { type: 'pdf', mode: 'vision', pages: ['合成图'] }, catalog).rows; const payload = { profileId: 'p1', fingerprint: '1'.repeat(64), catalog, rows, overwrite: true };
+  for (const changed of [{ catalog: [] }, { profileId: 'not-a-profile' }, { rows: [{ ...rows[0], fieldId: 'not-a-field' }] }, { rows: [{ ...rows[0], value: false }] }, { rows: [{ ...rows[0], evidence: { ...rows[0].evidence, verified: true } }] }]) await assert.rejects(command(env.repo, 'autoImportResume', { ...payload, ...changed }, before.revision));
+  assert.deepEqual(await env.repo.read(), before); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成手填原值' });
+  const kept = await command(env.repo, 'importResume', { ...payload, overwrite: false }, (await env.repo.read()).revision); assert.equal(kept.result.kept, 1); assert.equal(kept.result.details[0].status, 'kept'); assert.equal(value(await env.repo.read(), 'p1', 'builtin.name'), '合成手填原值');
+});
+
+// 独立覆盖目录导入的两个落盘点，不能用 UI 故障注入代替真实存储失败保护。
+test('目录自动导入恢复点或主库写入失败均保留原库', async () => {
+  for (const failAt of [0, 1]) {
+    const env = fixture(); const before = await env.repo.read(); const catalog = env.catalog.catalog(before, 'p1'); const rows = env.catalog.analyze({ fields: [{ fieldId: 'builtin.englishScore', value: '合成分数' }] }, { type: 'docx', mode: 'vision', pages: ['合成图'] }, catalog).rows;
+    env.fail(failAt); await assert.rejects(command(env.repo, 'autoImportResume', { profileId: 'p1', fingerprint: '2'.repeat(64), catalog, rows, overwrite: true }, before.revision), /模拟磁盘/); assert.deepEqual(await env.restart().read(), before);
   }
 });

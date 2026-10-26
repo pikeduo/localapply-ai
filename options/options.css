@@ -213,3 +213,13 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
   .resume-toc { padding: 12px; }
   .resume-group { padding: 16px 12px; }
 }
+/* 解析报告按条目区分状态；模型返回值只显示为可换行文本，窄窗也不撑出页面。 */
+#resumeReport { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; }
+#resumeReport > summary { font-weight: 600; cursor: pointer; }
+#resumeReportItems { max-height: 520px; overflow: auto; overscroll-behavior: contain; }
+.resume-report-item { margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.resume-report-item[data-report-status="unmatched"], .resume-report-item[data-report-status="invalid"], .resume-report-item[data-report-status="conflict"] { border-left: 4px solid #d7942b; }
+.resume-report-item[data-report-status="saved"], .resume-report-item[data-report-status="overwritten"] { border-left: 4px solid #21a67a; }
+#resumeReport pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font: inherit; }
+.resume-record { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.resume-record > summary { cursor: pointer; font-weight: 600; margin-bottom: 16px; }
