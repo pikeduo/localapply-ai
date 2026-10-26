@@ -2235,3 +2235,33 @@ for (const withExtension of [true, false]) {
     } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
+
+// 合成文档包含明确出生年月，验证模型候选从校对到已有日期字段的完整链路与月精度。
+for (const withExtension of [true, false]) {
+  test(`出生年月导入：${withExtension ? '扩展' : 'file://'}映射出生日期、确认与月精度`, { timeout: 90000 }, async () => {
+    const fixtures = require('./resume-fixtures.cjs'); const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'birth-date-')); const api = await serve(); let context; const errors = [];
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      let page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'aiSettings');
+      await page.locator('#provider').fill(api.base + '/v1'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves()); await page.locator('#apiKey').fill('synthetic-birth-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
+      await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-birth-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+      api.modelApi.chatContent = JSON.stringify({ basic: { birthYearMonth: { value: '1997 年 8 月', evidence: '出生年月：1997 年 8 月', page: 1 } } });
+      const before = (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      await workspacePage(page, 'pdfCard'); await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-birth.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures.docx('出生年月：1997 年 8 月。') });
+      await page.waitForFunction(() => !document.getElementById('btnExtract').disabled && !document.getElementById('sendResume').hidden); assert.equal(api.calls.length, 0);
+      await page.locator('#sendResume').click(); await page.waitForFunction(() => !document.getElementById('sendResume').disabled && document.getElementById('pdfStatus').textContent.includes('解析完成'));
+      const review = page.locator('#pdfReview .review-cell'); assert.equal(await review.count(), 1); assert.ok((await review.textContent()).includes('出生日期')); assert.equal(await review.locator('input:not([type="checkbox"])').inputValue(), '1997-08'); assert.equal(await review.locator('input[type="checkbox"]').isChecked(), false);
+      assert.ok((await review.textContent()).includes('出生年月：1997 年 8 月')); assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, before.revision);
+      await review.locator('input[type="checkbox"]').check(); await page.locator('#btnImport').click(); await page.waitForFunction(() => !document.getElementById('btnImport').disabled && document.getElementById('importRow').style.display === 'none');
+      const database = (await page.evaluate(() => dataRequest('localapply:read'))).database; const row = database.fieldValues.find((item) => item.profileId === before.activeProfileId && item.fieldId === 'builtin.birthDate');
+      assert.equal(row.value, '1997-08'); assert.equal(row.entryId, null); assert.equal(row.evidence.excerpt, '出生年月：1997 年 8 月'); assert.equal(row.evidence.verified, false); assert.equal(database.fieldDefinitions.length, before.fieldDefinitions.length); assert.equal(database.entries.length, 0); assert.ok(!database.fieldDefinitions.some((item) => item.fieldId === 'resume.birthDate' || item.fieldId === 'resume.birthYearMonth'));
+      // 重启后重新定位当前页面，不能用旧 Locator 或仅靠数据库桩验证日期精度。
+      const birth = () => page.locator('#basicFields [data-field-id="builtin.birthDate"]');
+      await workspacePage(page, 'resumeCenter'); assert.equal(await birth().locator('[data-primary]').inputValue(), '1997-08'); assert.equal(await birth().locator('select').inputValue(), 'month');
+      await birth().screenshot({ path: path.join(testRoot, `birth-date-${withExtension ? 'extension' : 'file'}.png`) });
+      await page.reload(); await workspacePage(page, 'resumeCenter'); assert.equal(await birth().locator('select').inputValue(), 'month'); await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      assert.equal(await birth().locator('[data-primary]').inputValue(), '1997-08'); assert.equal(await birth().locator('select').inputValue(), 'month'); assert.equal(api.calls.length, 1); assert.equal(api.calls[0].probe, false); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}

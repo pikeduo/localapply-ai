@@ -713,3 +713,33 @@ test('旧模块清理及标记原子保存，失败不改变原资料或恢复�
   await assert.rejects(env.repo.read(), /模拟磁盘/); assert.deepEqual(env.disk, disk); assert.deepEqual(env.disk[env.store.DB_KEY], before);
   const db = await env.restart().read(); assert.equal(db.fieldDefinitions.length, 155); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
 });
+
+// 仅规范模型给出的日期表示，不补齐未给出的月份/日期，也不推算年龄。
+test('出生日期保留年/月/日精度，中文及数字格式可无损规范化', () => {
+  const { resume } = fixture();
+  for (const [raw, expected] of [['1997 年 8 月', '1997-08'], ['1997.8', '1997-08'], ['1997/08', '1997-08'], ['1997年', '1997'], ['1988年2月29日', '1988-02-29'], ['1988/2/29', '1988-02-29'], ['1997-02-29', '1997-02-29'], ['1997年13月', '1997年13月'], ['农历八月', '农历八月']]) assert.equal(resume.normalizeBirthDate(raw), expected);
+  assert.match(resume.prompt(), /birthDate:出生日期/); assert.match(resume.prompt(), /只有年月绝不补日/); assert.match(resume.prompt(), /不得根据年龄推算/);
+});
+
+// 兼容模型结构化生日别名，保留来源且默认不选；同义键冲突不能静默覆盖。
+test('出生年月模型候选归入 birthDate，重复别名合并且冲突拒绝', () => {
+  const { resume } = fixture(); const source = { type: 'docx', mode: 'vision', pages: ['合成页面'] };
+  const raw = { basic: { birthYearMonth: { value: '1997 年 8 月', evidence: '出生年月：1997 年 8 月', page: 1 }, birthday: { value: '1997-08', evidence: '合成同义项', page: 1 } } }; const before = structuredClone(raw);
+  const rows = resume.normalize(raw, source); assert.equal(rows.length, 1); assert.equal(rows[0].key, 'birthDate'); assert.equal(rows[0].value, '1997-08'); assert.equal(rows[0].checked, false); assert.equal(rows[0].evidence.excerpt, '出生年月：1997 年 8 月'); assert.equal(rows[0].evidence.verified, false); assert.deepEqual(raw, before);
+  for (const key of ['birthDate', 'birth_date', 'dateOfBirth', '出生年月', '出生日期', '生日']) assert.equal(resume.normalize({ basic: { [key]: raw.basic.birthYearMonth } }, source)[0].key, 'birthDate');
+  assert.throws(() => resume.normalize({ basic: { birthDate: raw.basic.birthYearMonth, birthday: { ...raw.basic.birthday, value: '1998-07' } } }, source), /不一致/);
+});
+
+// 出生年月写入原有基础字段；重绑仍标敏感，手工校对和覆盖策略保持原有约束。
+test('出生年月确认后写入既有出生日期，保持精度、来源和覆盖策略', async () => {
+  const env = fixture(); const before = await env.repo.read(); const base = await env.repo.readLegacy(); const next = structuredClone(base); next.profiles[0].fields = next.profiles[0].fields.filter((field) => field.key !== 'birthDate'); await env.repo.saveLegacy(base, next);
+  const normalized = env.resume.normalize({ basic: { birthDate: { value: '1997 年 8 月', evidence: '出生年月：1997 年 8 月', page: 1 } } }, { type: 'docx', mode: 'vision', pages: ['合成页面'] });
+  const rows = normalized.map(({ kind, index, key, value, evidence }) => ({ kind, index, key, value, evidence })); const payload = { profileId: 'p1', fingerprint: 'b'.repeat(64), rows, overwrite: false };
+  assert.ok(!value(await env.repo.read(), 'p1', 'builtin.birthDate')); await command(env.repo, 'importResume', payload, (await env.repo.read()).revision);
+  let db = await env.repo.read(); assert.equal(value(db, 'p1', 'builtin.birthDate'), '1997-08'); assert.equal(db.fieldDefinitions.length, before.fieldDefinitions.length); assert.ok(!db.fieldDefinitions.some((field) => field.fieldId === 'resume.birthDate')); assert.equal(db.bindings.find((row) => row.fieldId === 'builtin.birthDate').sensitive, true);
+  assert.equal(db.fieldValues.find((row) => row.fieldId === 'builtin.birthDate').evidence.excerpt, '出生年月：1997 年 8 月');
+  const edited = { ...payload, rows: [{ ...rows[0], value: '1998年7月', evidence: { kind: 'manual', excerpt: '', page: 0, verified: false } }] };
+  const keep = await command(env.repo, 'importResume', edited, db.revision); assert.equal(keep.result.kept, 1); assert.equal(value(await env.repo.read(), 'p1', 'builtin.birthDate'), '1997-08');
+  await command(env.repo, 'importResume', { ...edited, overwrite: true }, (await env.repo.read()).revision); db = await env.restart().read(); assert.equal(value(db, 'p1', 'builtin.birthDate'), '1998-07'); assert.equal(db.fieldValues.find((row) => row.fieldId === 'builtin.birthDate').evidence.kind, 'manual');
+  assert.equal(value(env.store.parseBackup(await env.repo.exportBackup()), 'p1', 'builtin.birthDate'), '1998-07');
+});

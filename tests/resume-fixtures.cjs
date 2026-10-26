@@ -2,12 +2,13 @@
 'use strict';
 const { zipSync, strToU8 } = require('fflate');
 const text = 'Test Person; 13800000000; test@example.test; Alpha University; Beta University; Sample Corp; Lab Corp; Project One; Built a parser with JavaScript.';
-// 创建包含真实段落和表格文本的最小 OOXML 文档。
-function docx() {
+// 创建真实段落的最小 OOXML，extraText 只用于追加合成测试资料，正文始终按 XML 转义。
+function docx(extraText = '') {
+  const content = (text + (extraText ? ' ' + extraText : '')).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return Buffer.from(zipSync({
     '[Content_Types].xml': strToU8('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
     '_rels/.rels': strToU8('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
-    'word/document.xml': strToU8('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>' + text + '</w:t></w:r></w:p></w:body></w:document>'),
+    'word/document.xml': strToU8('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>' + content + '</w:t></w:r></w:p></w:body></w:document>'),
   }, { mtime: new Date('2000-01-01T00:00:00Z') }));
 }
 // 生成可实际提取文字的 PDF，避免用解析器桩替代真实文件读取。
