@@ -198,7 +198,6 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 .workspace-multi-entry > .workspace-tags { display: contents; }
 .workspace-multi-entry > input[type="text"] { flex: 1 1 130px; width: auto; min-width: 0; padding: 4px 2px; border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; }
 .workspace-multi-entry .workspace-tags button { padding: 3px 8px; background: var(--brand-weak); color: var(--brand); border-color: transparent; }
-.workspace-multi > button { justify-self: start; }
 .workspace-region > small { color: var(--sub); }
 /* 专业分类可在原内容框搜索；候选弹层不挤动其他字段，已选与键盘活动项分别高亮。 */
 .workspace-search-select { position: relative; min-width: 0; }
