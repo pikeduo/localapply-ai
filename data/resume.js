@@ -1,8 +1,9 @@
 // 简历抽取契约：仅接受有限结构，模型来源片段须人工校对，不从文档正文提取字段。
 (function (global) {
   'use strict';
-  const basic = { name: '姓名', birthDate: '出生日期', phone: '手机号', email: '邮箱', school: '毕业院校', major: '专业', degree: '学历', graduationDate: '毕业时间', gpa: 'GPA/排名', skills: '技能特长', languages: '语言证书' };
+  const basic = { name: '姓名', birthDate: '出生日期', politicalStatus: '政治面貌', phone: '手机号', email: '邮箱', school: '毕业院校', major: '专业', degree: '学历', graduationDate: '毕业时间', gpa: 'GPA/排名', skills: '技能特长', languages: '语言证书' };
   const birthAliases = new Set(['birthday', 'birth_date', 'birthYearMonth', 'dateOfBirth', '出生日期', '出生年月', '生日']);
+  const politicalAliases = new Set(['political_status', 'politicalAffiliation', '政治面貌', '政治状态']);
   const repeated = { school: '院校', major: '专业', degree: '学历', company: '公司', title: '项目名称', role: '岗位/角色', start: '开始时间', end: '结束时间', description: '经历描述' };
   const kinds = { education: '教育经历', internship: '实习经历', employment: '工作经历', project: '项目经历' };
   // 同时约束模型的输出结构和用户可以审核的字段，不接受页面或文档内的指令。
@@ -12,6 +13,7 @@
       '每个字段都是 {value:字符串,evidence:连续原文片段,page:页码}。basic 可选字段（键:含义）：' + Object.entries(basic).map(([key, label]) => key + ':' + label).join(',') +
       '；重复经历每项可选字段：' + Object.keys(repeated).join(',') + '。同类多段经历分别列出，保留原文日期。' +
       '出生日期、出生年月、生日统一写入 basic.birthDate；仅按原文精度输出 YYYY、YYYY-MM 或 YYYY-MM-DD，只有年月绝不补日，只有年份绝不补月日，也不得根据年龄推算出生日期。evidence 保留原文日期片段。' +
+      '政治面貌、政治状态统一写入 basic.politicalStatus，仅提取原文明示的身份，不推断政治面貌，不按职务、经历或其他个人信息猜测，未写明则省略。仅明确同义的简称可规范名称，具体党派名称保留原文，evidence 保留原始片段。' +
       '请直接阅读原文件或全部页面图片，识别正文及嵌入图片中的文字与版式，不遗漏图片型内容。跨页同一经历有明确依据时合并，避免重复。' +
       '无法读取附件时返回 {"error":"无法读取附件"}，不要猜测。所有来源片段均须用户人工核对。' +
       '没有依据的字段省略。education 用 school/major/degree/start/end，实习与工作用 company/role/start/end/description，项目用 title/role/start/end/description。';
@@ -32,6 +34,12 @@
     if (year < 1 || month < 1 || month > 12 || day < 1 || date.getUTCFullYear() !== year || date.getUTCMonth() + 1 !== month || date.getUTCDate() !== day) return text;
     return [match[1], ...(match[2] ? [String(month).padStart(2, '0')] : []), ...(match[3] ? [String(day).padStart(2, '0')] : [])].join('-');
   }
+  // 只对政治面貌的明确同义全称/简称作精确规范；歧义词和具体党派原样供用户核对。
+  function normalizePoliticalStatus(value) {
+    const text = value.trim();
+    const aliases = { '团员': '共青团员', '共青团团员': '共青团员', '中国共产主义青年团团员': '共青团员', '中国共产党党员': '中共党员', '预备党员': '中共预备党员', '中国共产党预备党员': '中共预备党员' };
+    return Object.hasOwn(aliases, text) ? aliases[text] : text;
+  }
   // 文件/图片结果不伪称已本地核对原文，所有候选都需人工勾选；仅兼容历史文本夹具。
   function normalize(raw, source) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('简历解析结果不是对象');
@@ -42,12 +50,12 @@
       const labels = kind === 'basic' ? basic : repeated;
       for (const [fieldKey, cell] of Object.entries(fields)) {
         // 只兼容模型结构化结果里的明确同义键，不利用代码猜测原文中的字段含义。
-        const key = kind === 'basic' && birthAliases.has(fieldKey) ? 'birthDate' : fieldKey;
+        const key = kind === 'basic' && birthAliases.has(fieldKey) ? 'birthDate' : kind === 'basic' && politicalAliases.has(fieldKey) ? 'politicalStatus' : fieldKey;
         if (!Object.hasOwn(labels, key)) continue;
         if (!cell || typeof cell !== 'object' || typeof cell.value !== 'string' || cell.value.length > 10000) throw new Error('简历字段值格式错误');
-        const value = key === 'birthDate' ? normalizeBirthDate(cell.value) : cell.value.trim(); if (!value) continue;
-        if (key === 'birthDate' && rows.some((row) => row.kind === kind && row.index === index && row.key === key)) {
-          if (rows.find((row) => row.kind === kind && row.index === index && row.key === key).value !== value) throw new Error('出生日期存在不一致的候选，请重新核对');
+        const value = key === 'birthDate' ? normalizeBirthDate(cell.value) : key === 'politicalStatus' ? normalizePoliticalStatus(cell.value) : cell.value.trim(); if (!value) continue;
+        if (['birthDate', 'politicalStatus'].includes(key) && rows.some((row) => row.kind === kind && row.index === index && row.key === key)) {
+          if (rows.find((row) => row.kind === kind && row.index === index && row.key === key).value !== value) throw new Error(labels[key] + '存在不一致的候选，请重新核对');
           continue;
         }
         const excerpt = typeof cell.evidence === 'string' ? cell.evidence.trim().slice(0, 500) : '';
@@ -85,5 +93,5 @@
     }
     return rows;
   }
-  global.LocalApplyResume = { basic, repeated, kinds, prompt, normalizeBirthDate, normalize, validateRows };
+  global.LocalApplyResume = { basic, repeated, kinds, prompt, normalizeBirthDate, normalizePoliticalStatus, normalize, validateRows };
 })(globalThis);

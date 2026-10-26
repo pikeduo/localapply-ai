@@ -742,12 +742,13 @@
                 }
               } else if (!db.bindings.some((b) => b.profileId === input.profileId && b.fieldId === fieldId)) {
                 db.bindings.push({ profileId: input.profileId, fieldId, fid: id('field'), key: cell.key,
-                  sensitive: ['birthDate', 'phone', 'email'].includes(cell.key), autoFill: false, material: false, custom: true });
+                  sensitive: ['birthDate', 'politicalStatus', 'phone', 'email'].includes(cell.key), autoFill: false, material: false, custom: true });
               }
               const index = db.fieldValues.findIndex((v) => v.profileId === input.profileId && v.fieldId === fieldId && v.entryId === entryId);
               if (index >= 0 && db.fieldValues[index].value !== '' && db.fieldValues[index].value !== null && !input.overwrite) { result.kept++; continue; }
-              // 出生年月按用户确认的精度保存；格式化不改变其含义或原始来源片段。
-              const value = cell.kind === 'basic' && cell.key === 'birthDate' ? global.LocalApplyResume.normalizeBirthDate(cell.value) : cell.value;
+              // 日期精度和明确的下拉同义值仅做无损规范，不改变原始来源片段或猜测个人身份。
+              const value = cell.kind === 'basic' && cell.key === 'birthDate' ? global.LocalApplyResume.normalizeBirthDate(cell.value)
+                : cell.kind === 'basic' && cell.key === 'politicalStatus' ? global.LocalApplyResume.normalizePoliticalStatus(cell.value) : cell.value;
               const row = { profileId: input.profileId, fieldId, entryId, value, updatedAt: now(), source: 'ai-confirmed',
                 evidence: { ...clone(cell.evidence), fingerprint: input.fingerprint } };
               if (index >= 0) db.fieldValues[index] = row; else db.fieldValues.push(row);

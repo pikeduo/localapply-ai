@@ -743,3 +743,27 @@ test('出生年月确认后写入既有出生日期，保持精度、来源和�
   await command(env.repo, 'importResume', { ...edited, overwrite: true }, (await env.repo.read()).revision); db = await env.restart().read(); assert.equal(value(db, 'p1', 'builtin.birthDate'), '1998-07'); assert.equal(db.fieldValues.find((row) => row.fieldId === 'builtin.birthDate').evidence.kind, 'manual');
   assert.equal(value(env.store.parseBackup(await env.repo.exportBackup()), 'p1', 'builtin.birthDate'), '1998-07');
 });
+
+// 政治面貌必须明确提供，不从其他经历推断；仅精确同义简称允许对应下拉选项。
+test('政治面貌纳入模型契约，明确同义键和值归一，歧义或冲突不猜测', () => {
+  const { resume } = fixture(); const source = { type: 'docx', mode: 'vision', pages: ['合成页面'] }; const cell = { value: '团员', evidence: '政治面貌：团员', page: 1 };
+  assert.match(resume.prompt(), /politicalStatus:政治面貌/); assert.match(resume.prompt(), /不推断政治面貌/);
+  for (const key of ['politicalStatus', 'political_status', 'politicalAffiliation', '政治面貌', '政治状态']) {
+    const rows = resume.normalize({ basic: { [key]: cell } }, source); assert.equal(rows[0].key, 'politicalStatus'); assert.equal(rows[0].value, '共青团员'); assert.equal(rows[0].checked, false); assert.equal(rows[0].evidence.excerpt, cell.evidence);
+  }
+  assert.equal(resume.normalizePoliticalStatus('中国共产党党员'), '中共党员'); assert.equal(resume.normalizePoliticalStatus('预备党员'), '中共预备党员');
+  for (const value of ['党员', '无党派人士', '中国民主同盟盟员']) assert.equal(resume.normalizePoliticalStatus(value), value);
+  assert.equal(resume.normalize({ basic: { politicalStatus: cell, 政治面貌: { ...cell, value: '共青团员' } } }, source).length, 1);
+  assert.throws(() => resume.normalize({ basic: { politicalStatus: cell, 政治面貌: { ...cell, value: '群众' } } }, source), /政治面貌.*不一致/);
+  assert.ok(!resume.normalize({ basic: { name: { value: '合成姓名', evidence: '合成姓名', page: 1 } } }, source).some((row) => row.key === 'politicalStatus'));
+});
+
+// 确认后写回已有 select 定义，保留来源和未知原文值，不改公共选项，也不默认覆盖已填写内容。
+test('政治面貌导入写入既有下拉字段，来源、覆盖和自定义原文值保留', async () => {
+  const env = fixture(); const before = await env.repo.read(); const definition = before.fieldDefinitions.find((field) => field.fieldId === 'builtin.politicalStatus'); assert.equal(definition.type, 'select');
+  const evidence = { kind: 'vision', excerpt: '政治面貌：团员', page: 1, verified: false }; const payload = { profileId: 'p1', fingerprint: 'c'.repeat(64), overwrite: false, rows: [{ kind: 'basic', index: 0, key: 'politicalStatus', value: '团员', evidence }] };
+  await command(env.repo, 'importResume', payload, before.revision); let db = await env.repo.read(); assert.equal(value(db, 'p1', 'builtin.politicalStatus'), '共青团员'); assert.deepEqual(db.fieldDefinitions.find((field) => field.fieldId === definition.fieldId), definition); assert.equal(db.fieldDefinitions.length, before.fieldDefinitions.length); assert.equal(db.fieldValues.find((row) => row.fieldId === definition.fieldId).evidence.excerpt, evidence.excerpt);
+  const changed = { ...payload, rows: [{ ...payload.rows[0], value: '无党派人士', evidence: { kind: 'manual', excerpt: '', page: 0, verified: false } }] };
+  assert.equal((await command(env.repo, 'importResume', changed, db.revision)).result.kept, 1); assert.equal(value(await env.repo.read(), 'p1', definition.fieldId), '共青团员');
+  await command(env.repo, 'importResume', { ...changed, overwrite: true }, (await env.repo.read()).revision); db = await env.restart().read(); assert.equal(value(db, 'p1', definition.fieldId), '无党派人士'); assert.deepEqual(db.fieldDefinitions.find((field) => field.fieldId === definition.fieldId).options, definition.options);
+});

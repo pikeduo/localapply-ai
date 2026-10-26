@@ -2265,3 +2265,39 @@ for (const withExtension of [true, false]) {
     } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
+
+// 合成政治面貌通过模型、校对与原有下拉框完整导入；未列入公共选项的原文不得被丢失。
+for (const withExtension of [true, false]) {
+  test(`政治面貌导入：${withExtension ? '扩展' : 'file://'}标准选项、原文保留与重启`, { timeout: 90000 }, async () => {
+    const fixtures = require('./resume-fixtures.cjs'); const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'political-status-')); const api = await serve(); let context; const errors = [];
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      let page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'aiSettings');
+      await page.locator('#provider').fill(api.base + '/v1'); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves()); await page.locator('#apiKey').fill('synthetic-political-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
+      await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-political-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+      const before = (await page.evaluate(() => dataRequest('localapply:read'))).database; const definition = before.fieldDefinitions.find((field) => field.fieldId === 'builtin.politicalStatus');
+      // 每次只确认模型明确给出的政治面貌；覆盖已有值也通过原有覆盖复选框。
+      const importStatus = async (raw, key, expected, overwrite = false) => {
+        api.modelApi.chatContent = JSON.stringify({ basic: { [key]: { value: raw, evidence: '政治面貌：' + raw, page: 1 } } });
+        await workspacePage(page, 'pdfCard'); await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-political.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures.docx('政治面貌：' + raw + '。') });
+        await page.waitForFunction(() => !document.getElementById('btnExtract').disabled && !document.getElementById('sendResume').hidden); const revision = (await page.evaluate(() => dataRequest('localapply:read'))).database.revision;
+        await page.locator('#sendResume').click(); await page.waitForFunction(() => !document.getElementById('sendResume').disabled && document.getElementById('pdfStatus').textContent.includes('解析完成'));
+        const review = page.locator('#pdfReview .review-cell'); assert.equal(await review.count(), 1); assert.ok((await review.textContent()).includes('政治面貌')); assert.equal(await review.locator('input:not([type="checkbox"])').inputValue(), expected); assert.equal(await review.locator('input[type="checkbox"]').isChecked(), false);
+        assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, revision);
+        if (overwrite) { await page.locator('#overwriteResume').check(); await page.waitForFunction(() => document.getElementById('pdfReview').textContent.includes('确认后覆盖勾选项')); }
+        await review.locator('input[type="checkbox"]').check(); await page.locator('#btnImport').click(); await page.waitForFunction(() => !document.getElementById('btnImport').disabled && document.getElementById('importRow').style.display === 'none');
+        const database = (await page.evaluate(() => dataRequest('localapply:read'))).database; const row = database.fieldValues.find((item) => item.fieldId === 'builtin.politicalStatus');
+        assert.equal(row.value, expected); assert.equal(row.entryId, null); assert.equal(row.evidence.excerpt, '政治面貌：' + raw); assert.equal(row.evidence.verified, false); assert.equal(database.fieldDefinitions.length, before.fieldDefinitions.length); assert.deepEqual(database.fieldDefinitions.find((field) => field.fieldId === definition.fieldId), definition); assert.equal(database.entries.length, 0);
+        await workspacePage(page, 'resumeCenter');
+      };
+      // Locator 按当前页面创建，真实浏览器重启后也检查选中值和显示文字。
+      const field = () => page.locator('#basicFields [data-field-id="builtin.politicalStatus"]');
+      await importStatus('团员', 'political_status', '共青团员'); assert.equal(await field().locator('select').inputValue(), '共青团员'); assert.equal(await field().locator('option:checked').textContent(), '共青团员'); assert.equal(await field().locator('option').count(), definition.options.length + 1);
+      await field().screenshot({ path: path.join(testRoot, `political-status-${withExtension ? 'extension' : 'file'}.png`) });
+      await importStatus('中国民主同盟盟员', 'politicalStatus', '中国民主同盟盟员', true); assert.equal(await field().locator('option:checked').textContent(), '中国民主同盟盟员'); assert.equal(await field().locator('option').count(), definition.options.length + 2);
+      await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      assert.equal(await field().locator('select').inputValue(), '中国民主同盟盟员'); assert.equal(await field().locator('option:checked').textContent(), '中国民主同盟盟员'); assert.equal(api.calls.length, 2); assert.ok(api.calls.every((call) => !call.probe)); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
