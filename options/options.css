@@ -192,6 +192,12 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 .workspace-region, .workspace-multi { display: grid; gap: 8px; min-width: 0; }
 .workspace-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .workspace-tags button { overflow-wrap: anywhere; max-width: 100%; }
+/* 已选城市与输入区共用边框，回车生成框内标签，空间不足时自动换行。 */
+.workspace-multi-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; min-height: 42px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--card); cursor: text; }
+.workspace-multi-entry:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-weak); }
+.workspace-multi-entry > .workspace-tags { display: contents; }
+.workspace-multi-entry > input[type="text"] { flex: 1 1 130px; width: auto; min-width: 0; padding: 4px 2px; border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; }
+.workspace-multi-entry .workspace-tags button { padding: 3px 8px; background: var(--brand-weak); color: var(--brand); border-color: transparent; }
 .workspace-multi > button { justify-self: start; }
 .workspace-region > small { color: var(--sub); }
 .resume-profile-controls { padding: 12px; margin: -12px -12px 8px; border: 1px solid transparent; border-radius: 12px; }

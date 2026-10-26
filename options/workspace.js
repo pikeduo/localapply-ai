@@ -128,12 +128,13 @@ function workspaceDateControl(def, value) {
   Object.defineProperty(box, 'value', { get: () => input.value });
   entry.append(input, trigger); box.append(precision, entry, status); return box;
 }
-// 开放多选把用户添加的城市仅存为个人值，绝不将这些内容混入公共候选定义。
+// 开放多选在同一输入框内显示城市标签；内容仅保存为个人值，不进入公共候选定义。
 function workspaceOpenMultiControl(def, value) {
   const box = workspaceNode('div', '', 'workspace-multi'); box.setAttribute('role', 'group');
   let values = Array.isArray(value) ? [...value] : [];
   const tags = workspaceNode('div', '', 'workspace-tags');
-  const input = document.createElement('input'); input.placeholder = '输入城市，按回车或点击添加'; input.setAttribute('aria-label', '添加城市 · ' + def.label);
+  const entry = workspaceNode('div', '', 'workspace-multi-entry');
+  const input = document.createElement('input'); input.type = 'text'; input.placeholder = '输入城市，按回车或点击添加'; input.setAttribute('aria-label', '添加城市 · ' + def.label);
   const add = workspaceNode('button', '添加', 'btn ghost'); add.type = 'button';
   const status = workspaceNode('small'); status.setAttribute('role', 'status');
   // 只由明确的添加/移除动作保存，多选输入尚未确认的文字不视为已添加。
@@ -155,7 +156,7 @@ function workspaceOpenMultiControl(def, value) {
   input.addEventListener('change', (event) => event.stopPropagation());
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.isComposing) { event.preventDefault(); append(); } });
   add.addEventListener('click', append); Object.defineProperty(box, 'value', { get: () => [...values] });
-  render(); box.append(tags, input, add, status); return box;
+  render(); entry.append(tags, input); box.append(entry, add, status); return box;
 }
 // 地区仅保留一个可搜索内容框，选定或手填确认后沿用原有保存链路。
 function workspaceRegionControl(def, value) {

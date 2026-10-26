@@ -1935,6 +1935,12 @@ for (const withExtension of [true, false]) {
       await field('homeRegion').locator('[data-primary]').fill('江苏省 / 合成市 / 合成区'); await region.getByRole('button', { name: '使用输入内容', exact: true }).click(); await saved();
       assert.equal(await field('homeRegion').locator('[data-primary]').inputValue(), '江苏省 / 合成市 / 合成区');
       await field('expectedCities').getByRole('textbox').fill('合成甲城、合成乙城'); await field('expectedCities').getByRole('textbox').press('Enter'); await saved();
+      // 回车后的城市标签与继续输入的位置都必须落在同一可见边框内，而非显示在框外。
+      assert.equal(await field('expectedCities').locator('.workspace-multi-entry').evaluate((element) => {
+        const box = element.getBoundingClientRect(); return [...element.querySelectorAll('button, input')].every((node) => { const rect = node.getBoundingClientRect(); return rect.left >= box.left && rect.right <= box.right + 1 && rect.top >= box.top && rect.bottom <= box.bottom + 1; });
+      }), true);
+      assert.equal(await field('expectedCities').locator('.workspace-multi-entry button').count(), 2); assert.equal(await field('expectedCities').getByRole('textbox').inputValue(), '');
+      await field('expectedCities').screenshot({ path: path.join(testRoot, `city-tags-inside-${mode}.png`) });
       database = (await page.evaluate(() => dataRequest('localapply:read'))).database;
       assert.deepEqual(database.fieldValues.find((row) => row.fieldId === 'builtin.expectedCities').value, ['合成甲城', '合成乙城']);
       await field('expectedCities').getByRole('button', { name: '移除城市 · 合成甲城', exact: true }).click(); await saved();
