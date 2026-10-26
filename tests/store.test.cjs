@@ -922,6 +922,57 @@ test('模块记录删除保护共享字段与其他记录，确认/版本/故障
   }
 });
 
+// 八模块的首条删除均应只移除指定内容，下一条整体迁入平面槽，字段定义和第三条保持独立。
+test('模块首条删除按顺序保留其他经历、自定义字段、来源和映射，且支持恢复', async () => {
+  const slots = [['教育背景','school'], ['实习经历','internshipCompany'], ['工作经历','employmentCompany'], ['项目经历','projectName'], ['家庭成员','familyName1'], ['获奖经历','awardName'], ['证书信息','certificateName'], ['论文期刊','paperName']];
+  for (const [group, key] of slots) {
+    const env = fixture(); await env.repo.read(); const fieldId = 'builtin.' + key;
+    const other = (await command(env.repo, 'createProfile', { name: '合成另一份简历' })).result;
+    await command(env.repo, 'setValue', { profileId: other, fieldId, value: '合成其他档案保留' });
+    await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成本人保留' });
+    await command(env.repo, 'createField', { profileId: 'p1', definition: { ...def('custom.record-delete'), group }, value: '合成首条自定义' });
+    await command(env.repo, 'setValue', { profileId: 'p1', fieldId, value: '合成首条删除' });
+    let db = await env.repo.read(); const second = (await command(env.repo, 'addModuleRecord', { profileId: 'p1', group }, db.revision)).result;
+    db = await env.repo.read(); const third = (await command(env.repo, 'addModuleRecord', { profileId: 'p1', group }, db.revision)).result;
+    await command(env.repo, 'setValue', { profileId: 'p1', entryId: second, fieldId, value: '合成第二条保留', source: 'ai-imported' });
+    await command(env.repo, 'setValue', { profileId: 'p1', entryId: second, fieldId: 'custom.record-delete', value: '合成第二条自定义' });
+    await command(env.repo, 'setValue', { profileId: 'p1', entryId: third, fieldId, value: '合成第三条保留' });
+    for (const [mappingId, entryId, profileId] of [['map.primary',null,'p1'], ['map.second',second,'p1'], ['map.third',third,'p1'], ['map.other',null,other], ['map.general',null,null]]) await command(env.repo, 'saveMapping', { mappingId, entryId, profileId, fieldId, origin: 'https://synthetic.example', path: '/apply', label: '合成字段' });
+    db = await env.repo.read(); const promoted = db.fieldValues.filter((row) => row.entryId === second).map((row) => ({ ...row, entryId: null }));
+    await command(env.repo, 'deleteModuleRecord', { profileId: 'p1', group, entryId: null, confirmed: true }, db.revision);
+    const after = await env.restart().read(); assert.equal(JSON.stringify(after.fieldValues.filter((row) => row.profileId === 'p1' && promoted.some((item) => item.fieldId === row.fieldId) && row.entryId === null)), JSON.stringify(promoted));
+    assert.ok(!after.entries.some((entry) => entry.entryId === second)); assert.ok(after.entries.some((entry) => entry.entryId === third));
+    assert.equal(value(after, 'p1', fieldId, third), '合成第三条保留'); assert.equal(value(after, other, fieldId), '合成其他档案保留'); assert.equal(value(after, 'p1', 'builtin.name'), '合成本人保留');
+    assert.deepEqual(after.fieldDefinitions, db.fieldDefinitions); assert.deepEqual(after.bindings, db.bindings);
+    assert.equal(JSON.stringify(after.mappingRules), JSON.stringify(db.mappingRules.filter((rule) => rule.mappingId !== 'map.primary').map((rule) => ({ ...rule, entryId: rule.entryId === second ? null : rule.entryId }))));
+    await command(env.repo, 'restoreRecovery', {}); const restored = await env.repo.read(); for (const table of ['fieldValues','entries','mappingRules']) assert.deepEqual(restored[table], db[table]);
+  }
+});
+
+// 首条删除也须确认、精确模块和最新版本；两个落盘点失败时均不能半删个人资料。
+test('模块首条删除验证确认和版本，存储失败不改变资料', async () => {
+  for (const failureAt of [0, 1]) {
+    const env = fixture(); await env.repo.read(); await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.awardName', value: '合成首条奖项' });
+    const db = await env.repo.read(); const payload = { profileId: 'p1', group: '获奖经历', entryId: null, confirmed: true };
+    for (const bad of [{ ...payload, confirmed: false }, { ...payload, profileId: 'missing' }, { ...payload, group: '基本信息' }, { ...payload, group: undefined }, { ...payload, entryId: undefined }]) await assert.rejects(command(env.repo, 'deleteModuleRecord', bad, db.revision));
+    await assert.rejects(command(env.repo, 'deleteModuleRecord', payload)); await assert.rejects(command(env.repo, 'deleteModuleRecord', payload, db.revision - 1));
+    env.fail(failureAt); await assert.rejects(command(env.repo, 'deleteModuleRecord', payload, db.revision), /模拟磁盘/); assert.deepEqual(await env.restart().read(), db);
+  }
+});
+
+// 删掉最后一条时只保留绑定空模板；重复删除不能覆盖刚保存的恢复点，零值/布尔及证据也要清除。
+test('模块最后一条删除清除值和证据，空模板重复操作保留恢复点', async () => {
+  const env = fixture(); let db = await env.repo.read(); const catalog = env.catalog.catalog(db, 'p1');
+  const rows = env.catalog.analyze({ fields: [{ fieldId: 'builtin.awardName', record: 0, value: '合成有来源奖项', evidence: '合成来源', page: 1 }] }, { type: 'docx', mode: 'vision', pages: ['合成图'] }, catalog).rows;
+  await command(env.repo, 'autoImportResume', { profileId: 'p1', fingerprint: '3'.repeat(64), catalog, rows, overwrite: true }, db.revision);
+  for (const [type, value] of [['number',0], ['boolean',false]]) await command(env.repo, 'createField', { profileId: 'p1', definition: { ...def('custom.delete-' + type), type, group: '获奖经历' }, value });
+  db = await env.repo.read(); const payload = { profileId: 'p1', group: '获奖经历', entryId: null, confirmed: true }; await command(env.repo, 'deleteModuleRecord', payload, db.revision);
+  const cleared = await env.repo.read(); const fieldIds = new Set(cleared.fieldDefinitions.filter((field) => field.group === '获奖经历').map((field) => field.fieldId));
+  assert.ok(!cleared.fieldValues.some((row) => row.profileId === 'p1' && row.entryId === null && fieldIds.has(row.fieldId))); assert.deepEqual(cleared.bindings, db.bindings);
+  const recovery = structuredClone(env.disk[env.store.RECOVERY_KEY]); await command(env.repo, 'deleteModuleRecord', payload, cleared.revision); assert.equal((await env.repo.read()).revision, cleared.revision); assert.deepEqual(env.disk[env.store.RECOVERY_KEY], recovery);
+  await command(env.repo, 'restoreRecovery', {}); assert.deepEqual((await env.repo.read()).fieldValues, db.fieldValues);
+});
+
 // v3 数据不得偷渡 v4 类型；只有经过已知版本校验和原子升级后才能使用新增模块。
 test('伪装 v3 的新增模块及未知版本在写入前拒绝', async () => {
   const seed = fixture(); const db = await seed.repo.read(); db.schemaVersion = 3; db.entries.push({ entryId: 'catalog.invalid', profileId: 'p1', kind: 'award', title: '', order: 1 }); const env = fixture({ [seed.store.DB_KEY]: db }); await assert.rejects(env.repo.read(), /类型/); assert.deepEqual(env.disk[seed.store.DB_KEY], JSON.parse(JSON.stringify(db)));

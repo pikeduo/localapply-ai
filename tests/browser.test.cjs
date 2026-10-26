@@ -2422,6 +2422,52 @@ for (const withExtension of [true, false]) {
   });
 }
 
+// 删除入口验收：首条、收起记录及最后空模板均通过真实按钮操作，不访问用户浏览器资料。
+for (const withExtension of [true, false]) {
+  test(`经历删除入口：${withExtension ? '扩展' : 'file://'}标题常驻、首条接替、最后清空及恢复`, { timeout: 120000 }, async (t) => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'record-delete-')); let context; const errors = [];
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      // 每次查询当前 DOM 和后台库，避免重绘后沿用旧句柄。
+      const group = (name) => page.locator(`.resume-group[data-group="${name}"]`);
+      const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      const before = await read(); const profileId = before.activeProfileId;
+      await t.test('八模块收起后均能取消或确认删除首条，第二条内容正确接替', async () => {
+        for (const [name, key] of [['教育背景','school'], ['实习经历','internshipCompany'], ['工作经历','employmentCompany'], ['项目经历','projectName'], ['家庭成员','familyName1'], ['获奖经历','awardName'], ['证书信息','certificateName'], ['论文期刊','paperName']]) {
+          const section = group(name); const first = section.locator('.resume-primary-record'); const selector = `[data-field-id="builtin.${key}"] input`;
+          await first.locator(selector).fill('合成待删除' + name); await first.locator(selector).blur(); await page.evaluate(() => resumeSaveQueue);
+          await section.locator('[data-module-action="add"]').click(); await page.waitForFunction((name) => document.querySelector(`.resume-group[data-group="${name}"]`).querySelectorAll('.resume-record').length === 2, name);
+          const second = section.locator('.resume-record:not(.resume-primary-record)'); await second.locator(selector).fill('合成保留' + name); await second.locator(selector).blur(); await page.evaluate(() => resumeSaveQueue);
+          await first.locator(':scope > summary').click(); await second.locator(':scope > summary').click(); assert.equal(await first.locator('[data-module-action="delete"]').isVisible(), true); assert.equal(await second.locator('[data-module-action="delete"]').isVisible(), true);
+          const current = await read(); page.once('dialog', (dialog) => dialog.dismiss()); await first.locator('[data-module-action="delete"]').click(); await page.waitForFunction((name) => !document.querySelector(`.resume-group[data-group="${name}"] .resume-primary-record [data-module-action="delete"]`).disabled, name);
+          assert.equal((await read()).revision, current.revision); assert.equal(await first.getAttribute('open'), null); assert.equal(await section.locator('.resume-record').count(), 2);
+          if (name === '获奖经历') await section.screenshot({ path: path.join(testRoot, `record-delete-collapsed-${withExtension ? 'extension' : 'file'}.png`) });
+          page.once('dialog', (dialog) => dialog.accept());
+          // 家庭模块使用键盘激活，验证按钮不会同时展开其父 summary。
+          if (name === '家庭成员') await first.locator('[data-module-action="delete"]').press('Enter'); else await first.locator('[data-module-action="delete"]').click();
+          await page.waitForFunction(({ name, selector }) => { const section = document.querySelector(`.resume-group[data-group="${name}"]`); return section.querySelectorAll('.resume-record').length === 1 && section.querySelector(selector)?.value === '合成保留' + name; }, { name, selector });
+          assert.equal(await first.getAttribute('open'), null);
+        }
+        const after = await read(); assert.deepEqual(after.fieldDefinitions, before.fieldDefinitions); assert.deepEqual(after.bindings, before.bindings); assert.equal(after.entries.filter((entry) => entry.profileId === profileId).length, 0);
+      });
+      await t.test('最后一条删除留下空模板，重复删除不覆盖恢复点，恢复能找回内容', async () => {
+        const section = group('获奖经历'); const first = section.locator('.resume-primary-record'); const saved = await read();
+        page.once('dialog', (dialog) => dialog.accept()); await first.locator('[data-module-action="delete"]').click();
+        await page.waitForFunction(() => document.querySelector('.resume-group[data-group="获奖经历"] [data-field-id="builtin.awardName"] input').value === '');
+        assert.equal(await section.locator('.resume-record').count(), 1); const cleared = await read(); assert.ok(!cleared.fieldValues.some((row) => row.profileId === profileId && row.fieldId === 'builtin.awardName' && row.entryId === null));
+        page.once('dialog', (dialog) => dialog.accept()); await first.locator('[data-module-action="delete"]').click(); await page.waitForFunction(() => !document.querySelector('.resume-group[data-group="获奖经历"] [data-module-action="delete"]').disabled); assert.equal((await read()).revision, cleared.revision);
+        await workspacePage(page, 'privacySettings'); await page.locator('#btnRestoreRecovery').click(); await page.waitForFunction(() => document.getElementById('backupMsg').textContent.includes('已恢复')); assert.deepEqual((await read()).fieldValues, saved.fieldValues);
+        await workspacePage(page, 'resumeCenter'); await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#themeToggle').click();
+        // 等待父 fieldset 也解除禁用，避免把恢复后的加载状态当作最终暗色界面截图。
+        await page.waitForFunction(() => !document.querySelector('.resume-group[data-group="获奖经历"] [data-module-action="delete"]').matches(':disabled')); assert.equal(await section.locator('[data-module-action="delete"]').isVisible(), true); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true); await section.screenshot({ path: path.join(testRoot, `record-delete-dark-${withExtension ? 'extension' : 'file'}.png`) });
+      });
+      assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
 // 参考模块多记录验收：仅合成资料，真实按钮/选择/保存/备份及整个浏览器重启，不读取用户简历。
 for (const withExtension of [true, false]) {
   test(`共享模块记录：${withExtension ? '扩展' : 'file://'}添加、折叠、模板、获奖导入和回滚`, { timeout: 150000 }, async (t) => {

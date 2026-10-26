@@ -751,12 +751,33 @@
             const entries = db.entries.filter((entry) => entry.profileId === input.profileId && entry.kind === kind && entry.entryId.startsWith('catalog.')); check(entries.length < 99, '单个模块最多 100 条记录');
             const entry = { entryId: id('catalog'), profileId: input.profileId, kind, title: '', order: Math.max(0, ...entries.map((entry) => entry.order)) + 1 }; db.entries.push(entry); result = entry.entryId; break;
           }
-          // 删除仅限用户指定的附加模块记录，恢复点保护值及映射，其他记录和共享定义不变。
+          // 删除指定记录并保留恢复点；首条删除后将下一条移入兼容平面槽，最后一条仅留下空模板。
           case 'deleteModuleRecord': {
-            keys(input, ['profileId', 'entryId', 'confirmed'], '删除模块记录');
+            keys(input, ['profileId', 'group', 'entryId', 'confirmed'], '删除模块记录');
             check(input.confirmed === true && request.expectedRevision !== undefined, '删除模块记录需要确认及版本');
-            check(db.entries.some((entry) => entry.profileId === input.profileId && entry.entryId === input.entryId && entry.entryId.startsWith('catalog.')), '模块记录不存在');
-            db.entries = db.entries.filter((entry) => entry.entryId !== input.entryId); db.fieldValues = db.fieldValues.filter((row) => row.entryId !== input.entryId); db.mappingRules = db.mappingRules.filter((row) => row.entryId !== input.entryId);
+            check(db.profiles.some((profile) => profile.profileId === input.profileId), '目标简历不存在');
+            if (input.entryId === null) {
+              const kind = KINDS.find((key) => global.WangshenTemplates.RECORD_GROUPS[key] === input.group); check(kind, '模块不支持多条记录');
+              const fieldIds = new Set(db.fieldDefinitions.filter((field) => global.WangshenTemplates.recordKind(field.group) === kind).map((field) => field.fieldId));
+              check(db.bindings.some((binding) => binding.profileId === input.profileId && fieldIds.has(binding.fieldId)), '模块没有可用字段');
+              const next = db.entries.filter((entry) => entry.profileId === input.profileId && entry.kind === kind && entry.entryId.startsWith('catalog.')).sort((a, b) => a.order - b.order)[0];
+              // 空模板重复删除不覆盖有效恢复点；0、false 及来源证据仍视为需要删除的内容。
+              const occupied = db.fieldValues.some((row) => row.profileId === input.profileId && row.entryId === null && fieldIds.has(row.fieldId) && (global.FieldMatchingEngine.hasValue(row.value) || row.evidence !== undefined));
+              if (!next && !occupied && !db.mappingRules.some((row) => row.profileId === input.profileId && row.entryId === null && fieldIds.has(row.fieldId))) return { result: true, revision: db.revision };
+              // 平面槽按模块限定范围，不能删除其他模块、其他简历或通用映射；保留下一条的来源证据。
+              db.fieldValues = db.fieldValues.filter((row) => !(row.profileId === input.profileId && row.entryId === null && fieldIds.has(row.fieldId)));
+              db.mappingRules = db.mappingRules.filter((row) => !(row.profileId === input.profileId && row.entryId === null && fieldIds.has(row.fieldId)));
+              if (next) {
+                check(db.fieldValues.filter((row) => row.entryId === next.entryId).every((row) => fieldIds.has(row.fieldId)) && db.mappingRules.filter((row) => row.entryId === next.entryId).every((row) => fieldIds.has(row.fieldId)), '记录含其他模块字段，请先核对资料');
+                for (const row of db.fieldValues) if (row.entryId === next.entryId) row.entryId = null;
+                for (const rule of db.mappingRules) if (rule.entryId === next.entryId) rule.entryId = null;
+                db.entries = db.entries.filter((entry) => entry.entryId !== next.entryId);
+              }
+            } else {
+              const entry = db.entries.find((entry) => entry.profileId === input.profileId && entry.entryId === input.entryId && entry.entryId.startsWith('catalog.'));
+              check(entry && (input.group === undefined || global.WangshenTemplates.RECORD_GROUPS[entry.kind] === input.group), '模块记录不存在');
+              db.entries = db.entries.filter((row) => row.entryId !== input.entryId); db.fieldValues = db.fieldValues.filter((row) => row.entryId !== input.entryId); db.mappingRules = db.mappingRules.filter((row) => row.entryId !== input.entryId);
+            }
             await commit(db, null, previous, true); return { result: true, revision: db.revision };
           }
           // 只编辑经历标题，稳定 entryId、所属档案和所有映射关系保持一致。

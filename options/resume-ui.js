@@ -344,17 +344,17 @@ function resumeRecordFields(profileId, group, items, entryId, index, ordinal) {
   }
   return root;
 }
-// 添加空记录或确认删除附加记录，复用串行保存和最新 revision，失败不丢失当前输入。
+// 添加空记录或确认删除任一记录；首条使用 null 定位，操作类型由按钮明确区分。
 async function manageModuleRecord(profileId, group, entryId, button) {
-  button.disabled = true;
+  button.disabled = true; const deleting = button.dataset.moduleAction === 'delete';
   try {
     await resumeSaveQueue; if (workspaceDirty()) throw new Error('请先处理未保存的字段编辑，再管理记录');
     const { database } = await dataRequest('localapply:read');
-    if (entryId && !confirm(`删除当前简历“${group}”中的这条记录及其内容、映射？其他记录及共享字段保留。删除前保存恢复点。`)) return;
-    const out = await dataCommand(entryId ? 'deleteModuleRecord' : 'addModuleRecord', entryId ? { profileId, entryId, confirmed: true } : { profileId, group }, database.revision);
-    if (!entryId) { if (!resumeRecordExpansion.has(profileId)) resumeRecordExpansion.set(profileId, new Map()); resumeRecordExpansion.get(profileId).set(group + ':' + out.result, true); }
-    await reloadDataState(profileId); $('#centerStatus').textContent = entryId ? '已删除此条记录，共享字段及其他记录保留，可在数据与备份恢复。' : '已添加空白记录，与同模块其他记录共享字段。';
-    if (!entryId) Array.from($('#basicFields').querySelectorAll('[data-entry-id]')).find((node) => node.dataset.entryId === out.result)?.scrollIntoView({ block: 'start' });
+    if (deleting && !confirm(`删除当前简历“${group}”中的这条记录及其内容、映射？其他记录及共享字段保留，最后一条删除后保留空白模板。删除前保存恢复点，可在“数据与备份”恢复；本次恢复点会替换上一次恢复点。`)) return;
+    const out = await dataCommand(deleting ? 'deleteModuleRecord' : 'addModuleRecord', deleting ? { profileId, group, entryId, confirmed: true } : { profileId, group }, database.revision);
+    if (!deleting) { if (!resumeRecordExpansion.has(profileId)) resumeRecordExpansion.set(profileId, new Map()); resumeRecordExpansion.get(profileId).set(group + ':' + out.result, true); }
+    await reloadDataState(profileId); $('#centerStatus').textContent = deleting ? '已删除此条记录，共享字段及其他记录保留，最后一条仅留下空白模板；可在数据与备份恢复。' : '已添加空白记录，与同模块其他记录共享字段。';
+    if (!deleting) Array.from($('#basicFields').querySelectorAll('[data-entry-id]')).find((node) => node.dataset.entryId === out.result)?.scrollIntoView({ block: 'start' });
   } catch (error) { $('#centerStatus').textContent = '记录未变更：' + error.message; }
   finally { button.disabled = false; }
 }
@@ -369,9 +369,11 @@ function resumeGroupEditor(profileId, group, index) {
   records.forEach((record, ordinal) => {
     const details = workspaceNode('details', '', 'resume-record' + (record.entryId ? '' : ' resume-primary-record')); details.dataset.entryId = record.entryId || 'primary';
     const key = group.group + ':' + (record.entryId || 'primary'); details.open = resumeRecordExpansion.get(profileId)?.get(key) ?? !record.entryId;
-    details.append(workspaceNode('summary', `第 ${ordinal + 1} 条${group.group} · 展开 / 收起`));
+    const summary = workspaceNode('summary'); summary.append(workspaceNode('span', `第 ${ordinal + 1} 条${group.group} · 展开 / 收起`));
+    const remove = workspaceNode('button', '删除此条记录', 'btn ghost'); remove.type = 'button'; remove.dataset.moduleAction = 'delete'; remove.setAttribute('aria-label', `删除第 ${ordinal + 1} 条${group.group}`);
+    // 删除按钮常驻标题，鼠标与键盘激活均不触发 summary 的展开/收起。
+    remove.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); manageModuleRecord(profileId, group.group, record.entryId, remove); }); summary.append(remove); details.append(summary);
     details.addEventListener('toggle', () => { if (!details.isConnected) return; if (!resumeRecordExpansion.has(profileId)) resumeRecordExpansion.set(profileId, new Map()); resumeRecordExpansion.get(profileId).set(key, details.open); scheduleResumePosition(); });
-    if (record.entryId) { const remove = workspaceNode('button', '删除此条记录', 'btn ghost'); remove.type = 'button'; remove.dataset.moduleAction = 'delete'; remove.addEventListener('click', () => manageModuleRecord(profileId, group.group, record.entryId, remove)); details.append(remove); }
     details.append(resumeRecordFields(profileId, group, record.items, record.entryId, index, ordinal)); section.append(details);
   });
   return section;
