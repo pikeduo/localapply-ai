@@ -22,13 +22,13 @@
 - API 设置中的 customProviders 保存按地址建立的服务商，providerModels 按服务商保存模型；data/providers.js 统一解析和规范化地址。新增端点不得继承上一家的 Key/模型，默认备份也不得夹带这些 API 配置。
 - 完整 HTTP(S) URL 必须保留用户的根路径；只有省略协议的 IP/域名默认补 /v1，已有存储地址不自动改写。customProviders.protocol 可选 chat-completions/responses，旧配置默认前者；用户显式选择，不自动跨路径/协议重试。data/responses.js 转换文本/图片/文件并有界读取 JSON/SSE 终态；store:false，能力及临时模型列表按协议隔离。切换协议不自动联网。
 - 模型列表只在设置页主动获取，wsa:listModels 仅接受可信扩展页面调用。主模型/视觉模型必须使用完整原生下拉，已选值及手动输入不得过滤列表。近期列表只在当前标签页 sessionStorage 缓存 30 分钟，按页面目录/服务商/端点/密钥存储版本隔离，不进数据库/备份，刷新不得自动联网。没有明确选择时不可回退预设第一个模型。
-- DeepSeek 官方 deepseek-flash 支持图片，不能笼统标为纯文本；当前 Files API 列出图片格式，PDF/DOCX 可通过已有完整页面图路径处理。能力仍须实测。针对官方 api.deepseek.com，短探针/连接测试/结构化抽取显式关闭默认思考；探针至少 512 token，截断输出应为 unknown，禁止判成 unsupported。
+- DeepSeek 官方 deepseek-flash 支持图片，不能笼统标为纯文本；当前 Files API 列出图片格式，PDF/DOCX 可通过已有完整页面图路径处理。能力报告以可选实测为准，不作为解析前置条件。针对官方 api.deepseek.com，短探针/连接测试/结构化抽取显式关闭默认思考；探针至少 512 token，截断输出应为 unknown，禁止判成 unsupported。
 - 公共 FieldDefinition 只允许 fieldId/label/type/group/aliases/options/description/version。个人值位于 fieldValues，重复经历由 entries.entryId 关联。
 - 私有字段元数据默认不进入公共导出；publishDefinition 必须接收独立审核后的定义，不能自动复制经历标题。禁止新增 GitHub 上传功能，除非后续用户明确授权。
 - 现有 UI 通过 readLegacy/saveLegacy 兼容投影接入；三方合并只改用户编辑的路径，同字段冲突拒绝。不要重新引入整份旧状态直接覆盖存储。
 - 任何导入先完整校验、预览 revision，再提交；未知版本/类型/额外属性/断裂引用拒绝。原 PDF/DOCX、全文缓存、data URL、File/Blob 不进入新库。
 - 用户已纠正简历解析方向：必须由模型读取原文件或完整页面图片，禁止本地抽取正文、OCR、按字数判断扫描件或用规则识别简历字段。代码仅做安全校验、转图、模型 JSON 契约校验和用户确认入库。Mammoth 不再加载。
-- data/model-capabilities.js 通过随机数字图片、图片型 PDF、图片型 DOCX 分别实测，不以型号、自述或 HTTP 成功作为能力证明。结果只在内存缓存 30 分钟，按端点/型号/凭据隔离；未通过检测不得发送简历。检测与导入 RPC 仅限可信页面，禁止内容脚本调用。
+- 用户最新要求取消强制能力检测：`data/model-capabilities.js` 默认直接发送完整页面图给配置的视觉模型（未配置则主模型），不自动发探针、换模型或重试；近期可选诊断确认支持原文件时可沿用直传。诊断结果不作为发送门槛；仍不把型号、自述或 HTTP 成功冒充能力证明。诊断及配置/格式/方式绑定的发送令牌分别在内存保留 30 分钟，协议/端点/凭据/型号变化令旧令牌失效，附件/大小/取消/JSON/确认入库约束保留。检测与导入 RPC 仅限可信页面，禁止内容脚本调用。
 - 简历解析使用 data/resume.js 契约，所有新模型候选默认不勾选，模型引用不是本地核实证据；编辑值标 manual。importResume 仍只接收确认项，按档案+文件 SHA-256+类别+序号去重。来源为私有资料，公共导出不可包含。
 - 阶段三由 data/field-learning.js 在后台编排；FieldMatchingEngine/FieldMappingMemory 仅做本地匹配，FieldSuggestions 严格校验模型 JSON。网页扫描必须主动授权且绑定文档/URL/档案；AI 只收脱敏元数据及来源引用，绝无实际值/HTML/简历。确认值保存与验证后记忆分开，模型置信度不得直接执行。mappingRules 的可选语义/确认/验证属性保留 v3，旧规则不冒充验证；降级先导出兼容 v3 备份。规则撤销只保留本会话最近操作。
 - 用户已另行授权右上角悬浮卡片及自动页面识别。content/page-presence.js 仅本机分类并统计可见控件，不读取 value、不建立扫描授权或自动调用 AI；动态显隐需重新检测。检测提示默认位于右下角，可按住拖动，松手不得误打开；位置仅在当前页面内存保存，缩窗后保持可见。工具栏和提示打开 panel/ 的“自动填充 / 简历预览”，复用阶段三业务，不再打开浏览器侧栏；旧 sidepanel/ 文件保留兼容测试。

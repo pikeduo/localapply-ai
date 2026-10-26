@@ -203,6 +203,8 @@ async function serve() {
       const inputType = file ? file.filename.split('.').at(-1) : 'image';
       calls.push({ authorization: req.headers.authorization, model: request.model, probe, inputType, protocol: 'responses', pathname,
         store: request.store, stream: request.stream, imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'input_image').length : 0 });
+      // 只对正式解析注入错误，验证用户可直接看到服务端拒绝且不会偷偷重试。
+      if (!probe && modelApi.chatStatus) { res.writeHead(modelApi.chatStatus); res.end('{}'); return; }
       if (probe && inputType !== 'image') { res.writeHead(400); res.end('{}'); return; }
       const response = { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text',
         text: probe ? '73185204' : modelApi.chatContent || '正常' }] }] };
@@ -226,6 +228,8 @@ async function serve() {
       const inputType = file ? file.filename.split('.').at(-1) : 'image';
       calls.push({ authorization: req.headers.authorization, model: request.model, probe, inputType,
         imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'image_url').length : 0, fileData: file?.file_data });
+      // 与 Responses 共用正式请求故障开关，保留可选诊断的独立行为。
+      if (!probe && modelApi.chatStatus) { res.writeHead(modelApi.chatStatus); res.end('{}'); return; }
       if (probe) {
         const support = modelApi.capabilities || { image: true, pdf: false, docx: false };
         if (!support[inputType]) { res.writeHead(400); res.end('{}'); return; }
@@ -400,7 +404,7 @@ for (const withExtension of [true, false]) {
       const requests = api.calls.length;
       await workspacePage(page, 'aiSettings');
       await page.locator('#apiProtocol').selectOption('chat-completions'); await page.evaluate(() => flushSaves());
-      assert.equal((await page.evaluate(() => sendMessage('wsa:resumeRoute', { format: 'pdf' }))).ok, false);
+      const direct = await page.evaluate(() => sendMessage('wsa:resumeRoute', { format: 'pdf' })); assert.equal(direct.ok, true); assert.equal(direct.route.mode, 'vision');
       await page.locator('#apiProtocol').selectOption('responses'); await page.evaluate(() => flushSaves());
       assert.equal(api.calls.length, requests);
       // 不同路径作为独立服务商，不能继承根入口的 Key/模型/协议。
@@ -599,7 +603,7 @@ for (const withExtension of [true, false]) {
         }
         assert.ok((await call('localapply:read')).database.fieldValues.some((row) => row.value === '73185204'));
       });
-      await t.test('原文件能力通过后按原字节提交，旧文本入口及不支持的新型号不能绕过检测', async () => {
+      await t.test('可选原文件诊断保留字节直传，拒绝旧文本入口，新型号无需检测可发送', async () => {
         api.modelApi.capabilities = { image: true, pdf: true, docx: true }; await detectModel(page);
         for (const [type, buffer] of [['docx', fixtures.docx()], ['pdf', fixtures.pdf()]]) {
           await prepare('original.' + type, buffer); await analyze();
@@ -612,20 +616,18 @@ for (const withExtension of [true, false]) {
         await workspacePage(page, 'aiSettings');
         await page.locator('#manualModel').check();
         await page.locator('#model').fill('unprobed-model'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
-        await prepare('blocked.pdf', fixtures.pdf()); await page.locator('#sendResume').click();
-        await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('尚未通过'));
-        assert.equal(api.calls.length, count); await page.locator('#cancelResume').click();
+        await prepare('direct-unprobed.pdf', fixtures.pdf()); await analyze();
+        assert.equal(api.calls.length, count + 1); assert.equal(api.calls.at(-1).probe, false); assert.equal(api.calls.at(-1).model, 'unprobed-model'); assert.ok(api.calls.at(-1).imageCount > 0); await page.locator('#cancelResume').click();
         await workspacePage(page, 'aiSettings');
         await page.locator('#model').fill('synthetic-local'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
       });
-      await t.test('模型忽略附件但返回 HTTP 200 时也禁止发送真实简历', async () => {
+      await t.test('可选诊断未通过也允许正式解析，候选校对前不写资料', async () => {
         await workspacePage(page, 'aiSettings');
         api.modelApi.probeAnswer = '支持图片和文件';
         await page.locator('#btnDetectCapabilities').click(); await page.waitForFunction(() => !document.getElementById('btnDetectCapabilities').disabled);
         assert.match(await page.locator('#capabilityStatus').textContent(), /识别未通过/);
-        const count = api.calls.length; await prepare('unsupported.pdf', fixtures.pdf()); await page.locator('#sendResume').click();
-        await page.waitForFunction(() => document.getElementById('pdfStatus').textContent.includes('尚未通过'));
-        assert.equal(api.calls.length, count); await page.locator('#cancelResume').click();
+        const count = api.calls.length; const revision = (await call('localapply:read')).database.revision; await prepare('diagnostic-unverified.pdf', fixtures.pdf()); await analyze();
+        assert.equal(api.calls.length, count + 1); assert.equal(api.calls.at(-1).probe, false); assert.equal((await call('localapply:read')).database.revision, revision); await page.locator('#cancelResume').click();
       });
       const before = (await call('localapply:read')).database;
       await page.evaluate(() => { document.querySelector('#resumeCenter details').open = false; window.scrollTo(0, 0); });
@@ -2189,5 +2191,47 @@ for (const withExtension of [true, false]) {
       await workspacePage(page, 'aiSettings'); assert.equal(await popup.count(), 0); await workspacePage(page, 'resumeCenter'); assert.equal(await input.inputValue(), '江苏省 / 合成市 / 合成区');
       await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter'); assert.equal(await page.locator('#basicFields [data-field-id="builtin.homeRegion"] [data-primary]').inputValue(), '江苏省 / 合成市 / 合成区'); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 真实 PDF/DOCX 走两种协议及入口，严格统计正式请求数，确保没有隐藏探针或自动重试。
+for (const withExtension of [true, false]) {
+  test(`无需检测解析：${withExtension ? '扩展' : 'file://'}PDF、DOCX、协议与错误恢复`, { timeout: 120000 }, async () => {
+    const fixtures = require('./resume-fixtures.cjs'); const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'direct-resume-')); const api = await serve(); let context; const errors = [];
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(url); await workspacePage(page, 'aiSettings');
+      api.modelApi.chatContent = JSON.stringify({ basic: { name: { value: '合成直接解析姓名', evidence: '合成直接解析姓名', page: 1 } } });
+      // 上传仅校验和生成预览，不能自动发送简历、获取模型列表或执行能力探针。
+      const prepare = async (type) => {
+        await workspacePage(page, 'pdfCard'); const before = api.calls.length;
+        await page.locator('#pdfFile').setInputFiles({ name: 'synthetic-direct.' + type, mimeType: type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: fixtures[type]() });
+        await page.waitForFunction(() => !document.getElementById('btnExtract').disabled && !document.getElementById('sendResume').hidden);
+        assert.equal(api.calls.length, before); assert.ok((await page.locator('#pdfStatus').textContent()).includes('无需预先检测'));
+      };
+      // 只在用户点击发送后等待校对区域；返回值始终默认不选，不自动入库。
+      const send = async () => { await page.locator('#sendResume').click(); await page.waitForFunction(() => !document.getElementById('sendResume').disabled && document.getElementById('pdfStatus').textContent.includes('解析完成')); await page.locator('#pdfReview .review-cell').first().waitFor(); assert.equal(await page.locator('#pdfReview input[type="checkbox"]:checked').count(), 0); };
+      for (const protocol of ['chat-completions', 'responses']) {
+        await workspacePage(page, 'aiSettings'); const count = api.calls.length;
+        await page.locator('#provider').fill(api.base + (protocol === 'chat-completions' ? '/v1' : '')); await page.locator('#provider').press('Enter'); await page.evaluate(() => flushSaves());
+        await page.locator('#apiProtocol').selectOption(protocol); await page.evaluate(() => flushSaves()); await page.locator('#apiKey').fill('synthetic-direct-key'); await page.locator('#saveKey').click(); await page.evaluate(() => flushCredentials());
+        await page.locator('#manualModel').check(); await page.locator('#model').fill('synthetic-direct-main'); await page.locator('#model').press('Tab'); await page.evaluate(() => flushSaves());
+        assert.equal(api.calls.length, count); assert.ok((await page.locator('#btnDetectCapabilities').textContent()).includes('可选'));
+        for (const type of ['pdf', 'docx']) {
+          if (type === 'docx') { await workspacePage(page, 'aiSettings'); await page.locator('#manualVisionModel').check(); await page.locator('#visionModel').fill('synthetic-direct-vision'); await page.locator('#visionModel').press('Tab'); await page.evaluate(() => flushSaves()); }
+          await prepare(type); const before = api.calls.length; const revision = (await page.evaluate(() => dataRequest('localapply:read'))).database.revision;
+          await send(); assert.equal(api.calls.length, before + 1); assert.equal(api.calls.at(-1).probe, false); assert.ok(api.calls.at(-1).imageCount > 0); assert.equal(api.calls.at(-1).model, type === 'pdf' ? 'synthetic-direct-main' : 'synthetic-direct-vision');
+          assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, revision); await page.locator('#cancelResume').click();
+        }
+        await prepare('pdf'); api.modelApi.chatStatus = 422; const before = api.calls.length; await page.locator('#sendResume').click();
+        await page.waitForFunction(() => !document.getElementById('sendResume').disabled && document.getElementById('pdfStatus').textContent.includes('422'));
+        assert.equal(api.calls.length, before + 1); assert.equal(await page.locator('#pdfReview .review-cell').count(), 0); assert.equal(await page.locator('#sendResume').isVisible(), true);
+        api.modelApi.chatStatus = 0; await send(); assert.equal(api.calls.length, before + 2); await page.locator('#cancelResume').click();
+      }
+      assert.equal(api.calls.filter((call) => call.probe).length, 0); assert.equal(api.modelRequests.length, 0); assert.equal(api.calls.length, 8); assert.deepEqual(errors, []);
+      await page.locator('#pdfCard').screenshot({ path: path.join(testRoot, `direct-resume-${withExtension ? 'extension' : 'file'}.png`) });
+    } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }

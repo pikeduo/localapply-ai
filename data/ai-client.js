@@ -9,7 +9,7 @@
     async function getState() { return { settings: await readSettings() }; }
     // 使用统一的服务商解析，避免端点与凭据错配。
     function getProvider(settings) { return global.LocalApplyProviders.resolve(settings); }
-    // 视觉能力必须经当前接口实测，填写型号或选择自定义服务商不构成能力证明。
+    // 使用用户当前选择的模型解析；识别诊断是可选项，不再阻止直接发送。
     async function resolveVisionModel() {
       return (await capabilities.route('pdf')).model;
     }
@@ -41,7 +41,7 @@
       if (!key && provider.requiresKey) throw aiError(`尚未配置 ${provider.name} 的 API Key，请先在设置页保存密钥。`);
       const model = req.model || settings.model || '';
       if (!model) throw aiError('请先获取模型列表并选择模型，或手动填写模型 ID。');
-      if (req.expectedContext && req.expectedContext !== await capabilities.context(settings, model)) throw aiError('服务商、模型或 Key 已变化，请重新检测能力并预览。');
+      if (req.expectedContext && req.expectedContext !== await capabilities.context(settings, model)) throw aiError('服务商、模型或 Key 已变化，请确认当前配置后重新发送。');
       const baseUrl = (provider.baseUrl || '').replace(/\/+$/, '');
       if (!baseUrl) throw aiError('请先填写服务商接口地址。');
       const responses = provider.protocol === 'responses';
@@ -90,14 +90,14 @@
       try { return await capabilities.probe(payload.probe, controller.signal); }
       finally { jobs.delete(payload.requestId); }
     }
-    // 只接受经能力检测的原文件或页面图片，拒绝旧的本地抽文字路径。
+    // 直接发送原文件或完整页面图，仍校验配置令牌、附件及大小，不接受本地抽文字入口。
     async function extractResume(payload) {
       if (typeof payload.requestId !== 'string' || payload.requestId.length > 100) throw aiError('缺少解析任务标识');
       if (jobs.has(payload.requestId)) throw aiError('解析任务已存在');
       const controller = new AbortController(); jobs.set(payload.requestId, controller);
       try {
         const route = await capabilities.route(payload.type);
-        if (payload.routeToken !== route.token || payload.mode !== route.mode) throw aiError('模型能力或发送方式已变化，请重新预览后发送');
+        if (payload.routeToken !== route.token || payload.mode !== route.mode) throw aiError('模型配置或发送方式已变化，请确认当前配置后重新发送');
         let attachments;
         if (route.mode === 'file') {
           const file = payload.file; const mime = payload.type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';

@@ -2,12 +2,12 @@
 'use strict';
 let capabilityGeneration = 0;
 let capabilityJob = null;
-// 清理显示与正在运行的探测；不把一次通过的能力套用到新服务商或新型号。
+// 清理可选诊断及其显示，不将旧结果套到新配置，也不阻止直接解析。
 function resetCapabilities() {
   capabilityGeneration++;
   if (capabilityJob) sendMessage('wsa:cancelResume', { requestId: capabilityJob });
   capabilityJob = null;
-  $('#capabilityStatus').textContent = '尚未检测文件/图片识别能力。模型列表与连接成功不代表支持识别。';
+  $('#capabilityStatus').textContent = '无需预先检测，可直接解析简历。以下检测仅用于排查识别问题。';
   $('#btnDetectCapabilities').disabled = $('#btnDetectImport').disabled = false;
 }
 // 分格式显示端点的实际检测结果，鉴权、网络和识别失败均不会伪装成支持。
@@ -34,7 +34,7 @@ async function detectCapabilities() {
     const names = { supported: '识别通过', unsupported: '接口不接受', unverified: '识别未通过', unknown: '检测失败/未知' };
     $('#capabilityStatus').textContent = results.map((r) => `${r.model}：图片 ${names[r.image]}；图片型 PDF ${names[r.pdf]}；图片型 DOCX ${names[r.docx]}。` +
       Object.entries(r.reasons).map(([type, reason]) => `${type}：${reason}`).join(' ')).join('\n');
-    if (resumeSource) $('#pdfStatus').textContent = '检测完成，请核对页面预览后发送；系统会选择通过检测的文件或图片路径。';
+    if (resumeSource) $('#pdfStatus').textContent = '可选检测完成，可直接发送简历解析；检测结果不会阻止发送，模型不支持时显示实际调用错误。';
   } catch (error) { if (generation === capabilityGeneration) $('#capabilityStatus').textContent = '检测未完成：' + error.message; }
   finally { if (generation === capabilityGeneration) { capabilityJob = null; $('#btnDetectCapabilities').disabled = $('#btnDetectImport').disabled = false; } }
 }

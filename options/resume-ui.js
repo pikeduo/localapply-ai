@@ -38,7 +38,7 @@ async function prepareResume(file = selectedResumeFile || $('#pdfFile').files[0]
       $('#sourcePreview').append(image);
     }
     $('#resumePreview').open = true;
-    $('#pdfStatus').textContent = `已生成 ${source.pages.length} 张页面预览，文字和嵌入图片均交由模型识别。尚未发送文件，请先检测模型能力。`;
+    $('#pdfStatus').textContent = `已生成 ${source.pages.length} 张页面预览，文字和嵌入图片均交由模型识别。尚未发送，可直接点击“发送内容给当前模型解析”，无需预先检测。`;
     $('#sendResume').hidden = false;
   } catch (error) { if (resumeJob === job) clearResume('读取失败：' + error.message); }
   finally { if (resumeJob === job) $('#btnExtract').disabled = false; }

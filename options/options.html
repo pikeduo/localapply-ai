@@ -93,11 +93,11 @@
         <label class="manual-model"><input type="checkbox" id="manualVisionModel" aria-label="手动填写视觉模型 ID" /> 手动填写模型 ID</label>
         <input type="text" id="visionModel" aria-label="手动视觉模型 ID" placeholder="输入完整视觉模型 ID" hidden />
       </div>
-      <p class="muted">主模型和视觉模型展开时均显示完整已获取列表，不按已选值过滤；本标签页刷新可复用近期列表。获取失败时可手动填写 ID。列表不代表识别能力，仍需实测。</p>
+      <p class="muted">主模型和视觉模型展开时均显示完整已获取列表，不按已选值过滤；本标签页刷新可复用近期列表。获取失败时可手动填写 ID。无需预先检测即可解析简历。</p>
       <p class="muted" id="providerNote"></p>
-      <div class="row"><button id="btnDetectCapabilities" class="btn plain">检测文件/图片识别能力</button><button id="cancelCapabilities" class="btn ghost">取消检测</button></div>
-      <p id="capabilityStatus" class="muted" role="status">尚未检测识别能力。</p>
-      <p class="muted">检测仅发送合成样例，每个所选模型最多 3 次调用，可能计费。分别检查图片、图片型 PDF 和图片型 DOCX 是否能读出随机数字；返回模型列表、连接成功或填写视觉型号都不能代替实测。结果仅表示当前接口识别测试通过，30 分钟或后台重启后失效。主模型和视觉模型均可用于简历识别，纯文本模型仅用于开放题起草。</p>
+      <div class="row"><button id="btnDetectCapabilities" class="btn plain">检测文件/图片识别能力（可选）</button><button id="cancelCapabilities" class="btn ghost">取消检测</button></div>
+      <p id="capabilityStatus" class="muted" role="status">可直接解析简历，识别检测仅用于诊断。</p>
+      <p class="muted">无需检测即可发送简历；模型不支持图片/文件或接口调用失败时，直接显示错误。可选检测仅发送合成样例，每个所选模型最多 3 次调用，可能计费；结果保留 30 分钟或至后台重启，不作为解析前置条件。</p>
     </section>
 
     </section>
@@ -144,7 +144,7 @@
       <div class="row">
         <input type="file" id="pdfFile" accept="application/pdf,.pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden />
         <button id="btnExtract" class="btn plain">重新生成预览</button>
-        <button id="btnDetectImport" class="btn plain">先检测模型能力</button>
+        <button id="btnDetectImport" class="btn plain">检测识别能力（可选）</button>
         <button id="sendResume" class="btn" hidden>发送内容给当前模型解析</button>
         <button id="cancelResume" class="btn ghost">取消并清理草稿</button>
       </div>
@@ -159,7 +159,7 @@
         <button id="selectAllResume" class="btn ghost">已逐项校对，全部勾选</button>
         <button id="btnImport" class="btn">确认导入勾选字段</button>
       </div>
-      <p class="muted">PDF/DOCX 最多 10 MiB、30 页/图。代码只检查文件和转页面图片，不抽取正文或识别简历字段。检测通过后优先把原文件交给模型；该格式未通过时，使用已通过图片检测的模型识别完整页面。所有模型引用和字段值都须人工核对。原文件及页面图片不持久化，同一文件重复导入复用经历，默认仅补空白。</p>
+      <p class="muted">PDF/DOCX 最多 10 MiB、30 页/图。代码只检查文件和转页面图片，不抽取正文或识别简历字段。可直接发送完整页面图片给所选视觉模型（未配置时使用主模型），无需预先检测；近期可选诊断已验证支持原文件时优先直传。不支持时显示实际调用错误，不自动换模型重试。所有模型引用和字段值仍须人工核对；原文件及页面图片不持久化，同一文件重复导入复用经历，默认仅补空白。</p>
     </section>
     </section>
 
