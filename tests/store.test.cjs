@@ -70,6 +70,69 @@ test('工作台添加已有字段保持 ID、档案隔离和幂等，改经历�
   await assert.rejects(command(repo, 'attachField', { fieldId: 'missing', profileId }), /不存在/); await assert.rejects(command(repo, 'editEntry', { entryId, title: 'x', kind: 'education' }), /未声明/);
 });
 
+// 重命名仅改名称，拒绝空白与过期确认，不能改变任何资料引用。
+test('简历重命名保留 ID 和资料，取消确认及并发版本不能写入', async () => {
+  const { repo } = fixture(); await repo.initialize();
+  const entryId = (await command(repo, 'createEntry', { profileId: 'p1', kind: 'education', title: '合成院校' })).result;
+  await command(repo, 'setValue', { profileId: 'p1', entryId, fieldId: 'builtin.school', value: '合成大学' });
+  const before = await repo.read();
+  for (const name of ['', '  ']) await assert.rejects(command(repo, 'renameProfile', { profileId: 'p1', name, confirmed: true }, before.revision), /名称/);
+  await assert.rejects(command(repo, 'renameProfile', { profileId: 'p1', name: '合成新名', confirmed: false }, before.revision), /确认/);
+  await assert.rejects(command(repo, 'renameProfile', { profileId: 'p1', name: '合成新名', confirmed: true }), /版本/);
+  assert.deepEqual(await repo.read(), before);
+  await command(repo, 'renameProfile', { profileId: 'p1', name: '  合成新名  ', confirmed: true }, before.revision);
+  const after = await repo.read(); assert.equal(after.profiles[0].name, '合成新名');
+  assert.deepEqual(structuredClone(after), structuredClone({ ...before, revision: before.revision + 1, profiles: before.profiles.map((item) => ({ ...item, name: '合成新名' })) }));
+  await assert.rejects(command(repo, 'renameProfile', { profileId: 'p1', name: '过期名', confirmed: true }, before.revision), /版本/);
+});
+
+// 删除级联个人资料和草稿，不删除跨简历共享的定义、通用规则或凭据。
+test('整份简历删除清理个人引用，保留其他简历并可重启和备份往返', async () => {
+  const env = fixture(); const { repo } = env; await repo.initialize();
+  const second = (await command(repo, 'createProfile', { name: '合成保留简历' })).result;
+  const fieldId = (await command(repo, 'createField', { profileId: 'p1', definition: { label: '合成共享字段' }, value: '合成删除值' })).result;
+  await command(repo, 'attachField', { profileId: second, fieldId });
+  for (const profileId of ['p1', second]) {
+    const entryId = (await command(repo, 'createEntry', { profileId, kind: 'project', title: '合成项目' })).result;
+    await command(repo, 'setValue', { profileId, entryId, fieldId, value: profileId === 'p1' ? '合成删除经历值' : '合成保留值' });
+    await command(repo, 'saveMapping', { profileId, entryId, fieldId, origin: 'https://example.test', path: '/apply', label: '合成标签' });
+  }
+  await command(repo, 'saveMapping', { profileId: null, entryId: null, fieldId, origin: 'https://example.test', path: '/apply', label: '合成通用规则' });
+  const base = await repo.readLegacy(); const next = structuredClone(base);
+  next.drafts = { p1: { question: [{ ts: 1, text: '合成删除草稿' }] }, [second]: { question: [{ ts: 2, text: '合成保留草稿' }] } };
+  await repo.saveLegacy(base, next);
+  const before = await repo.read(); const api = structuredClone(env.disk[env.store.API_KEY]);
+  await command(repo, 'deleteProfile', { profileId: 'p1', confirmed: true }, before.revision);
+  const after = await env.restart().read(); assert.equal(after.activeProfileId, second);
+  for (const table of ['profiles', 'fieldValues', 'entries', 'bindings', 'mappingRules']) assert.deepEqual(after[table], before[table].filter((row) => row.profileId !== 'p1'));
+  assert.deepEqual(after.fieldDefinitions, before.fieldDefinitions); assert.deepEqual(structuredClone(after.drafts), structuredClone({ [second]: before.drafts[second] }));
+  assert.deepEqual(env.disk[env.store.API_KEY], api);
+  const backup = await repo.exportBackup(); const restored = fixture().repo; await restored.initialize();
+  await command(restored, 'importBackup', { backup, mode: 'replace' }, (await restored.read()).revision);
+  assert.deepEqual(structuredClone((await restored.read()).fieldValues), structuredClone(after.fieldValues));
+  assert.ok(!JSON.stringify(backup).includes('合成删除值') && !JSON.stringify(backup).includes('合成删除草稿'));
+  const third = (await command(repo, 'createProfile', { name: '合成第三简历' })).result;
+  const deleted = await command(repo, 'deleteProfile', { profileId: third, confirmed: true }, (await repo.read()).revision);
+  assert.equal(deleted.result, second); assert.equal((await repo.read()).activeProfileId, second);
+});
+
+// 删除必须确认，最后一份、存储异常和旧版本均保持原子性，旧页面不能复活已删除档案。
+test('简历删除拒绝未确认、最后一份及过期版本，写入失败保留原数据', async () => {
+  const env = fixture(); const { repo } = env; await repo.initialize(); let before = await repo.read();
+  await assert.rejects(command(repo, 'deleteProfile', { profileId: 'p1', confirmed: true }, before.revision), /至少保留/);
+  const other = (await command(repo, 'createProfile', { name: '合成第二简历' })).result; before = await repo.read();
+  await assert.rejects(command(repo, 'deleteProfile', { profileId: 'p1', confirmed: false }, before.revision), /确认/);
+  await assert.rejects(command(repo, 'deleteProfile', { profileId: 'p1', confirmed: true }), /版本/);
+  await assert.rejects(command(repo, 'deleteProfile', { profileId: 'missing', confirmed: true }, before.revision), /不存在/);
+  await assert.rejects(command(repo, 'deleteProfile', { profileId: 'p1', confirmed: true }, before.revision - 1), /版本/);
+  env.fail(); await assert.rejects(command(repo, 'deleteProfile', { profileId: 'p1', confirmed: true }, before.revision), /磁盘/);
+  assert.deepEqual(await repo.read(), before);
+  const base = await repo.readLegacy(); const stale = structuredClone(base); stale.profiles.find((item) => item.id === other).name = '旧页修改';
+  await command(repo, 'deleteProfile', { profileId: other, confirmed: true }, before.revision);
+  await assert.rejects(repo.saveLegacy(base, stale), /已删除/);
+  assert.equal((await repo.read()).profiles.length, 1);
+});
+
 test('字段定义只含元数据，个人值和 API 分开存储', async () => {
   const { repo, disk, templates } = fixture();
   const legacy = templates.defaultState(); legacy.settings.apiKeys = { zhipu: 'fake-unit-secret' };

@@ -81,24 +81,10 @@ function updateResumePosition() {
 function scheduleResumePosition() {
   if (!workspaceResumeFrame) workspaceResumeFrame = requestAnimationFrame(updateResumePosition);
 }
-// 搜索只影响显示；目录定位会清空筛选，恢复所选分类的全部字段。
-function filterResumeFields() {
-  const query = document.getElementById('centerSearch').value.trim().toLowerCase();
-  document.querySelectorAll('#basicFields .resume-group').forEach((section) => {
-    const fields = [...section.querySelectorAll('.center-field')];
-    fields.forEach((item) => { item.hidden = !item.textContent.toLowerCase().includes(query); });
-    section.hidden = fields.every((item) => item.hidden);
-  });
-  scheduleResumePosition();
-}
 // 短区块完整居中显示，长区块从顶部阅读；先展开并恢复全部字段，不改变路由或草稿。
 function locateResumeSection(key) {
   const target = workspaceResumeSections.find((section) => section.key === key)?.target;
   if (!target) return;
-  if (key.startsWith('group:')) {
-    document.getElementById('centerGroup').value = key.slice(6);
-    document.getElementById('centerSearch').value = ''; filterResumeFields();
-  }
   for (let parent = target.parentElement; parent; parent = parent.parentElement) { if (parent.tagName === 'DETAILS') parent.open = true; }
   target.tabIndex = -1; target.focus({ preventScroll: true });
   const bounds = target.getBoundingClientRect(); const inset = bounds.height <= innerHeight - 48 ? (innerHeight - bounds.height) / 2 : 24;
@@ -121,8 +107,51 @@ function workspaceControl(def, value) {
 }
 // 只做显式类型转换，最终由后台契约再次校验，不用字符串真假推断布尔值。
 function workspaceValue(input, def) { if (def.type === 'multiSelect') return [...input.selectedOptions].map((option) => option.value); if (input.value === '') return null; if (def.type === 'number') { const value = Number(input.value); if (!Number.isFinite(value)) throw new Error('请输入有效数字'); return value; } return def.type === 'boolean' ? input.value === 'true' : input.value; }
-// 页面含未保存的字段定义或经历输入时，刷新/切换须由用户选择丢弃。
+// 页面含未保存的字段定义或经历输入时，重新渲染或切换须由用户选择丢弃。
 function workspaceDirty() { return !!document.querySelector('[data-dirty="true"]'); }
+// 统一处理新建、重命名和删除；操作前保护草稿，删除预览绑定 revision，成功后才清理编辑状态。
+async function manageResumeProfile(action) {
+  const status = document.getElementById('centerStatus');
+  const buttons = ['createResumeProfile', 'renameResumeProfile', 'deleteResumeProfile'].map((id) => document.getElementById(id));
+  const select = document.getElementById('entryProfile');
+  buttons.forEach((button) => { button.disabled = true; }); select.disabled = true;
+  try {
+    if (workspaceDirty() && !confirm('存在未保存编辑，继续管理简历将丢弃这些编辑，是否继续？')) return;
+    await flushSaves();
+    const { database } = await dataRequest('localapply:read');
+    const profile = database.profiles.find((item) => item.profileId === select.value);
+    let payload; let message;
+    if (action === 'createProfile') {
+      const name = document.getElementById('newProfileName').value.trim();
+      if (!name) throw new Error('请输入新简历名称');
+      payload = { name }; message = '已新建并切换到新简历。';
+    } else {
+      if (!profile) throw new Error('简历不存在，请重新打开页面');
+      if (action === 'renameProfile') {
+        const name = prompt('修改简历名称（仅修改名称，保留所有资料）', profile.name);
+        if (name === null) return;
+        if (!name.trim()) throw new Error('简历名称不能为空');
+        if (name.trim() === profile.name) return;
+        payload = { profileId: profile.profileId, name: name.trim(), confirmed: true }; message = '简历已重命名。';
+      } else {
+        if (database.profiles.length <= 1) throw new Error('至少保留一份简历，可直接修改现有资料');
+        const values = database.fieldValues.filter((item) => item.profileId === profile.profileId).length;
+        const entries = database.entries.filter((item) => item.profileId === profile.profileId).length;
+        const rules = database.mappingRules.filter((item) => item.profileId === profile.profileId).length;
+        if (!confirm(`确认删除简历“${profile.name}”？将删除 ${values} 个资料项（含空值）、${entries} 段经历、${rules} 条专属映射，以及该简历的材料备注和草稿。此操作不可撤销，其他简历和共享字段库保留。`)) return;
+        payload = { profileId: profile.profileId, confirmed: true }; message = '简历及其关联资料已删除，已切换至保留的简历。';
+      }
+    }
+    const { result } = await dataCommand(action, payload, database.revision);
+    cancelFieldEdit(); await reloadDataState(result);
+    if (action === 'createProfile') document.getElementById('newProfileName').value = '';
+    status.textContent = message;
+  } catch (error) { status.textContent = '未完成：' + error.message; }
+  finally {
+    buttons.forEach((button) => { button.disabled = false; }); select.disabled = false;
+    document.getElementById('deleteResumeProfile').disabled = select.options.length <= 1;
+  }
+}
 // 从后台读取最新规范数据，刷新概览和字段目录，不读取任何 Key。
 async function refreshWorkspace() {
   const { database } = await dataRequest('localapply:read'); workspaceDatabase = database;
@@ -132,6 +161,7 @@ async function refreshWorkspace() {
   document.getElementById('overviewEntries').textContent = String(database.entries.filter((item) => item.profileId === profileId).length);
   document.getElementById('overviewRules').textContent = String(database.mappingRules.filter((item) => item.profileId === profileId).length);
   document.getElementById('managerWelcome').hidden = database.fieldValues.some((item) => item.profileId === profileId && LocalApplyProfileView.hasValue(item.value));
+  document.getElementById('deleteResumeProfile').disabled = database.profiles.length <= 1;
   renderFieldLibrary(); renderResumeToc();
 }
 // 当前档案删除与全局删除明确分开；公共内置定义只能从个人展示中移除。
@@ -180,10 +210,10 @@ function cancelFieldEdit() { workspaceEditing = null; document.getElementById('f
 async function locateWorkspace() {
   const params = new URLSearchParams(location.search); const profileId = params.get('profile');
   if (profileId && workspaceDatabase.profiles.some((item) => item.profileId === profileId)) { const next = await getState(); next.activeProfileId = profileId; await saveState(next); document.getElementById('entryProfile').value = profileId; await reloadDataState(); }
-  const key = params.get('section'); if (workspaceRoute() === 'resumeCenter' && key?.startsWith('group:')) { document.getElementById('centerGroup').value = key.slice(6); document.getElementById('centerGroup').dispatchEvent(new Event('change')); }
-  else if (workspaceRoute() === 'resumeCenter' && key?.startsWith('entry:')) locateResumeSection(key);
+  const key = params.get('section');
+  if (workspaceRoute() === 'resumeCenter' && (key?.startsWith('group:') || key?.startsWith('entry:'))) locateResumeSection(key);
 }
-// 工作台导航、字段定义和刷新入口只挂载一次，沿用旧设置页的初始化顺序。
+// 工作台导航、字段定义和简历管理只挂载一次，沿用旧设置页的初始化顺序。
 async function initWorkspace() {
   if (workspaceInitialized) return; workspaceInitialized = true;
   document.getElementById('resumeToc').addEventListener('click', (event) => { const button = event.target.closest('button[data-toc-key]'); if (button) locateResumeSection(button.dataset.tocKey); });
@@ -207,9 +237,9 @@ async function initWorkspace() {
     else await dataCommand('createField', { definition, profileId: document.getElementById('entryProfile').value, value: null }, workspaceDatabase.revision);
     cancelFieldEdit(); await reloadDataState(); document.getElementById('fieldStatus').textContent = '字段定义已保存，实际内容请在简历中心填写。';
   } catch (error) { document.getElementById('fieldStatus').textContent = '未保存：' + error.message; } finally { button.disabled = false; } });
-  document.getElementById('centerSearch').addEventListener('input', filterResumeFields);
-  document.getElementById('centerGroup').addEventListener('change', () => locateResumeSection('group:' + document.getElementById('centerGroup').value));
-  document.getElementById('centerRefresh').addEventListener('click', async () => { try { if (workspaceDirty() && !confirm('存在未保存编辑，确认丢弃并刷新本地资料？')) return; cancelFieldEdit(); await flushSaves(); await reloadDataState(); document.getElementById('centerStatus').textContent = '已刷新本地资料。'; } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });
+  for (const [id, action] of [['createResumeProfile', 'createProfile'], ['renameResumeProfile', 'renameProfile'], ['deleteResumeProfile', 'deleteProfile']]) {
+    document.getElementById(id).addEventListener('click', () => manageResumeProfile(action));
+  }
   document.getElementById('entryProfile').addEventListener('change', async () => { const profileId = document.getElementById('entryProfile').value; try { if (workspaceDirty() && !confirm('切换档案将丢弃未保存编辑，是否继续？')) { document.getElementById('entryProfile').value = workspaceDatabase.activeProfileId; return; } cancelFieldEdit(); const next = await getState(); next.activeProfileId = profileId; await saveState(next); await reloadDataState(); } catch (error) { document.getElementById('centerStatus').textContent = error.message; } });
   window.addEventListener('beforeunload', (event) => { if (workspaceDirty()) { event.preventDefault(); event.returnValue = ''; } });
   await refreshWorkspace(); showWorkspacePage(workspaceRoute()); await locateWorkspace(); document.body.dataset.workspaceReady = 'true';

@@ -637,6 +637,26 @@
             const state = legacyState(db, previous.api); state.profiles.push(profile); state.activeProfileId = profile.id;
             syncLegacy(db, state); result = profile.id; break;
           }
+          // 重命名只修改名称；必须确认并绑定预览版本，稳定 ID 和关联资料保持不变。
+          case 'renameProfile': {
+            keys(input, ['profileId', 'name', 'confirmed'], '重命名简历');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '重命名简历需要确认及版本');
+            string(input.name, '简历名称'); const name = input.name.trim(); string(name, '简历名称');
+            const profile = db.profiles.find((row) => row.profileId === input.profileId);
+            check(profile, '简历不存在'); profile.name = name; result = profile.profileId; break;
+          }
+          // 整份删除只级联当前简历的个人数据，保留共享定义、其他简历和独立模型配置。
+          case 'deleteProfile': {
+            keys(input, ['profileId', 'confirmed'], '删除简历');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '删除简历需要确认及版本');
+            check(db.profiles.some((row) => row.profileId === input.profileId), '简历不存在');
+            check(db.profiles.length > 1, '至少保留一份简历，可直接修改现有资料');
+            db.profiles = db.profiles.filter((row) => row.profileId !== input.profileId);
+            for (const table of ['fieldValues', 'entries', 'bindings', 'mappingRules']) db[table] = db[table].filter((row) => row.profileId !== input.profileId);
+            delete db.drafts[input.profileId];
+            if (db.activeProfileId === input.profileId) db.activeProfileId = db.profiles[0].profileId;
+            result = db.activeProfileId; break;
+          }
           case 'createEntry': {
             keys(input, ['profileId', 'kind', 'title'], '新经历');
             const entry = { entryId: id('entry'), profileId: input.profileId, kind: input.kind, title: input.title || '',

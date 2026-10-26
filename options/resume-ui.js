@@ -155,7 +155,6 @@ async function renderResumeCenter() {
   const profile = fresh.profiles.find((p) => p.id === $('#entryProfile').value);
   if (!profile) { renderResumeToc(); return; }
   const groups = [...new Set(profile.fields.filter((field) => !field.material).map((field) => field.group))];
-  const selectedGroup = $('#centerGroup').value; $('#centerGroup').replaceChildren(new Option('全部分类', ''), ...groups.map((group) => new Option(group, group))); $('#centerGroup').value = selectedGroup;
   let priorGroup; let fields;
   for (const field of profile.fields.filter((f) => !f.material).sort((a, b) => groups.indexOf(a.group) - groups.indexOf(b.group))) {
     if (!fields || priorGroup !== field.group) {
@@ -204,12 +203,5 @@ function initResume() {
   $('#targetProfile').addEventListener('change', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));
   $('#overwriteResume').addEventListener('change', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));
   $('#refreshReview').addEventListener('click', () => renderResumeReview().catch((e) => { $('#pdfStatus').textContent = e.message; }));
-  $('#createResumeProfile').addEventListener('click', async () => {
-    try {
-      const { result } = await dataCommand('createProfile', { name: $('#newProfileName').value.trim() });
-      await reloadDataState(); $('#entryProfile').value = result; $('#targetProfile').value = result;
-      await renderEntries(); await renderResumeCenter(); $('#newProfileName').value = '';
-    } catch (error) { $('#centerStatus').textContent = error.message; }
-  });
   window.addEventListener('pagehide', () => clearResume());
 }

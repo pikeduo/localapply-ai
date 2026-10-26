@@ -33,20 +33,20 @@ async function dataCommand(action, payload, expectedRevision) {
   return dataRequest('localapply:command', { request: { action, payload, expectedRevision } });
 }
 
-// 刷新可信页面的最新投影，导入后旧快照不得再覆盖新数据。
-async function reloadDataState() {
+// 刷新最新投影；简历管理可指定新的选中 ID，避免继续展示已删除或旧的简历。
+async function reloadDataState(profileId) {
   state = await getState();
   renderTargetProfiles();
-  await renderEntries();
+  await renderEntries(profileId);
   await renderResumeCenter();
   if (typeof workspaceInitialized !== 'undefined' && workspaceInitialized) await refreshWorkspace();
 }
 
-// 渲染重复经历编辑器；所有标题和值用 textContent/value，避免注入 HTML。
-async function renderEntries() {
+// 按指定或当前简历渲染经历；所有标题和值用 textContent/value，避免注入 HTML。
+async function renderEntries(profileId) {
   const { database } = await dataRequest('localapply:read');
   const select = document.getElementById('entryProfile');
-  const selected = select.value || database.activeProfileId;
+  const selected = profileId || select.value || database.activeProfileId;
   select.replaceChildren(...database.profiles.map((profile) => new Option(profile.name, profile.profileId)));
   select.value = database.profiles.some((profile) => profile.profileId === selected) ? selected : database.activeProfileId;
   const root = document.getElementById('entriesList'); root.replaceChildren();
