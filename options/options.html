@@ -105,13 +105,13 @@
     <div class="resume-layout">
     <aside class="resume-toc" aria-labelledby="resumeTocTitle"><h2 id="resumeTocTitle">简历目录</h2><nav id="resumeToc" aria-label="我的简历目录"></nav></aside>
     <div class="resume-main">
-    <section class="overview-grid" id="workspaceOverview" aria-label="本地资料概览"><div><span>当前档案</span><strong id="overviewProfile">正在读取</strong></div><div><span>已填写资料</span><strong id="overviewValues">—</strong></div><div><span>独立经历</span><strong id="overviewEntries">—</strong></div><div><span>本地映射</span><strong id="overviewRules">—</strong></div></section>
+    <section class="overview-grid" id="workspaceOverview" aria-label="本地资料概览"><div><span>当前档案</span><strong id="overviewProfile">正在读取</strong></div><div><span>已填写资料</span><strong id="overviewValues">—</strong></div><div><span>基础字段</span><strong id="overviewFields">—</strong></div><div><span>本地映射</span><strong id="overviewRules">—</strong></div></section>
     <section class="card welcome-card" id="managerWelcome" hidden><h2>欢迎，先建立你的第一份资料</h2><p>无需配置 API。可以直接在简历中心手动录入，也可以导入文件或恢复备份。</p><div class="row"><a class="btn" href="#resumeCenter">手动录入 · 跳过 AI 配置</a><a class="btn ghost" href="#pdfCard">导入 PDF / DOCX</a><a class="btn ghost" href="#privacySettings">恢复 JSON 备份</a></div></section>
     <section class="card" id="resumeCenter">
       <div id="resumeProfileControls" class="resume-profile-controls">
       <h2>简历中心</h2>
       <div class="row"><input id="newProfileName" type="text" placeholder="新档案名称" aria-label="新档案名称" /><button id="createResumeProfile" class="btn plain">新建档案</button></div>
-      <p class="muted">资料自动归入对应分类，所有字段均可直接编辑。多段教育、工作、实习和项目分别保留，避免相互覆盖。</p>
+      <p class="muted">在现有分类中编辑基础字段。先确定需要保留的字段，再导入简历识别相应内容。</p>
       <div class="row resume-profile-actions">
         <label for="entryProfile">当前简历</label>
         <select id="entryProfile" aria-label="当前简历"></select>
@@ -119,6 +119,7 @@
         <button id="deleteResumeProfile" class="btn ghost">删除简历</button>
       </div>
       <p id="profileManageHint" class="muted">下方可直接修改当前简历的资料；删除整份简历需确认，至少保留一份简历。</p>
+      <div id="legacyEntriesNotice" hidden><p id="legacyEntriesHint" class="muted"></p><button id="clearResumeEntries" class="btn ghost" type="button">清空当前简历的旧经历</button></div>
       </div>
       <details open><summary>编辑简历全部字段</summary><div id="basicFields" class="resume-groups"></div></details>
       <p id="centerStatus" class="muted" role="status"></p>
@@ -196,7 +197,7 @@
       </div>
       <div id="restorePreview" class="muted" role="status"></div>
       <button id="btnApplyRestore" class="btn" hidden>确认按预览导入</button>
-      <button id="btnRestoreRecovery" class="btn ghost">恢复到导入前</button>
+      <button id="btnRestoreRecovery" class="btn ghost">恢复到上次导入或清理前</button>
       <div class="row">
         <button id="btnPublicExport" class="btn plain">导出已审核公共字段定义</button>
         <button id="btnPublicImport" class="btn ghost">合并公共字段定义</button>

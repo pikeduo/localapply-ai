@@ -8,27 +8,14 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
-// 从分类内的真实按钮新增记录，替代已移除的顶部经历工具栏。
+// 旧经历命令仍用于备份和历史兼容夹具；新的简历编辑器不再提供经历模块入口。
 async function addResumeEntry(page, kind, title) {
-  page.once('dialog', (dialog) => dialog.accept(title));
-  await page.locator('[data-add-entry-kind="' + kind + '"]').click();
-  const entry = page.locator('#basicFields .entry-card').filter({ has: page.getByRole('heading', { name: title, exact: false }) });
-  await entry.waitFor(); return entry;
+  return page.evaluate(async ({ kind, title }) => {
+    const profileId = document.getElementById('entryProfile').value;
+    const { result } = await dataCommand('createEntry', { profileId, kind, title });
+    await reloadDataState(); return result;
+  }, { kind, title });
 }
-// 补充空编辑框后通过真实输入/失焦保存，数据库写入仍由生产命令完成。
-async function fillEntryField(page, entry, fieldId, value) {
-  let field = entry.locator('[data-field-id="' + fieldId + '"]');
-  if (!await field.count()) {
-    const more = entry.locator('.resume-entry-more');
-    if (!await more.evaluate((element) => element.open)) await more.locator('summary').click();
-    await entry.getByLabel('补充经历字段', { exact: true }).selectOption(fieldId);
-    await entry.getByRole('button', { name: '添加字段', exact: true }).click();
-  }
-  const input = field.locator('input,textarea,select');
-  await input.fill(value); await input.blur(); await page.evaluate(() => resumeSaveQueue);
-  assert.ok((await field.locator('small').textContent()).includes('已保存在本地'));
-}
-
 
 // v2 阶段三回归只使用合成复合控件；先确认子控件和网站操作不会生成个人字段。
 test('新版阶段三：复合控件误识别回归', { timeout: 60000 }, async () => {
@@ -724,18 +711,17 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
       await sidebar.evaluate(() => flushSaves()); db = (await rpc(options, 'localapply:read')).database;
       assert.ok(!db.fieldValues.some((row) => row.value === '合成动态值'));
     });
-    await t.test('重复经历管理 UI 保存两段教育与项目', async () => {
+    await t.test('历史重复经历命令保存两段教育与项目，编辑页不生成独立卡片', async () => {
       await workspacePage(options, 'resumeCenter');
-      for (const kind of ['education', 'project']) {
-        for (let index = 0; index < 2; index++) {
-          await addResumeEntry(options, kind, `合成${kind}${index}`);
-          await options.waitForFunction((count) => document.querySelectorAll('#basicFields .entry-card').length === count, kind === 'education' ? index + 1 : index + 3);
-        }
+      let firstId;
+      for (const kind of ['education', 'project']) for (let index = 0; index < 2; index++) {
+        const entryId = await addResumeEntry(options, kind, `合成${kind}${index}`); firstId ||= entryId;
       }
-      const first = options.locator('#basicFields .entry-card').first();
-      await fillEntryField(options, first, 'builtin.school', '合成测试学院');
-      const firstId = await first.getAttribute('data-entry-id');
+      const profileId = await options.locator('#entryProfile').inputValue();
+      await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, entryId: firstId, fieldId: 'builtin.school', value: '合成测试学院' } } });
       assert.equal((await rpc(options, 'localapply:read')).database.fieldValues.find((row) => row.entryId === firstId && row.fieldId === 'builtin.school').value, '合成测试学院');
+      assert.equal(await options.locator('#basicFields .entry-card,[data-add-entry-kind]').count(), 0);
+      assert.equal(await options.locator('#legacyEntriesNotice').isVisible(), true);
     });
     await t.test('服务商输入支持 DeepSeek/Qwen 和 IP 自动创建，Key/模型隔离且本地接口可调用', async () => {
       await workspacePage(options, 'aiSettings');
@@ -1158,7 +1144,8 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
     await t.test('文件页重复经历和完整备份可操作，默认不导出 API 配置', async () => {
       await workspacePage(page, 'resumeCenter');
       await addResumeEntry(page, 'education', '合成文件教育');
-      await page.locator('#basicFields .entry-card').first().waitFor();
+      assert.equal(await page.locator('#basicFields .entry-card').count(), 0);
+      assert.equal(await page.locator('#legacyEntriesNotice').isVisible(), true);
       await workspacePage(page, 'privacySettings');
       const downloadEvent = page.waitForEvent('download'); await page.locator('#btnBackup').click();
       const download = await downloadEvent; const text = await fs.readFile(await download.path(), 'utf8');
@@ -1196,7 +1183,7 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
       await page.waitForFunction(() => document.getElementById('modelsStatus').textContent.includes('CORS'));
       assert.equal(await page.locator('#modelApiHelp').evaluate((details) => details.open), true);
       assert.ok((await page.locator('#modelsEndpoint').textContent()).endsWith('/v1/models'));
-      assert.equal(await page.locator('[data-add-entry-kind=education]').isDisabled(), false);
+      assert.equal(await page.getByLabel('简历中心 · 姓名', { exact: true }).isDisabled(), false);
       assert.equal(await page.locator('#btnBackup').isDisabled(), false);
       modelApi.allowCors = true;
     });
@@ -1409,7 +1396,7 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
       await rpc(options, 'localapply:command', { request: { action: 'deleteField', payload: { fieldId: created } } }); await frame.waitForFunction(() => !document.getElementById('resumeContent').textContent.includes('合成即时新增')); assert.equal(api.calls.length, 0);
     });
     await t.test('编辑按钮打开当前档案与分类的简历中心', async () => {
-      await frame.locator('#previewNav').selectOption('entry:' + schoolId); const opened = context.waitForEvent('page'); await frame.locator('#previewEdit').click(); const editor = await opened; await editor.waitForFunction(() => document.getElementById('overviewValues')?.textContent !== '—'); await editor.waitForFunction((id) => document.getElementById('entryProfile').value === id, profileId); assert.ok(editor.url().includes(encodeURIComponent('entry:' + schoolId))); await editor.locator('[data-entry-id="' + schoolId + '"].is-target').waitFor(); await editor.close();
+      await frame.locator('#previewNav').selectOption('entry:' + schoolId); const opened = context.waitForEvent('page'); await frame.locator('#previewEdit').click(); const editor = await opened; await editor.waitForFunction(() => document.getElementById('overviewValues')?.textContent !== '—'); await editor.waitForFunction((id) => document.getElementById('entryProfile').value === id, profileId); assert.ok(editor.url().includes(encodeURIComponent('entry:' + schoolId))); await editor.locator('#resumeProfileControls.is-target').waitFor(); assert.equal(await editor.locator('#basicFields .entry-card').count(), 0); await editor.close();
     });
     await t.test('单击复制只针对所选项，敏感值保持遮挡直到主动显示', async () => {
       await frame.locator('#previewSearch').fill('手机号'); await frame.getByRole('button', { name: '复制手机号', exact: true }).click(); assert.ok((await frame.locator('#previewStatus').textContent()).includes('先勾选'));
@@ -1443,14 +1430,17 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
       await page.addStyleTag({ content: 'input,button,select{font-size:70px!important;color:red!important}div{border:6px solid red!important}' }); assert.equal(await frame.locator('#autoTab').evaluate((element) => getComputedStyle(element).fontSize), '13px');
       assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => __submitCount), 0); assert.deepEqual(errors, []);
     });
-    await t.test('经历新增修改与删除按稳定 ID 生效，取消删除保留所有值', async () => {
+    await t.test('历史经历命令仍兼容稳定 ID，简历中心仅显示基础字段', async () => {
       await workspacePage(options, 'resumeCenter');
-      await addResumeEntry(options, 'project', '合成阶段四项目');
-      const project = options.locator('#basicFields .entry-card').filter({ hasText: '合成阶段四项目' }); await project.waitFor(); const entryId = await project.getAttribute('data-entry-id');
-      await fillEntryField(options, project, 'builtin.skills', '合成项目成果');
-      const stable = options.locator('[data-entry-id="' + entryId + '"]'); options.once('dialog', (dialog) => dialog.accept('合成项目新名称')); await stable.getByRole('button', { name: '修改经历名称', exact: true }).click(); await options.waitForFunction((id) => [...document.querySelectorAll('[data-entry-id]')].find((item) => item.dataset.entryId === id)?.textContent.includes('合成项目新名称'), entryId);
-      options.once('dialog', (dialog) => dialog.dismiss()); await stable.getByRole('button', { name: '删除经历', exact: true }).click(); assert.ok((await rpc(options, 'localapply:read')).database.fieldValues.some((item) => item.entryId === entryId && item.value === '合成项目成果'));
-      options.once('dialog', (dialog) => dialog.accept()); await stable.getByRole('button', { name: '删除经历', exact: true }).click(); await stable.waitFor({ state: 'detached' }); assert.ok((await rpc(options, 'localapply:read')).database.entries.some((item) => item.entryId === schoolId));
+      const entryId = await addResumeEntry(options, 'project', '合成阶段四项目');
+      await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, entryId, fieldId: 'builtin.skills', value: '合成项目成果' } } });
+      await rpc(options, 'localapply:command', { request: { action: 'editEntry', payload: { entryId, title: '合成项目新名称' } } });
+      const changed = (await rpc(options, 'localapply:read')).database;
+      assert.ok(changed.entries.some((entry) => entry.entryId === entryId && entry.title === '合成项目新名称'));
+      assert.ok(changed.fieldValues.some((row) => row.entryId === entryId && row.value === '合成项目成果'));
+      await rpc(options, 'localapply:command', { request: { action: 'deleteEntry', payload: { entryId } } });
+      assert.ok((await rpc(options, 'localapply:read')).database.entries.some((item) => item.entryId === schoolId));
+      assert.equal(await options.locator('#basicFields .entry-card,[data-add-entry-kind]').count(), 0);
     });
     await t.test('档案切换隔离资料并在重新打开后保留，不复制其他人的内容', async () => {
       const second = (await rpc(options, 'localapply:command', { request: { action: 'createProfile', payload: { name: '合成第二预览档案' } } })).result;
@@ -1551,7 +1541,8 @@ for (const withExtension of [true, false]) {
         return [first.result, second.result];
       }, profileId);
       await page.evaluate(() => reloadDataState());
-      await page.waitForFunction(() => document.querySelectorAll('#resumeToc button[data-toc-key^="entry:"]').length === 2);
+      assert.equal(await page.locator('#resumeToc button[data-toc-key^="entry:"]').count(), 0);
+      assert.equal(await page.locator('#legacyEntriesNotice').isVisible(), true);
       assert.equal(await page.locator('#resumeToc').isVisible(), true);
       assert.equal(await page.locator('#resumeToc button[data-toc-key^="group:"]').count(), await page.locator('.center-group-heading').count());
       const group = page.locator('#resumeToc button[data-toc-key^="group:"]').first();
@@ -1563,8 +1554,7 @@ for (const withExtension of [true, false]) {
       // 分类导航按新要求聚焦整张卡片，标题和字段必须处于同一个目标区块。
       assert.equal(await page.locator('.resume-group.is-target').evaluate((element) => document.activeElement === element && element.contains(element.querySelector('.center-field'))), true);
       assert.equal(new URL(page.url()).hash, '#resumeCenter');
-      await page.locator('#resumeToc button[data-toc-key="entry:' + entryIds[1] + '"]').click();
-      assert.equal(await page.locator('#basicFields .is-target').getAttribute('data-entry-id'), entryIds[1]);
+      assert.equal(await page.locator('#basicFields .entry-card').count(), 0);
       await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0);
       assert.equal(await page.locator('body').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(16, 23, 34)');
       assert.equal(await page.locator('#newProfileName').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(25, 35, 50)');
@@ -1585,16 +1575,18 @@ for (const withExtension of [true, false]) {
       assert.ok(buttons[0].bottom <= buttons[1].y && buttons[1].bottom <= buttons[2].y);
       await page.locator('#themeToggle').click(); await page.waitForFunction(() => getComputedStyle(document.querySelector('#renameResumeProfile')).backgroundColor === 'rgb(25, 35, 50)');
       await page.screenshot({ path: path.join(testRoot, `workspace-narrow-${mode}.png`) });
-      // 经历管理后的目录跟随真实数据更新，同名条目与其他档案严格隔离。
+      // 基础字段新增分类后目录同步，旧经历不重新生成目录项，切档案不复制资料。
       await page.setViewportSize({ width: 1440, height: 900 });
-      const secondEntry = page.locator('#basicFields [data-entry-id="' + entryIds[1] + '"]');
-      page.once('dialog', (dialog) => dialog.accept('合成目录新名称')); await secondEntry.getByRole('button', { name: '修改经历名称', exact: true }).click();
-      await page.waitForFunction(() => document.getElementById('resumeToc').textContent.includes('合成目录新名称'));
-      page.once('dialog', (dialog) => dialog.accept()); await secondEntry.getByRole('button', { name: '删除经历', exact: true }).click();
-      await page.waitForFunction(() => document.querySelectorAll('#resumeToc button[data-toc-key^="entry:"]').length === 1);
+      await page.evaluate(async () => {
+        const profileId = document.getElementById('entryProfile').value;
+        await dataCommand('createField', { profileId, definition: { label: '合成目录字段', group: '合成目录分类' }, value: '' });
+        await reloadDataState();
+      });
+      assert.equal(await page.locator('#resumeToc').getByRole('button', { name: '合成目录分类', exact: true }).count(), 1);
       const otherProfile = (await page.evaluate(() => dataCommand('createProfile', { name: '合成目录第二档案' }))).result;
       await page.evaluate(() => reloadDataState()); await page.locator('#entryProfile').selectOption(otherProfile);
-      await page.waitForFunction(() => document.querySelectorAll('#resumeToc button[data-toc-key^="entry:"]').length === 0);
+      await page.waitForFunction(() => !document.getElementById('resumeToc').textContent.includes('合成目录分类'));
+      assert.equal(await page.locator('#resumeToc button[data-toc-key^="entry:"]').count(), 0);
       await workspacePage(page, 'aiSettings'); assert.equal(await page.locator('#resumeToc').isVisible(), false);
       await page.locator('#scrollBottom').click(); await page.waitForFunction(() => Math.abs(scrollY + innerHeight - document.documentElement.scrollHeight) < 2);
       await page.locator('#scrollTop').click(); await page.waitForFunction(() => scrollY === 0);
@@ -1653,9 +1645,9 @@ for (const withExtension of [true, false]) {
       await page.locator('#entryProfile').selectOption(first);
       await page.waitForFunction(() => document.getElementById('overviewProfile').textContent !== '合成修改后的简历');
       assert.equal(await page.getByLabel('简历中心 · 姓名', { exact: true }).inputValue(), '合成第一简历姓名');
-      await page.locator('#entryProfile').selectOption(second); await page.locator('#basicFields [data-entry-id="' + entryId + '"]').waitFor();
-      // 未保存经历输入须先确认丢弃；拒绝时不能发起删除或清空草稿。
-      const draft = page.locator('#basicFields [data-entry-id="' + entryId + '"]').getByLabel('经历字段 · 毕业院校', { exact: true });
+      await page.locator('#entryProfile').selectOption(second); await page.waitForFunction(() => document.getElementById('overviewProfile').textContent === '合成修改后的简历');
+      // 未保存基础字段须先确认丢弃；拒绝时不能发起删除或清空草稿。
+      const draft = page.getByLabel('简历中心 · 毕业院校', { exact: true });
       // 仅触发 input 保留尚未提交的草稿，不触发现在统一使用的失焦自动保存。
       await draft.evaluate((input) => { input.value = '合成未保存草稿'; input.dispatchEvent(new Event('input', { bubbles: true })); }); page.once('dialog', (dialog) => dialog.dismiss()); await page.locator('#deleteResumeProfile').click();
       await page.waitForFunction(() => !document.getElementById('deleteResumeProfile').disabled);
@@ -1695,15 +1687,12 @@ for (const withExtension of [true, false]) {
       const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message));
       await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' }); await page.setViewportSize({ width: 1440, height: 900 }); await page.goto(url);
       await workspacePage(page, 'resumeCenter');
-      const seeded = await page.evaluate(async () => {
+      await page.evaluate(async () => {
         const profileId = (await dataRequest('localapply:read')).database.activeProfileId;
-        const first = (await dataCommand('createEntry', { profileId, kind: 'project', title: '合成滚动项目' })).result;
-        const second = (await dataCommand('createEntry', { profileId, kind: 'project', title: '合成滚动项目' })).result;
-        const definitions = (await dataRequest('localapply:read')).database.fieldDefinitions.filter((item) => item.type === 'text').slice(0, 20);
-        for (const definition of definitions) await dataCommand('setValue', { profileId, entryId: first, fieldId: definition.fieldId, value: '合成长记录字段' });
-        return [first, second];
+        for (let index = 0; index < 20; index++) await dataCommand('createField', { profileId, definition: { label: '合成长分类字段' + index, group: '合成长分类' }, value: '合成内容' });
+        await dataCommand('createField', { profileId, definition: { label: '合成下一分类字段', group: '合成下一分类' }, value: '' });
+        await reloadDataState();
       });
-      await page.evaluate(() => reloadDataState()); await page.locator('#basicFields [data-entry-id="' + seeded[1] + '"]').waitFor();
       const revision = (await page.evaluate(() => dataRequest('localapply:read'))).database.revision;
       assert.equal(await page.locator('#basicFields > .resume-group').count(), await page.locator('#resumeToc button[data-toc-key^="group:"]').count());
       assert.equal(await page.locator('#basicFields .center-field').evaluateAll((fields) => fields.every((field) => !!field.closest('.resume-group')?.querySelector('h3'))), true);
@@ -1723,15 +1712,15 @@ for (const withExtension of [true, false]) {
         await page.mouse.move(225, 180); await page.mouse.wheel(0, delta);
         await page.waitForFunction((key) => document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === key, key);
       };
-      const first = page.locator('#basicFields [data-entry-id="' + seeded[0] + '"]');
-      const second = page.locator('#basicFields [data-entry-id="' + seeded[1] + '"]');
+      const first = page.locator('.resume-group[data-group="合成长分类"]');
+      const second = page.locator('.resume-group[data-group="合成下一分类"]');
       const focus = await page.evaluate(() => document.activeElement.id);
-      await wheelTo(first, 'entry:' + seeded[0]);
-      await page.mouse.wheel(0, 450); await page.waitForFunction((id) => document.querySelector('[data-entry-id="' + id + '"] h4').getBoundingClientRect().bottom < 0, seeded[0]);
-      assert.equal(await page.locator('#resumeToc [aria-current="location"]').getAttribute('data-toc-key'), 'entry:' + seeded[0]);
+      await wheelTo(first, 'group:合成长分类');
+      await page.mouse.wheel(0, 450); await page.waitForFunction(() => document.querySelector('.resume-group[data-group="合成长分类"] h3').getBoundingClientRect().bottom < 0);
+      assert.equal(await page.locator('#resumeToc [aria-current="location"]').getAttribute('data-toc-key'), 'group:合成长分类');
       assert.equal(await first.evaluate((element) => element.classList.contains('is-target')), true);
       assert.equal(await page.evaluate(() => document.activeElement.id), focus, '滚动同步不得抢走焦点');
-      await wheelTo(second, 'entry:' + seeded[1]);
+      await wheelTo(second, 'group:合成下一分类');
       assert.equal(await first.evaluate((element) => element.classList.contains('is-target')), false);
       await page.setViewportSize({ width: 1440, height: 520 });
       await wheelTo(page.locator('#fillingPreferences'), 'preferences');
@@ -1748,11 +1737,11 @@ for (const withExtension of [true, false]) {
   });
 }
 
-// 已确认的合成导入走生产命令，验证统一分类、每个字段的编辑权、冲突和真实重启。
+// 最新需求移除经历模块；沿用旧导入命令造数，验证清理、基础编辑及真实重启。
 for (const withExtension of [true, false]) {
-  test(`简历分类编辑：${withExtension ? '扩展' : 'file://'}自动归类、全部字段保存与重启`, { timeout: 60000 }, async () => {
+  test(`简历分类编辑：${withExtension ? '扩展' : 'file://'}基础字段、旧经历清理与重启`, { timeout: 90000 }, async () => {
     const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
-    const profile = await fs.mkdtemp(path.join(testRoot, 'resume-editor-')); let context; const errors = [];
+    const profile = await fs.mkdtemp(path.join(testRoot, 'resume-cleanup-')); let context; const errors = [];
     const mode = withExtension ? 'extension' : 'file';
     try {
       context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
@@ -1762,82 +1751,83 @@ for (const withExtension of [true, false]) {
       const seeded = await page.evaluate(async () => {
         const { database } = await dataRequest('localapply:read'); const profileId = database.activeProfileId;
         const cells = [
-          ['education', 0, 'school', '合成同名学院'], ['education', 0, 'degree', '本科'], ['education', 0, 'major', '合成计算机'], ['education', 0, 'start', '2020-09'], ['education', 0, 'end', '2024-06'],
+          ['education', 0, 'school', '合成同名学院'], ['education', 0, 'degree', '本科'], ['education', 0, 'major', '合成计算机'],
           ['education', 1, 'school', '合成同名学院'], ['education', 1, 'degree', '硕士'],
-          ['employment', 0, 'company', '合成工作单位'], ['employment', 0, 'title', '合成岗位'], ['employment', 0, 'description', '合成工作职责'],
-          ['internship', 0, 'company', '合成实习单位'], ['internship', 0, 'role', '合成实习角色'],
-          ['project', 0, 'title', '合成项目'], ['project', 0, 'description', '合成项目描述'],
+          ['employment', 0, 'company', '合成工作单位'], ['employment', 0, 'description', '合成工作职责'],
+          ['internship', 0, 'company', '合成实习单位'], ['project', 0, 'title', '合成项目'],
         ];
         await dataCommand('importResume', { profileId, fingerprint: 'a'.repeat(64), overwrite: false,
           rows: cells.map(([kind, index, key, value]) => ({ kind, index, key, value, evidence: { kind: 'manual', excerpt: '', page: 0, verified: false } })) }, database.revision);
+        await dataCommand('setValue', { profileId, fieldId: 'builtin.school', value: '合成基础学院' });
         await dataCommand('createField', { profileId, definition: { label: '合成辅修', group: '教育经历' }, value: '合成辅修内容' });
         await dataCommand('createField', { profileId, definition: { label: '合成研究成果', group: '研究成果', type: 'textarea' }, value: '合成研究内容' });
-        const db = (await dataRequest('localapply:read')).database;
-        return { profileId, entries: db.entries, revision: db.revision };
+        const entries = (await dataRequest('localapply:read')).database.entries.filter((entry) => entry.profileId === profileId);
+        await dataCommand('saveMapping', { profileId, entryId: entries[0].entryId, fieldId: 'builtin.school', origin: 'https://example.test', path: '/apply', label: '合成经历学校' });
+        const other = (await dataCommand('createProfile', { name: '合成隔离简历' })).result;
+        const otherEntry = (await dataCommand('createEntry', { profileId: other, kind: 'project', title: '合成保留项目' })).result;
+        await dataCommand('setValue', { profileId: other, entryId: otherEntry, fieldId: 'builtin.skills', value: '合成保留值' });
+        const state = await getState(); state.activeProfileId = profileId; await saveState(state);
+        await dataRequest('localapply:vault', { action: 'setKey', payload: { providerId: 'zhipu', key: 'fake-cleanup-browser-key', revision: 0 } });
+        await reloadDataState(profileId); return { profileId, other, entries };
       });
-      await page.evaluate(() => reloadDataState());
-      assert.equal(await page.locator('#entryKind,#entryTitle,#btnAddEntry,#entriesList,.entry-values').count(), 0);
+      assert.equal(await page.locator('#entryKind,#entryTitle,#btnAddEntry,#entriesList,.entry-card,[data-add-entry-kind],.resume-entry-more').count(), 0);
+      assert.equal(await page.locator('#resumeToc [data-toc-key^="entry:"]').count(), 0);
       assert.equal(await page.locator('.resume-group[data-group="教育背景"]').count(), 1);
-      assert.equal(await page.locator('.resume-group[data-group="教育经历"]').count(), 0);
-      assert.equal(await page.locator('.resume-group[data-group="研究成果"]').count(), 1);
-      const groups = { education: '教育背景', internship: '实习经历', employment: '工作经历', project: '项目经历' };
-      for (const entry of seeded.entries) {
-        const card = page.locator('[data-entry-id="' + entry.entryId + '"]');
-        assert.equal(await card.evaluate((element) => element.closest('.resume-group').dataset.group), groups[entry.kind]);
-      }
-      const db = (await page.evaluate(() => dataRequest('localapply:read'))).database;
-      for (const entry of seeded.entries) {
-        const stored = db.fieldValues.filter((row) => row.entryId === entry.entryId);
-        const card = page.locator('[data-entry-id="' + entry.entryId + '"]');
-        assert.equal(await card.locator('.center-field').count(), stored.length, '每个字段同时显示，不再用只读摘要代替');
-        for (const row of stored) {
-          const input = card.locator('[data-field-id="' + row.fieldId + '"] input,[data-field-id="' + row.fieldId + '"] select,[data-field-id="' + row.fieldId + '"] textarea');
-          assert.equal(await input.inputValue(), row.value); assert.equal(await input.isEditable(), true);
-        }
-      }
-      assert.equal(db.revision, seeded.revision, '界面归类不应改写数据库');
-      // 原分类深链接也要定位到复用的完整分类，不能因名称归一而失效。
+      assert.equal(await page.locator('.resume-group[data-group="教育经历"],.resume-group[data-group="工作经历"],.resume-group[data-group="实习经历"],.resume-group[data-group="项目经历"]').count(), 0);
+      assert.equal(await page.getByLabel('简历中心 · 毕业院校', { exact: true }).inputValue(), '合成基础学院', '旧经历不得自动覆盖基础字段');
+      const before = (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      const settings = (await page.evaluate(() => getState())).settings;
+      page.once('dialog', (dialog) => dialog.dismiss()); await page.locator('#clearResumeEntries').click();
+      await page.waitForFunction(() => !document.getElementById('clearResumeEntries').disabled);
+      assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, before.revision);
+      // 清理确认显示影响数量及恢复范围，用户拒绝前不能落盘。
+      page.once('dialog', (dialog) => { assert.ok(dialog.message().includes('5 条旧经历') && dialog.message().includes('恢复点')); return dialog.accept(); });
+      await page.locator('#clearResumeEntries').click(); await page.waitForFunction(() => document.getElementById('entryStatus').textContent.includes('已清空 5 条'));
+      const cleared = (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      assert.ok(!cleared.entries.some((entry) => entry.profileId === seeded.profileId));
+      assert.ok(!cleared.fieldValues.some((row) => row.profileId === seeded.profileId && row.entryId !== null));
+      assert.ok(!cleared.mappingRules.some((row) => row.profileId === seeded.profileId));
+      assert.deepEqual(cleared.fieldDefinitions, before.fieldDefinitions); assert.deepEqual(cleared.bindings, before.bindings);
+      for (const table of ['entries','fieldValues','mappingRules']) assert.deepEqual(cleared[table].filter((row) => row.profileId === seeded.other), before[table].filter((row) => row.profileId === seeded.other));
+      assert.deepEqual((await page.evaluate(() => getState())).settings, settings);
+      assert.equal(await page.locator('#legacyEntriesNotice').isVisible(), false);
+      await workspacePage(page, 'privacySettings'); await page.locator('#btnRestoreRecovery').click();
+      await page.waitForFunction(() => document.getElementById('backupMsg').textContent.includes('已恢复'));
+      const recovered = (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      for (const table of ['entries','fieldValues','mappingRules']) assert.deepEqual(recovered[table], before[table]);
+      await workspacePage(page, 'resumeCenter'); assert.equal(await page.locator('#legacyEntriesNotice').isVisible(), true);
+      page.once('dialog', (dialog) => dialog.accept()); await page.locator('#clearResumeEntries').click();
+      await page.waitForFunction(() => document.getElementById('entryStatus').textContent.includes('已清空 5 条'));
+      // 基础字段继续逐项保存；旧页面冲突时保留草稿，未冲突字段仍可编辑。
+      const school = page.getByLabel('简历中心 · 毕业院校', { exact: true });
+      const stale = await context.newPage(); await stale.goto(url); await workspacePage(stale, 'resumeCenter');
+      await school.fill('合成更新基础学院'); await school.blur(); await page.evaluate(() => resumeSaveQueue);
+      const draft = stale.getByLabel('简历中心 · 毕业院校', { exact: true });
+      await draft.fill('合成冲突草稿'); await draft.blur(); await stale.evaluate(() => resumeSaveQueue);
+      assert.ok((await stale.locator('#centerStatus').textContent()).includes('其他页面修改'));
+      assert.equal(await draft.inputValue(), '合成冲突草稿'); assert.equal(await draft.getAttribute('data-dirty'), 'true');
+      const research = stale.getByLabel('简历中心 · 合成研究成果', { exact: true });
+      await research.fill('合成更新成果'); await research.blur(); await stale.evaluate(() => resumeSaveQueue);
+      assert.equal(await draft.inputValue(), '合成冲突草稿'); await stale.close();
       const linked = await context.newPage();
       await linked.goto(url + '?profile=' + encodeURIComponent(seeded.profileId) + '&section=' + encodeURIComponent('group:教育经历') + '#resumeCenter');
       await linked.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
       assert.equal(await linked.evaluate(() => document.activeElement.dataset.group), '教育背景'); await linked.close();
-      const schools = seeded.entries.filter((entry) => entry.kind === 'education');
-      const first = page.locator('[data-entry-id="' + schools[0].entryId + '"]');
-      await fillEntryField(page, first, 'builtin.school', '合成可编辑学院');
-      await fillEntryField(page, first, 'builtin.major', '合成可编辑专业');
-      await first.getByLabel('经历字段 · 学历', { exact: true }).selectOption('博士');
-      await first.getByLabel('经历字段 · 学历', { exact: true }).blur(); await page.evaluate(() => resumeSaveQueue);
-      const second = page.locator('[data-entry-id="' + schools[1].entryId + '"]');
-      assert.equal(await second.getByLabel('经历字段 · 毕业院校', { exact: true }).inputValue(), '合成同名学院');
-      const workId = seeded.entries.find((entry) => entry.kind === 'employment').entryId;
-      await fillEntryField(page, page.locator('[data-entry-id="' + workId + '"]'), 'resume.description', '合成修改后的工作职责');
-      const research = page.getByLabel('简历中心 · 合成研究成果', { exact: true });
-      await research.fill('合成更新成果'); await research.blur(); await page.evaluate(() => resumeSaveQueue);
-      // 第二页面的旧字段被修改后必须拒绝覆盖，其他未冲突字段仍可保存。
-      const stale = await context.newPage(); await stale.goto(url); await workspacePage(stale, 'resumeCenter');
-      await fillEntryField(page, first, 'builtin.school', '合成并发更新学院');
-      const draft = stale.locator('[data-entry-id="' + schools[0].entryId + '"]').getByLabel('经历字段 · 毕业院校', { exact: true });
-      await draft.fill('合成冲突草稿'); await draft.blur(); await stale.evaluate(() => resumeSaveQueue);
-      assert.ok((await stale.locator('#centerStatus').textContent()).includes('其他页面修改'));
-      assert.equal(await draft.inputValue(), '合成冲突草稿'); assert.equal(await draft.getAttribute('data-dirty'), 'true');
-      await fillEntryField(stale, stale.locator('[data-entry-id="' + schools[0].entryId + '"]'), 'builtin.major', '合成无冲突专业');
-      assert.equal(await draft.inputValue(), '合成冲突草稿'); await stale.close();
       await page.reload(); await workspacePage(page, 'resumeCenter');
-      await page.locator('#resumeToc [data-toc-key="entry:' + workId + '"]').click();
-      await page.screenshot({ path: path.join(testRoot, `resume-integrated-${mode}.png`) });
-      await page.locator('#themeToggle').click(); await page.screenshot({ path: path.join(testRoot, `resume-integrated-dark-${mode}.png`) });
-      await page.setViewportSize({ width: 390, height: 844 });
+      await page.locator('#resumeToc').getByRole('button', { name: '教育背景', exact: true }).click();
+      await page.screenshot({ path: path.join(testRoot, `resume-cleanup-${mode}.png`) });
+      await page.locator('#themeToggle').click(); await page.setViewportSize({ width: 390, height: 844 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-      await page.locator('#resumeToc [data-toc-key="entry:' + workId + '"]').click();
-      await page.screenshot({ path: path.join(testRoot, `resume-integrated-narrow-${mode}.png`) });
+      await page.screenshot({ path: path.join(testRoot, `resume-cleanup-narrow-${mode}.png`) });
+      const backup = (await page.evaluate(() => dataRequest('localapply:exportBackup'))).backup;
+      assert.ok(!JSON.stringify(backup).includes('fake-cleanup-browser-key'));
       await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
       page = await context.newPage(); await page.goto(url); await workspacePage(page, 'resumeCenter');
-      const restored = (await page.evaluate(() => dataRequest('localapply:read'))).database;
-      assert.equal(restored.schemaVersion, 3); assert.equal(restored.entries.length, 5);
-      assert.ok(restored.fieldValues.some((row) => row.entryId === schools[0].entryId && row.fieldId === 'builtin.school' && row.value === '合成并发更新学院' && row.source === 'manual' && !row.evidence));
-      assert.equal(await page.locator('[data-entry-id="' + schools[0].entryId + '"]').getByLabel('经历字段 · 专业', { exact: true }).inputValue(), '合成无冲突专业');
+      const restarted = (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      assert.equal(restarted.schemaVersion, 3); assert.ok(!restarted.entries.some((entry) => entry.profileId === seeded.profileId));
+      assert.equal(await page.getByLabel('简历中心 · 毕业院校', { exact: true }).inputValue(), '合成更新基础学院');
       assert.equal(await page.getByLabel('简历中心 · 合成研究成果', { exact: true }).inputValue(), '合成更新成果');
-      assert.equal(await page.locator('#basicFields .entry-card').count(), 5); assert.deepEqual(errors, []);
+      assert.equal(await page.locator('#basicFields .entry-card,[data-add-entry-kind]').count(), 0); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }

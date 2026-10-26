@@ -508,3 +508,51 @@ test('另一页面取消并重设口令后，旧会话失效但仍可无口令�
   await env.repo.vaultCommand('setKey', { providerId: 'zhipu', key: 'fake-new-tab-key', revision: current.settings.vault.revision });
   assert.equal((await env.repo.readAiSettings()).apiKeys.zhipu, 'fake-new-tab-key');
 });
+
+// 合成四类旧经历及其他档案，验证批量清理仅影响当前简历的经历关系。
+async function cleanupFixture() {
+  const env = fixture(); await env.repo.initialize();
+  const other = (await command(env.repo, 'createProfile', { name: '合成另一简历' })).result;
+  for (const [profileId, kinds] of [['p1', ['education', 'internship', 'employment', 'project']], [other, ['education']]]) {
+    for (const kind of kinds) {
+      const entryId = (await command(env.repo, 'createEntry', { profileId, kind, title: '合成旧经历' })).result;
+      await command(env.repo, 'setValue', { profileId, entryId, fieldId: 'builtin.school', value: '合成经历值' });
+      await command(env.repo, 'saveMapping', { profileId, entryId, fieldId: 'builtin.school', origin: 'https://example.test', path: '/apply', label: '合成学校' });
+    }
+  }
+  await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.school', value: '合成基础值' });
+  await env.repo.vaultCommand('setKey', { providerId: 'zhipu', key: 'fake-cleanup-key', revision: 0 });
+  return { ...env, other };
+}
+
+test('清空旧经历需确认和版本，保留基础字段、其他简历、密钥并支持重启恢复', async () => {
+  const env = await cleanupFixture(); const before = await env.repo.read();
+  const settings = structuredClone(env.disk['localapply.apiSettings']); const keys = structuredClone(env.disk['localapply.deviceKeys']);
+  for (const [payload, revision] of [[{ profileId: 'p1' }, before.revision], [{ profileId: 'p1', confirmed: true }, undefined], [{ profileId: 'p1', confirmed: true }, before.revision - 1], [{ profileId: 'missing', confirmed: true }, before.revision]]) {
+    await assert.rejects(command(env.repo, 'clearResumeEntries', payload, revision));
+    assert.deepEqual(await env.repo.read(), before);
+  }
+  const result = await command(env.repo, 'clearResumeEntries', { profileId: 'p1', confirmed: true }, before.revision);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.result)), { entries: 4, values: 4, mappings: 4 });
+  const after = await env.restart().read();
+  assert.ok(after.entries.every((entry) => entry.profileId === env.other));
+  assert.ok(!after.fieldValues.some((row) => row.profileId === 'p1' && row.entryId !== null));
+  assert.ok(!after.mappingRules.some((row) => row.profileId === 'p1'));
+  assert.equal(value(after, 'p1', 'builtin.school'), '合成基础值');
+  for (const table of ['fieldDefinitions', 'bindings', 'profiles']) assert.deepEqual(after[table], before[table]);
+  for (const table of ['entries', 'fieldValues', 'mappingRules']) assert.deepEqual(after[table].filter((row) => row.profileId === env.other), before[table].filter((row) => row.profileId === env.other));
+  assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before)); assert.deepEqual(env.disk['localapply.apiSettings'], settings); assert.deepEqual(env.disk['localapply.deviceKeys'], keys);
+  await command(env.repo, 'clearResumeEntries', { profileId: 'p1', confirmed: true }, after.revision);
+  assert.equal((await env.repo.read()).revision, after.revision); assert.equal(JSON.stringify(env.disk['localapply.recovery']), JSON.stringify(before));
+  await command(env.restart(), 'restoreRecovery', {}); const restored = await env.repo.read();
+  for (const table of ['entries', 'fieldValues', 'mappingRules', 'fieldDefinitions']) assert.deepEqual(restored[table], before[table]);
+  assert.equal((await env.repo.readAiSettings()).apiKeys.zhipu, 'fake-cleanup-key');
+});
+
+test('旧经历清理的恢复点或主库写入失败时不丢失当前资料', async () => {
+  for (const failureAt of [0, 1]) {
+    const env = await cleanupFixture(); const before = await env.repo.read(); env.fail(failureAt);
+    await assert.rejects(command(env.repo, 'clearResumeEntries', { profileId: 'p1', confirmed: true }, before.revision), /模拟磁盘/);
+    assert.deepEqual(await env.restart().read(), before);
+  }
+});

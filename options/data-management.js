@@ -68,7 +68,7 @@ async function initDataManagement() {
     } catch (error) { document.getElementById('restorePreview').textContent = '导入失败：' + error.message; }
   });
   document.getElementById('btnRestoreRecovery').addEventListener('click', async () => {
-    try { await dataCommand('restoreRecovery', {}); await reloadDataState(); backupMsg('已恢复导入前的资料，API 配置保持原样。'); }
+    try { await dataCommand('restoreRecovery', {}); await reloadDataState(); backupMsg('已恢复上次导入或清理前的资料，API 配置保持原样。'); }
     catch (error) { backupMsg(escapeHtml('恢复失败：' + error.message)); }
   });
   document.getElementById('btnPublicExport').addEventListener('click', async () => {

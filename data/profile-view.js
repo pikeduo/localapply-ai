@@ -29,14 +29,14 @@
     const aliases = { '教育经历': '教育背景', '教育': '教育背景', '基本资料': '基本信息', '个人信息': '基本信息', '工作经验': '工作经历', '实习经验': '实习经历', '项目经验': '项目经历' };
     return Object.hasOwn(aliases, group) ? aliases[group] : group;
   }
-  // 编辑视图把经历放回所属分类；所有值（含未绑定动态字段）可编辑，同名经历仍按 ID 隔离。
+  // 编辑视图只呈现当前基础字段；旧经历不展成卡片，也不猜测多个记录应覆盖哪个基础值。
   function editorSections(database, profileId) {
     const definitions = new Map(database.fieldDefinitions.map((item) => [item.fieldId, item]));
     const groups = new Map(); const seen = new Set();
     // 仅缺少目标分类时创建界面容器，不新增或改写数据库字段定义。
     function group(name) {
       const label = editorGroup(name);
-      if (!groups.has(label)) groups.set(label, { group: label, kind: Object.keys(kinds).find((kind) => kinds[kind] === label) || null, items: [], entries: [] });
+      if (!groups.has(label)) groups.set(label, { group: label, items: [] });
       return groups.get(label);
     }
     // 基本资料按定义分类，旧导入中笼统的“简历资料”复用明确的同名标准字段分类。
@@ -52,14 +52,6 @@
       add(row || null, definitions.get(binding.fieldId));
     }
     for (const row of database.fieldValues.filter((item) => item.profileId === profileId && item.entryId === null)) add(row, definitions.get(row.fieldId));
-    for (const kind of Object.keys(kinds)) {
-      const target = group(kinds[kind]);
-      for (const entry of database.entries.filter((item) => item.profileId === profileId && item.kind === kind).sort((a, b) => a.order - b.order)) {
-        const items = database.fieldValues.filter((item) => item.profileId === profileId && item.entryId === entry.entryId)
-          .map((row) => ({ row, definition: definitions.get(row.fieldId) })).filter((item) => item.definition);
-        target.entries.push({ entry, items });
-      }
-    }
     return [...groups.values()];
   }
   global.LocalApplyProfileView = { hasValue, text, sensitive, sections, editorSections };

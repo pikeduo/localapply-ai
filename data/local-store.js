@@ -712,6 +712,22 @@
             db.fieldValues = db.fieldValues.filter((row) => row.entryId !== input.entryId);
             db.mappingRules = db.mappingRules.filter((row) => row.entryId !== input.entryId); break;
           }
+          // 清理当前档案的旧经历，先保存完整个人库恢复点；定义、基础值及其他档案不变。
+          case 'clearResumeEntries': {
+            keys(input, ['profileId', 'confirmed'], '清空旧经历');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '清空旧经历必须确认并携带版本');
+            check(db.profiles.some((profile) => profile.profileId === input.profileId), '目标档案不存在');
+            const entryIds = new Set(db.entries.filter((entry) => entry.profileId === input.profileId).map((entry) => entry.entryId));
+            result = { entries: entryIds.size, values: db.fieldValues.filter((row) => entryIds.has(row.entryId)).length,
+              mappings: db.mappingRules.filter((row) => entryIds.has(row.entryId)).length };
+            // 空操作不覆盖先前恢复点，也不增加数据库版本。
+            if (!entryIds.size) return { result, revision: db.revision };
+            db.entries = db.entries.filter((entry) => !entryIds.has(entry.entryId));
+            db.fieldValues = db.fieldValues.filter((row) => !entryIds.has(row.entryId));
+            db.mappingRules = db.mappingRules.filter((row) => !entryIds.has(row.entryId));
+            await commit(db, null, previous, true);
+            return { result, revision: db.revision };
+          }
           case 'setValue': {
             keys(input, ['profileId', 'fieldId', 'entryId', 'value', 'source'], '保存字段值');
             const row = { profileId: input.profileId, fieldId: input.fieldId, entryId: input.entryId ?? null,

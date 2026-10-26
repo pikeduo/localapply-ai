@@ -31,7 +31,7 @@ function showWorkspacePage(target, focus = false) {
 }
 // DOM 构造始终用文本，字段名、经历标题不得拼接到 HTML。
 function workspaceNode(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
-// 目录只取当前渲染的分类与稳定经历 ID；同名经历分别保留，不含字段实际值。
+// 目录只取当前基础字段分类，不显示旧经历条目或字段实际值。
 function renderResumeToc() {
   const root = document.getElementById('resumeToc');
   const selected = root.querySelector('[aria-current="location"]')?.dataset.tocKey;
@@ -39,10 +39,9 @@ function renderResumeToc() {
     { key: 'overview', label: '资料概览', target: document.getElementById('workspaceOverview') },
     { key: 'center', label: '档案与资料', target: document.getElementById('resumeProfileControls') },
   ];
-  // 父分类与其中的经历按正文顺序排列，滚动时不会被其他分类的目录项截断。
-  document.querySelectorAll('#basicFields .resume-group, #basicFields .entry-card').forEach((target) => {
-    const entry = target.classList.contains('entry-card');
-    items.push({ key: entry ? 'entry:' + target.dataset.entryId : 'group:' + target.dataset.group, label: target.querySelector(entry ? 'h4' : 'h3').textContent, target });
+  // 分类与正文顺序一致，滚动时持续高亮完整分类。
+  document.querySelectorAll('#basicFields .resume-group').forEach((target) => {
+    items.push({ key: 'group:' + target.dataset.group, label: target.querySelector('h3').textContent, target });
   });
   items.push({ key: 'preferences', label: '填写偏好', target: document.getElementById('fillingPreferences') });
   workspaceResumeSections = items;
@@ -157,15 +156,16 @@ async function manageResumeProfile(action) {
     document.getElementById('deleteResumeProfile').disabled = select.options.length <= 1;
   }
 }
-// 从后台读取最新规范数据，刷新概览和字段目录，不读取任何 Key。
+// 概览只统计基础字段及其已填值，与当前编辑内容一致；不读取任何 Key。
 async function refreshWorkspace() {
   const { database } = await dataRequest('localapply:read'); workspaceDatabase = database;
   const profileId = document.getElementById('entryProfile').value || database.activeProfileId;
   document.getElementById('overviewProfile').textContent = database.profiles.find((item) => item.profileId === profileId)?.name || '未选择';
-  document.getElementById('overviewValues').textContent = String(database.fieldValues.filter((item) => item.profileId === profileId && LocalApplyProfileView.hasValue(item.value)).length);
-  document.getElementById('overviewEntries').textContent = String(database.entries.filter((item) => item.profileId === profileId).length);
+  const fields = LocalApplyProfileView.editorSections(database, profileId).flatMap((group) => group.items);
+  document.getElementById('overviewValues').textContent = String(fields.filter((item) => LocalApplyProfileView.hasValue(item.row?.value)).length);
+  document.getElementById('overviewFields').textContent = String(fields.length);
   document.getElementById('overviewRules').textContent = String(database.mappingRules.filter((item) => item.profileId === profileId).length);
-  document.getElementById('managerWelcome').hidden = database.fieldValues.some((item) => item.profileId === profileId && LocalApplyProfileView.hasValue(item.value));
+  document.getElementById('managerWelcome').hidden = fields.some((item) => LocalApplyProfileView.hasValue(item.row?.value));
   document.getElementById('deleteResumeProfile').disabled = database.profiles.length <= 1;
   renderFieldLibrary(); renderResumeToc();
 }
@@ -211,7 +211,7 @@ async function beginFieldEdit(fieldId) {
 }
 // 取消编辑不写数据库，保留旧字段的稳定 ID 和实际值。
 function cancelFieldEdit() { workspaceEditing = null; document.getElementById('fieldForm').reset(); document.getElementById('fieldForm').dataset.dirty = ''; document.getElementById('fieldSave').textContent = '确认新增字段'; }
-// 深链接只接受本地已有档案和真实分组；旧分类别名定位到统一分类，不执行 URL 中的命令。
+// 旧分类别名定位到统一分类；已移除的经历链接回到资料入口，不再生成经历模块。
 async function locateWorkspace() {
   const params = new URLSearchParams(location.search); const profileId = params.get('profile');
   if (profileId && workspaceDatabase.profiles.some((item) => item.profileId === profileId)) { const next = await getState(); next.activeProfileId = profileId; await saveState(next); document.getElementById('entryProfile').value = profileId; await reloadDataState(); }
@@ -222,7 +222,8 @@ async function locateWorkspace() {
       .find((item) => item.group === original || item.items.some(({ definition }) => definition.group === original));
     if (group) key = 'group:' + group.group;
   }
-  if (workspaceRoute() === 'resumeCenter' && (key?.startsWith('group:') || key?.startsWith('entry:'))) locateResumeSection(key);
+  if (key?.startsWith('entry:')) key = 'center';
+  if (workspaceRoute() === 'resumeCenter' && (key === 'center' || key?.startsWith('group:'))) locateResumeSection(key);
 }
 // 工作台导航、字段定义和简历管理只挂载一次，沿用旧设置页的初始化顺序。
 async function initWorkspace() {

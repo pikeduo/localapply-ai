@@ -170,20 +170,13 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 /* 分类的边框和底色包含标题与全部字段，活动高亮不得只落在标题上。 */
 .resume-groups { display: grid; gap: 22px; min-width: 0; }
 .resume-group { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); scroll-margin-top: 24px; }
-.resume-group .center-group-heading, .entry-card h3 { margin: 0 0 20px; padding: 0 0 0 12px; border: 0; border-left: 4px solid var(--brand); font-size: 16px; color: var(--heading); }
+.resume-group .center-group-heading { margin: 0 0 20px; padding: 0 0 0 12px; border: 0; border-left: 4px solid var(--brand); font-size: 16px; color: var(--heading); }
 .resume-group > .basic-grid { gap: 20px 18px; }
-/* 经历是分类内的记录，全部字段共用基本资料编辑网格，不再显示只读摘要。 */
-.resume-group-header, .resume-entry-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
+/* 基础字段分类统一编辑；旧经历只在资料入口提供一次性清理提示。 */
+.resume-group-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
 .resume-group-header .center-group-heading { margin: 5px 0 0; }
-.resume-entry-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-.resume-group .entry-card { margin-top: 22px; padding: 20px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--card); min-width: 0; }
-.resume-entry-header h4 { margin: 5px 0 0; font-size: 14px; color: var(--heading); overflow-wrap: anywhere; }
-.entry-card .basic-grid { gap: 20px 18px; }
-.resume-entry-more { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--line); }
-.resume-entry-more summary { color: var(--sub); font-size: 12px; cursor: pointer; }
-.resume-entry-add { margin: 12px 0 0; }
-.resume-entry-add select { flex: 1; width: 180px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 8px; background: var(--card); color: var(--ink); font: inherit; }
-.resume-entry-actions .btn, .resume-group-header .btn { padding: 6px 10px; font-size: 11px; }
+#legacyEntriesNotice { padding: 12px 14px; margin-top: 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--soft); }
+#legacyEntriesNotice p { margin: 0 0 10px; }
 .resume-profile-controls { padding: 12px; margin: -12px -12px 8px; border: 1px solid transparent; border-radius: 12px; }
 /* 当前简历及管理操作独立成行，窄窗沿用工作台换行规则。 */
 .resume-profile-actions select { flex: 1; }
