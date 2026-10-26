@@ -93,24 +93,28 @@ function locateResumeSection(key) {
   window.scrollTo({ top: Math.max(0, bounds.top + scrollY - inset), behavior: 'instant' });
   markResumeSection(key); scheduleResumePosition();
 }
-// 日期编辑提供真实日历、月份和年份三种精度；旧非标准文本须显式修改，渲染时不改值。
+// 日期编辑复用中文弹出日历及三种精度，旧非标准文本须显式修改，渲染时不改值。
 function workspaceDateControl(def, value) {
   const box = workspaceNode('div', '', 'workspace-date'); box.setAttribute('role', 'group');
   const precision = document.createElement('select'); precision.setAttribute('aria-label', '日期精度 · ' + def.label);
   for (const [key, label] of [['date', '年月日'], ['month', '年月'], ['year', '年份']]) precision.append(new Option(label, key));
   const raw = value == null ? '' : String(value);
-  // 非法旧日期也必须原样显示，不能让原生日历把 2 月 30 日等历史文本静默清空。
-  const validDay = /^\d{4}-\d{2}-\d{2}$/.test(raw) && Number.isFinite(Date.parse(raw)) && new Date(raw).toISOString().slice(0, 10) === raw && Number(raw.slice(0, 4)) > 0;
+  // 非法旧日期也必须原样显示，不能把 2 月 30 日等历史文本静默清空。
+  const validDay = !!LocalApplyDatePicker.parse(raw, 'date');
   const mode = !raw || validDay ? 'date' : /^\d{4}-(0[1-9]|1[0-2])$/.test(raw) && Number(raw.slice(0, 4)) > 0 ? 'month' : /^\d{4}$/.test(raw) && Number(raw) > 0 ? 'year' : 'legacy';
   if (mode === 'legacy' || def.type === 'text') precision.append(new Option(mode === 'legacy' ? '原有文本' : '文字说明', 'legacy'));
   precision.value = mode;
-  const input = document.createElement('input'); input.dataset.primary = '';
-  // 原生 date/month 自带浏览器日历，年份单独输入，避免把未知日期补成一月一日。
+  const input = document.createElement('input'); input.dataset.primary = ''; input.type = 'text'; input.autocomplete = 'off';
+  const entry = workspaceNode('div', '', 'workspace-date-entry');
+  const trigger = workspaceNode('button', '', 'workspace-date-trigger'); trigger.type = 'button'; trigger.setAttribute('aria-label', '打开日历 · ' + def.label);
+  // 固定 SVG 图标仅使用本地绘图指令，不拼接字段或用户内容。
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('d', 'M7 3v4m10-4v4M4 10h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1ZM8 14h2m4 0h2m-8 3h2'); icon.append(path); trigger.append(icon);
+  const status = workspaceNode('small', '', 'workspace-date-message'); status.setAttribute('role', 'alert'); status.hidden = true;
+  const picker = LocalApplyDatePicker.attach(input, trigger, { mode: () => precision.value, label: def.label, status });
+  // 统一使用可手输文本，格式校验和日历选择共享原有自动保存链路。
   function configure(next, text) {
-    input.type = next === 'date' || next === 'month' ? next : next === 'year' ? 'number' : 'text';
-    if (next === 'year') { input.min = '1000'; input.max = '9999'; input.step = '1'; }
-    else { input.removeAttribute('min'); input.removeAttribute('max'); input.removeAttribute('step'); }
-    input.value = text;
+    input.value = text; picker.refresh();
   }
   configure(mode, raw);
   precision.addEventListener('input', (event) => event.stopPropagation());
@@ -123,7 +127,7 @@ function workspaceDateControl(def, value) {
     if (compatible && previous !== input.value) box.dispatchEvent(new Event('change', { bubbles: true }));
   });
   Object.defineProperty(box, 'value', { get: () => input.value });
-  box.append(precision, input); return box;
+  entry.append(input, trigger); box.append(precision, entry, status); return box;
 }
 // 开放多选把用户添加的城市仅存为个人值，绝不将这些内容混入公共候选定义。
 function workspaceOpenMultiControl(def, value) {

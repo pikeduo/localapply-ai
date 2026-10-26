@@ -74,6 +74,31 @@ test('MV3 清单的脚本、页面及图标资源均存在', () => {
   }
 });
 
+// 日历计算不依赖 DOM 或网络，严格区分闰年、日期精度和历史非标准文本。
+test('中文日历：真实日期与年月/年份精度校验', () => {
+  const { context } = sandbox('options/date-picker.js'); const picker = context.LocalApplyDatePicker;
+  assert.equal(picker.parse('2000-02-29', 'date').day, 29);
+  for (const value of ['1900-02-29', '2027-02-30', '2027-13-01', '0000-01-01', '2027.06', '2027-2-01']) assert.equal(picker.parse(value, 'date'), null, value);
+  assert.equal(picker.parse('0001-01-01', 'date').year, 1);
+  assert.equal(picker.parse('2027', 'year').year, 2027);
+  assert.equal(picker.parse('2027-06', 'month').month, 6);
+  assert.equal(picker.parse('2027', 'month'), null);
+  assert.equal(picker.format(2027, 6, 18, 'year'), '2027');
+  assert.equal(picker.format(2027, 6, 18, 'month'), '2027-06');
+  assert.equal(picker.format(2000, 2, 29), '2000-02-29');
+});
+
+// 六行网格包含相邻月份并限制年份边界，避免跨月/跨年产生错误可选值。
+test('中文日历：六行日期、周起点及年份边界', () => {
+  const { context } = sandbox('options/date-picker.js'); const picker = context.LocalApplyDatePicker;
+  const days = picker.monthDays(2000, 2);
+  assert.equal(days.length, 42); assert.equal(days[0].value, '2000-01-30');
+  assert.equal(days.filter((day) => day?.currentMonth).length, 29);
+  assert.equal(picker.monthDays(1900, 2).filter((day) => day?.currentMonth).length, 28);
+  assert.ok(picker.monthDays(1, 1).filter(Boolean).every((day) => day.year >= 1));
+  assert.ok(picker.monthDays(9999, 12).filter(Boolean).every((day) => day.year <= 9999));
+});
+
 test('普通网页缺少扩展接口时返回中文打开指引，不抛 sendMessage 异常', async () => {
   for (const globals of [{}, { chrome: {} }, { chrome: { runtime: {} } }]) {
     const context = vm.createContext(globals);

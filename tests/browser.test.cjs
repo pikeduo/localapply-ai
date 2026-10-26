@@ -1866,10 +1866,11 @@ for (const withExtension of [true, false]) {
       await field('majorCategory').locator('select').selectOption(majorOption); await saved();
       await field('currentSalary').locator('input').fill('0'); await field('currentSalary').locator('input').blur(); await saved();
       await field('employmentCompany').locator('input').fill('合成工作单位'); await field('employmentCompany').locator('input').blur(); await saved();
-      assert.equal(await field('awardDate').locator('input').getAttribute('type'), 'date');
+      // 自绘日历使用可手输文本替代原生弹窗，精度和原有持久化断言保持不变。
+      assert.equal(await field('awardDate').locator('input').getAttribute('data-date-precision'), 'date');
       await field('awardDate').locator('input').fill('2028-02-29'); await field('awardDate').locator('input').blur(); await saved();
       await field('educationStartDate').locator('select').selectOption('month');
-      assert.equal(await field('educationStartDate').locator('input').getAttribute('type'), 'month');
+      assert.equal(await field('educationStartDate').locator('input').getAttribute('data-date-precision'), 'month');
       await field('educationStartDate').locator('input').fill('2024-09'); await field('educationStartDate').locator('input').blur(); await saved();
       await page.evaluate(async ({ profileId }) => {
         await dataCommand('setValue', { profileId, fieldId: 'builtin.birthDate', value: '2000.02（合成旧格式）' });
@@ -1931,6 +1932,67 @@ for (const withExtension of [true, false]) {
       database = (await page.evaluate(() => dataRequest('localapply:read'))).database;
       assert.deepEqual(database.fieldValues.find((row) => row.fieldId === 'builtin.expectedCities').value, ['合成乙城']);
       assert.equal(database.fieldValues.find((row) => row.fieldId === 'builtin.currentSalary').value, 0); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 自绘日期控件在两种入口运行真实保存链路；翻页和取消不能改动个人资料。
+for (const withExtension of [true, false]) {
+  test(`中文弹出日历：${withExtension ? '扩展' : 'file://'}选择、精度、键盘和主题`, { timeout: 120000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'calendar-')); let context; const errors = []; const mode = withExtension ? 'extension' : 'file';
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message));
+      await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      await page.evaluate(async () => { const database = (await dataRequest('localapply:read')).database; await dataCommand('setValue', { profileId: database.activeProfileId, fieldId: 'builtin.birthDate', value: '2000-02-01' }); await renderResumeCenter(); });
+      const birth = page.locator('#basicFields .center-field[data-field-id="builtin.birthDate"]'); const input = birth.locator('input'); const popup = page.getByRole('dialog', { name: '日期选择 · 出生日期', exact: true });
+      // 查询后台真实存储，不能把输入框中的暂存文本当作保存成功。
+      const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      // 等待既有自动保存队列结束后取得生日值。
+      const savedValue = async () => { await page.evaluate(() => resumeSaveQueue); return (await read()).fieldValues.find((row) => row.fieldId === 'builtin.birthDate')?.value ?? null; };
+      const revision = (await read()).revision;
+      await birth.getByRole('button', { name: '打开日历 · 出生日期', exact: true }).click(); await popup.waitFor();
+      assert.equal(await popup.locator('[aria-selected="true"]').getAttribute('data-value'), '2000-02-01');
+      await popup.getByRole('button', { name: '下个月', exact: true }).click();
+      await popup.getByRole('button', { name: '前一年', exact: true }).click();
+      await popup.getByRole('button', { name: '后一年', exact: true }).click();
+      assert.equal((await read()).revision, revision); await page.keyboard.press('Escape'); assert.equal(await popup.count(), 0); assert.equal(await input.inputValue(), '2000-02-01');
+      await input.click(); await popup.getByRole('button', { name: '选择年份', exact: true }).click();
+      await popup.getByRole('gridcell', { name: '2000年', exact: true }).click();
+      await popup.getByRole('gridcell', { name: '2000年2月', exact: true }).click();
+      await popup.getByRole('gridcell', { name: '2000年2月29日', exact: true }).click();
+      assert.equal(await savedValue(), '2000-02-29');
+      await input.click(); await input.press('ArrowDown'); await page.keyboard.press('ArrowLeft'); await page.keyboard.press('Enter'); assert.equal(await savedValue(), '2000-02-28');
+      // 手输错误日期显示错误且不写库，纠正后仍可沿用自动保存。
+      await input.fill('2001-02-29'); await input.blur(); assert.equal(await input.getAttribute('aria-invalid'), 'true'); assert.equal(await savedValue(), '2000-02-28');
+      await input.fill('2000-02-29'); await input.blur(); assert.equal(await savedValue(), '2000-02-29');
+      // 点击文本框打开日历后仍可直接打字，不能将输入焦点强行挪到日期按钮。
+      await input.click(); assert.equal(await input.evaluate((element) => document.activeElement === element), true);
+      await input.press('Control+A'); await input.pressSequentially('2000-02-28'); await input.press('Tab'); assert.equal(await savedValue(), '2000-02-28');
+      await birth.locator('select').selectOption('month'); assert.equal(await savedValue(), '2000-02');
+      await input.click(); await popup.getByRole('button', { name: '选择年份', exact: true }).click(); await popup.getByRole('gridcell', { name: '2001年', exact: true }).click(); await popup.getByRole('gridcell', { name: '2001年9月', exact: true }).click(); assert.equal(await savedValue(), '2001-09');
+      await birth.locator('select').selectOption('year'); assert.equal(await savedValue(), '2001');
+      await input.click(); await popup.getByRole('gridcell', { name: '2002年', exact: true }).click(); assert.equal(await savedValue(), '2002');
+      await input.click(); await popup.getByRole('button', { name: '清空日期', exact: true }).click(); assert.equal(await savedValue(), null);
+      const emptyRevision = (await read()).revision;
+      await birth.locator('select').selectOption('date'); await input.click(); assert.equal(await input.inputValue(), ''); assert.equal((await read()).revision, emptyRevision);
+      await popup.getByRole('button', { name: '选择当前日期', exact: true }).click();
+      const today = await page.evaluate(() => { const now = new Date(); return LocalApplyDatePicker.format(now.getFullYear(), now.getMonth() + 1, now.getDate()); }); assert.equal(await savedValue(), today);
+      // 明暗主题以及窄屏截图仅使用合成值，检查弹层在视口内且不制造横向滚动。
+      await input.fill('2000-02-01'); await input.blur(); await savedValue();
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; }); await input.click();
+      await page.screenshot({ path: path.join(testRoot, `calendar-light-${mode}.png`) });
+      const light = await popup.evaluate((element) => getComputedStyle(element).backgroundColor);
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+      assert.notEqual(await popup.evaluate((element) => getComputedStyle(element).backgroundColor), light);
+      await page.screenshot({ path: path.join(testRoot, `calendar-dark-${mode}.png`) });
+      await page.keyboard.press('Escape'); await page.setViewportSize({ width: 390, height: 844 }); await input.click(); await popup.waitFor();
+      const bounds = await popup.boundingBox(); assert.ok(bounds.x >= 11 && bounds.x + bounds.width <= 379 && bounds.y >= 11 && bounds.y + bounds.height <= 833);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.screenshot({ path: path.join(testRoot, `calendar-narrow-${mode}.png`) });
+      await workspacePage(page, 'aiSettings'); assert.equal(await popup.count(), 0, '模块切换应清理日历'); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
