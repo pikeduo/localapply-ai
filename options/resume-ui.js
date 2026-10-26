@@ -154,13 +154,13 @@ let resumeSaveQueue = Promise.resolve();
 const resumeExpandedGroups = new Map();
 // 大模块沿用参考页常用字段的分界；其他模块先展示少量字段，剩余内容由用户展开。
 const resumePrimaryFieldCounts = { '基本信息': 18, '求职意向': 8, '教育背景': 7, '实习经历': 7, '工作经历': 9, '项目经历': 7, '家庭成员': 4, '获奖经历': 4, '英语能力': 3, '证书信息': 4, '论文期刊': 4 };
-// 所有基础字段共用保存链路；复合编辑器标注内部输入，失败保留草稿且不重建其他字段。
+// 所有基础字段共用保存链路；地区提示区分搜索与确认，复合编辑失败保留草稿。
 function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = definition.label) {
   const multiline = definition.type === 'text' && typeof row?.value === 'string' && row.value.includes('\n');
   const input = workspaceControl(multiline ? { ...definition, type: 'textarea' } : definition, row?.value);
   const label = workspaceNode(input.tagName === 'DIV' ? 'div' : 'label', '', 'center-field'); label.dataset.fieldId = definition.fieldId;
   (input.querySelector('[data-primary]') || input).setAttribute('aria-label', (entryId ? '经历字段 · ' : '简历中心 · ') + displayLabel);
-  const hint = workspaceNode('small', '修改后离开输入框自动保存 · 保存失败保留输入'); hint.setAttribute('role', 'status');
+  const hint = workspaceNode('small', input.classList.contains('workspace-region') ? '选择候选或“使用输入内容”后保存 · 搜索不改动资料' : '修改后离开输入框自动保存 · 保存失败保留输入'); hint.setAttribute('role', 'status');
   let saved = row ? structuredClone(row) : null;
   input.addEventListener('input', () => { input.dataset.dirty = 'true'; });
   input.addEventListener('change', () => {

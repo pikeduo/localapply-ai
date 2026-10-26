@@ -1909,12 +1909,12 @@ for (const withExtension of [true, false]) {
       assert.equal(database.fieldValues.find((row) => row.fieldId === 'builtin.graduationDate').value, '2027');
       await field('graduationDate').locator('input').fill('2027-06'); await field('graduationDate').locator('input').blur(); await saved();
       await field('availableTime').locator('select').selectOption('legacy'); await field('availableTime').locator('input').fill('随时（合成说明）'); await field('availableTime').locator('input').blur(); await saved();
-      await field('homeRegion').locator('select').selectOption('江苏省'); await saved();
-      assert.ok(await field('homeRegion').locator('datalist').first().locator('option').count() >= 13);
-      await field('homeRegion').getByLabel('城市 · 家庭所在地区', { exact: true }).fill('南京市'); await field('homeRegion').getByLabel('城市 · 家庭所在地区', { exact: true }).blur(); await saved();
-      assert.ok(await field('homeRegion').locator('datalist').last().locator('option[value="玄武区"]').count() === 1);
-      await field('homeRegion').getByLabel('城市 · 家庭所在地区', { exact: true }).fill('合成市'); await field('homeRegion').getByLabel('城市 · 家庭所在地区', { exact: true }).blur(); await saved();
-      await field('homeRegion').getByLabel('区县 · 家庭所在地区', { exact: true }).fill('合成区'); await field('homeRegion').getByLabel('区县 · 家庭所在地区', { exact: true }).blur(); await saved();
+      // 省市区改为同一内容框内的联动面板；选择当前路径或手填确认后才写入。
+      const region = page.getByRole('dialog', { name: '地区选择 · 家庭所在地区', exact: true });
+      await field('homeRegion').locator('[data-primary]').click(); await region.getByRole('option', { name: '江苏省', exact: true }).click();
+      assert.ok(await region.getByRole('option').count() >= 13); await region.getByRole('option', { name: '南京市', exact: true }).click();
+      assert.equal(await region.getByRole('option', { name: '玄武区', exact: true }).count(), 1); await region.getByRole('button', { name: '使用当前地区', exact: true }).click(); await saved();
+      await field('homeRegion').locator('[data-primary]').fill('江苏省 / 合成市 / 合成区'); await region.getByRole('button', { name: '使用输入内容', exact: true }).click(); await saved();
       assert.equal(await field('homeRegion').locator('[data-primary]').inputValue(), '江苏省 / 合成市 / 合成区');
       await field('expectedCities').getByRole('textbox').fill('合成甲城、合成乙城'); await field('expectedCities').getByRole('textbox').press('Enter'); await saved();
       database = (await page.evaluate(() => dataRequest('localapply:read'))).database;
@@ -1941,6 +1941,7 @@ for (const withExtension of [true, false]) {
       assert.equal(await field('educationStartDate').locator('input').inputValue(), '2024-09');
       assert.equal(await field('graduationDate').locator('input').inputValue(), '2027-06');
       assert.equal(await field('availableTime').locator('input').inputValue(), '随时（合成说明）');
+      assert.equal(await field('homeRegion').locator('[data-primary]').inputValue(), '江苏省 / 合成市 / 合成区');
       assert.equal(await field('employmentCompany').locator('input').inputValue(), '合成工作单位');
       assert.equal(await field('identityType').locator('select').inputValue(), '护照');
       database = (await page.evaluate(() => dataRequest('localapply:read'))).database;
@@ -2146,6 +2147,47 @@ for (const withExtension of [true, false]) {
       await check(); await workspacePage(page, 'fieldLibrary'); assert.equal(await page.locator('.library-row[data-field-id="builtin.github"]').count(), 0); await workspacePage(page, 'resumeCenter');
       await page.locator('#resumeToc').getByRole('button', { name: '自我介绍', exact: true }).click(); await page.screenshot({ path: path.join(testRoot, `modules-pruned-${mode}.png`) });
       await page.reload(); await workspacePage(page, 'resumeCenter'); await check(); await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter'); await check(); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 单框地区选择使用真实本地候选，搜索/浏览不入库，确认后的自由文本和地区路径可重启恢复。
+for (const withExtension of [true, false]) {
+  test(`地区单框选择：${withExtension ? '扩展' : 'file://'}联动、搜索、手填和取消`, { timeout: 90000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'region-picker-')); let context; const errors = []; const mode = withExtension ? 'extension' : 'file';
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      let page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      await page.evaluate(async () => { const profileId = (await dataRequest('localapply:read')).database.activeProfileId; await dataCommand('setValue', { profileId, fieldId: 'builtin.homeRegion', value: '合成旧地区（海外）' }); await dataCommand('setValue', { profileId, fieldId: 'builtin.schoolRegion', value: '合成其他地区' }); await renderResumeCenter(); });
+      const field = page.locator('#basicFields [data-field-id="builtin.homeRegion"]'); const input = field.locator('[data-primary]'); const popup = page.getByRole('dialog', { name: '地区选择 · 家庭所在地区', exact: true });
+      // 直接读取规范库确认保存，不能将搜索框文字当作已经保存的个人值。
+      const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      // 等待现有串行队列完成后取得地区字段值。
+      const saved = async () => { await page.evaluate(() => resumeSaveQueue); return (await read()).fieldValues.find((row) => row.fieldId === 'builtin.homeRegion').value; };
+      assert.equal(await field.locator('input').count(), 1); assert.equal(await page.locator('.workspace-region-parts, .workspace-region select, .workspace-region datalist').count(), 0);
+      assert.equal(await input.inputValue(), '合成旧地区（海外）'); const revision = (await read()).revision;
+      await input.click(); await popup.getByRole('option', { name: '江苏省', exact: true }).click(); await popup.getByRole('option', { name: '南京市', exact: true }).click();
+      assert.equal((await read()).revision, revision); assert.equal(await popup.getByRole('option', { name: '玄武区', exact: true }).count(), 1);
+      await popup.getByRole('button', { name: '使用当前地区', exact: true }).click(); assert.equal(await saved(), '江苏省 / 南京市');
+      await input.click(); await popup.getByRole('option', { name: '玄武区', exact: true }).click(); assert.equal(await saved(), '江苏省 / 南京市 / 玄武区');
+      const selectedRevision = (await read()).revision;
+      await input.fill('长安区'); assert.ok(await popup.getByRole('option').count() > 1); assert.equal((await read()).revision, selectedRevision);
+      await page.keyboard.press('Escape'); assert.equal(await input.inputValue(), '江苏省 / 南京市 / 玄武区'); assert.equal(await popup.count(), 0);
+      await input.fill('浙江'); await page.getByRole('heading', { name: '简历中心', exact: true }).click(); assert.equal(await input.inputValue(), '江苏省 / 南京市 / 玄武区'); assert.equal((await read()).revision, selectedRevision);
+      await input.fill('陕西 长安'); await popup.getByRole('option', { name: '陕西省 / 西安市 / 长安区', exact: true }).click(); assert.equal(await saved(), '陕西省 / 西安市 / 长安区');
+      await input.fill('海外 / 合成新地区'); await popup.getByRole('button', { name: '使用输入内容', exact: true }).click(); assert.equal(await saved(), '海外 / 合成新地区');
+      await input.fill('南京 玄武'); await input.press('Enter'); assert.equal(await saved(), '江苏省 / 南京市 / 玄武区');
+      await input.click(); await popup.getByRole('button', { name: '清空', exact: true }).click(); assert.equal(await saved(), null);
+      await input.fill('江苏省 / 合成市 / 合成区'); await input.press('Control+Enter'); assert.equal(await saved(), '江苏省 / 合成市 / 合成区');
+      assert.equal(await page.locator('#basicFields [data-field-id="builtin.schoolRegion"] [data-primary]').inputValue(), '合成其他地区');
+      // 公共地名搜索截图仅含合成个人资料，检查明暗主题及 390px 视口的弹窗边界。
+      await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; }); await input.fill('长安区'); await page.screenshot({ path: path.join(testRoot, `region-picker-light-${mode}.png`) });
+      await page.keyboard.press('Escape'); await page.locator('#themeToggle').click(); await input.click(); await page.screenshot({ path: path.join(testRoot, `region-picker-dark-${mode}.png`) });
+      await page.keyboard.press('Escape'); await page.setViewportSize({ width: 390, height: 844 }); await input.fill('南京'); await popup.waitFor(); const bounds = await popup.boundingBox();
+      assert.ok(bounds.x >= 11 && bounds.x + bounds.width <= 379 && bounds.y >= 11 && bounds.y + bounds.height <= 833); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); await page.screenshot({ path: path.join(testRoot, `region-picker-narrow-${mode}.png`) });
+      await workspacePage(page, 'aiSettings'); assert.equal(await popup.count(), 0); await workspacePage(page, 'resumeCenter'); assert.equal(await input.inputValue(), '江苏省 / 合成市 / 合成区');
+      await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter'); assert.equal(await page.locator('#basicFields [data-field-id="builtin.homeRegion"] [data-primary]').inputValue(), '江苏省 / 合成市 / 合成区'); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }

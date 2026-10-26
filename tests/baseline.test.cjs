@@ -99,6 +99,21 @@ test('中文日历：六行日期、周起点及年份边界', () => {
   assert.ok(picker.monthDays(9999, 12).filter(Boolean).every((day) => day.year <= 9999));
 });
 
+// 地区搜索只访问离线公共地名，多个关键词和重名区县都保留完整路径。
+test('地区搜索：省市区路径、多关键词和重名候选', () => {
+  const { context } = sandbox('data/regions.js'); vm.runInContext(source('options/region-picker.js'), context); const picker = context.LocalApplyRegionPicker;
+  const city = picker.search('江苏 南京'); assert.ok(city.paths.some((path) => path.join('/') === '江苏省/南京市')); assert.ok(city.paths.some((path) => path.join('/') === '江苏省/南京市/玄武区'));
+  const districts = picker.search('长安区'); assert.ok(districts.paths.some((path) => path[0] === '陕西省')); assert.ok(districts.paths.some((path) => path[0] === '河北省'));
+  assert.equal(picker.search('南京/玄武').paths[0].join(' / '), '江苏省 / 南京市 / 玄武区');
+});
+
+// 查询不按正则解释且显示结果有界，手填新地区不依赖伪造候选。
+test('地区搜索：空词、未知地区及结果数量限制', () => {
+  const { context } = sandbox('data/regions.js'); vm.runInContext(source('options/region-picker.js'), context); const picker = context.LocalApplyRegionPicker;
+  assert.equal(picker.search('  ').count, 0); assert.equal(picker.search('合成海外新地区').count, 0); assert.equal(picker.search('.*<script>').count, 0);
+  const found = picker.search('广东'); assert.ok(found.count > 60); assert.equal(found.paths.length, 60);
+});
+
 test('普通网页缺少扩展接口时返回中文打开指引，不抛 sendMessage 异常', async () => {
   for (const globals of [{}, { chrome: {} }, { chrome: { runtime: {} } }]) {
     const context = vm.createContext(globals);

@@ -157,38 +157,9 @@ function workspaceOpenMultiControl(def, value) {
   add.addEventListener('click', append); Object.defineProperty(box, 'value', { get: () => [...values] });
   render(); box.append(tags, input, add, status); return box;
 }
-// 离线地区编辑提供省市区联动候选及自由输入，兼容旧文本、区划更新和海外地址。
+// 地区仅保留一个可搜索内容框，选定或手填确认后沿用原有保存链路。
 function workspaceRegionControl(def, value) {
-  const box = workspaceNode('div', '', 'workspace-region'); box.setAttribute('role', 'group');
-  const input = document.createElement('input'); input.dataset.primary = ''; input.value = value == null ? '' : String(value);
-  input.placeholder = '完整地区，也可使用下方省市区控件';
-  const parts = workspaceNode('div', '', 'workspace-region-parts');
-  const province = document.createElement('select'); province.setAttribute('aria-label', '省份 · ' + def.label); province.append(new Option('选择省份', ''));
-  const provinces = ['北京市', '天津市', '河北省', '山西省', '内蒙古自治区', '辽宁省', '吉林省', '黑龙江省', '上海市', '江苏省', '浙江省', '安徽省', '福建省', '江西省', '山东省', '河南省', '湖北省', '湖南省', '广东省', '广西壮族自治区', '海南省', '重庆市', '四川省', '贵州省', '云南省', '西藏自治区', '陕西省', '甘肃省', '青海省', '宁夏回族自治区', '新疆维吾尔自治区', '香港特别行政区', '澳门特别行政区', '台湾省', '海外/其他'];
-  provinces.forEach((name) => province.append(new Option(name, name)));
-  const city = document.createElement('input'); city.placeholder = '城市'; city.setAttribute('aria-label', '城市 · ' + def.label);
-  const district = document.createElement('input'); district.placeholder = '区县（可留空）'; district.setAttribute('aria-label', '区县 · ' + def.label);
-  const regions = globalThis.LocalApplyRegions || {};
-  const cities = document.createElement('datalist'); cities.id = 'region-cities-' + def.fieldId; city.setAttribute('list', cities.id);
-  const districts = document.createElement('datalist'); districts.id = 'region-districts-' + def.fieldId; district.setAttribute('list', districts.id);
-  // 城市/区县用可输入的原生候选列表，不能将离线快照中缺失的新地名当作无效个人值。
-  function refreshOptions() {
-    cities.replaceChildren(...Object.keys(regions[province.value] || {}).map((name) => new Option(name, name)));
-    districts.replaceChildren(...(regions[province.value]?.[city.value] || []).map((name) => new Option(name, name)));
-  }
-  // 只有明确的分隔符才拆分已有值，单个城市名不猜测省份。
-  function syncParts() { const chunks = input.value.split(/\s*\/\s*/); province.value = provinces.includes(chunks[0]) ? chunks[0] : ''; city.value = chunks.length > 1 ? chunks[1] : ''; district.value = chunks.length > 2 ? chunks.slice(2).join(' / ') : ''; refreshOptions(); }
-  input.addEventListener('change', syncParts); syncParts();
-  city.addEventListener('input', refreshOptions);
-  for (const part of [province, city, district]) part.addEventListener('change', (event) => {
-    event.stopPropagation(); if (part === province) { city.value = ''; district.value = ''; }
-    else if (part === city) district.value = '';
-    refreshOptions();
-    input.value = [province.value, city.value.trim(), district.value.trim()].filter(Boolean).join(' / ');
-    box.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-  Object.defineProperty(box, 'value', { get: () => input.value }); parts.append(province, city, district);
-  box.append(input, parts, cities, districts, workspaceNode('small', '省、市、区县联动候选均在本地；支持手动输入新地区或海外地址。')); return box;
+  return LocalApplyRegionPicker.create(def.label, value);
 }
 // 按定义和参考控件创建编辑器；旧日期文本保持兼容，静态下拉完整显示并保留历史自定义值。
 function workspaceControl(def, value) {
