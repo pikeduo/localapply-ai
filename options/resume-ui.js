@@ -263,7 +263,7 @@ const resumeExpandedGroups = new Map();
 const resumeRecordExpansion = new Map(); // 每条记录独立收起/展开，仅影响本页显示，不改字段值。
 // 大模块沿用参考页常用字段的分界；其他模块先展示少量字段，剩余内容由用户展开。
 const resumePrimaryFieldCounts = { '基本信息': 18, '求职意向': 8, '教育背景': 7, '实习经历': 7, '工作经历': 9, '项目经历': 7, '家庭成员': 4, '获奖经历': 4, '英语能力': 3, '证书信息': 4, '论文期刊': 4 };
-// 所有记录共用保存链路，普通字段默认隐藏提示；accessibleLabel 区分家庭姓名与本人姓名。
+// 所有记录共用保存链路，成功后隐藏字段提示，失败时显示原因；accessibleLabel 区分家庭姓名与本人姓名。
 function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = definition.label, accessibleLabel = displayLabel) {
   const multiline = definition.type === 'text' && typeof row?.value === 'string' && row.value.includes('\n');
   const input = workspaceControl(multiline ? { ...definition, type: 'textarea' } : definition, row?.value);
@@ -289,9 +289,9 @@ function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = d
         await dataCommand('setValue', { profileId, entryId, fieldId: definition.fieldId, value }, latest.revision);
         saved = { value };
         if (JSON.stringify(workspaceValue(input, definition)) === JSON.stringify(value)) input.dataset.dirty = '';
-        hint.textContent = '已保存在本地 · 手动资料'; $('#centerStatus').textContent = '已保存在本地';
+        hint.textContent = ''; hint.hidden = true; $('#centerStatus').textContent = '已保存在本地';
         if (workspaceInitialized) await refreshWorkspace();
-      } catch (error) { hint.textContent = '保存失败：' + error.message; $('#centerStatus').textContent = hint.textContent; }
+      } catch (error) { hint.hidden = false; hint.textContent = '保存失败：' + error.message; $('#centerStatus').textContent = hint.textContent; }
     });
   });
   label.append(workspaceNode('span', displayLabel), input, hint);
