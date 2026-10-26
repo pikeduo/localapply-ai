@@ -1,6 +1,6 @@
 # localapply-ai｜开发进度与阶段验收记录
 
-> **文档版本：** v2.6
+> **文档版本：** v2.7
 > **更新日期：** 2026-10-26
 > **对应计划：** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) **v2.0**（2026-10-25 起采用新版任务和阶段编号）
 > **项目：** `localapply-ai`（基于 [`xiaoxiaobaijiangjun/wangshen-autofill`](https://github.com/xiaoxiaobaijiangjun/wangshen-autofill) Fork）  
@@ -217,6 +217,8 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 
 增加真实鼠标拖动、右下角坐标、缩窗边界及动态无障碍标签表单断言，保留填写/预览/日志/权限回归。首轮相关浏览器 17 通过 / 2 失败，发现拖动后缩窗时旧坐标影响自动宽度，修复宿主宽度后悬浮专项 10/10 通过。最终 `npm test` **109/109**；`node --test --test-timeout=120000 --test-name-pattern='悬浮卡片|阶段四' tests/browser.test.cjs` **26/26**（49.05 秒），均 0 失败/跳过，未重复完整 E2E。日志 `.browser-tests/floating-prompt-unit-final.log`、`floating-prompt-final.log`；首轮及专项日志 `floating-prompt-ui.log`、`floating-prompt-ui-repair.log`；截图 `application-prompt-bottom-right.png`、`application-prompt-dragged.png`。均使用合成资料及本地 Mock；真实 ATS 未抽检，未改 Schema、依赖或密钥模块，未提交或推送。
 
+**检测提示视觉调整（2026-10-26）：** 提示改为带蓝色简历图标、状态标记、分层文案和柔和阴影的小卡片；默认右侧留白 32px、底部留白 96px，小视口自动收缩留白。保留整卡拖动、点击打开、拖动后不误点击及键盘焦点；只更新检测数量文案，不改扫描或数据逻辑。`node --test --test-timeout=120000 --test-name-pattern='悬浮卡片' tests/browser.test.cjs` 实测 **10/10**（11.75 秒），0 失败/跳过，包含新留白坐标、窄窗、拖动、填写及权限回归；本轮仅运行相关浏览器与语法检查，未重复完整测试。已人工检查桌面和窄窗截图：`.browser-tests/application-prompt-bottom-right.png`、`application-prompt-narrow.png`；日志 `.browser-tests/floating-prompt-style.log`。未新增依赖、提交或推送。
+
 ### 阶段 5｜岗位识别与投递记录工作台（新增，未开始）
 
 - [ ] 本地规则识别岗位与公司，用户确认记录内容。
@@ -372,5 +374,6 @@ Schema 保持 v3，仅新增 `attachField`（复用定义并创建空绑定）�
 | 2026-10-26 | v2.4 | 分类完整卡片、全字段定位及滚轮目录同步；修复页底短卡片误选与窗口缩小后的目录可见性，最终基础 106、相关浏览器 22 项通过 | 本地真实滚轮测试与明暗截图；本文件阶段四增补 |
 | 2026-10-26 | v2.5 | 移除整行分类/搜索/刷新工具，增加简历重命名、确认删除及关联数据清理，保留其他简历与目录；基础 109、相关浏览器 48 项通过 | 本地数据契约、两种入口及整个浏览器重启；本文件阶段四增补 |
 | 2026-10-26 | v2.6 | 检测提示改为右下角可拖动，修复缩窗边界及持续更新时的动态检测，完善无障碍标签识别；基础 109、相关浏览器 26 项通过 | 真实鼠标拖动与合成页面检测；本文件阶段四增补 |
+| 2026-10-26 | v2.7 | 检测提示改为图标小卡片，增加右侧和底部留白；相关浏览器 10 项通过，并检查桌面及窄窗截图 | 本地实际测试；本文件阶段四视觉调整 |
 
 > **维护要求：** Codex 每次完成一个功能块、修复阻断性缺陷或结束阶段时，都应更新本文件。**以真实代码和实际运行记录为准，绝不虚构已完成项目或测试结果。**

@@ -1211,11 +1211,16 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
     await t.test('自动显示网申提示，但没有读取字段或调用模型', async () => {
       await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
       const rect = await page.locator('#wsa-floatbar-host').boundingBox(); const viewport = page.viewportSize();
-      assert.ok(Math.abs(viewport.width - rect.x - rect.width - 18) < 2 && Math.abs(viewport.height - rect.y - rect.height - 18) < 2, '检测提示默认位于右下角');
+      assert.ok(Math.abs(viewport.width - rect.x - rect.width - 32) < 2 && Math.abs(viewport.height - rect.y - rect.height - 96) < 2, '检测卡片默认与右侧留出 32px、底部留出 96px');
       const result = await options.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'wsa:getState' }), tabId);
       assert.equal(result.state.authorized, false); assert.equal(result.state.fields.length, 0); assert.equal(api.calls.length, 0);
       assert.equal(await page.locator('#wsa-floatbar-host').evaluate((host) => host.shadowRoot), null);
       await page.screenshot({ path: path.join(testRoot, 'application-prompt-bottom-right.png') });
+      // 窄窗保持新卡片的留白与完整可见，恢复尺寸后再验证用户拖动。
+      await page.setViewportSize({ width: 375, height: 360 });
+      await page.waitForFunction(() => { const rect = document.getElementById('wsa-floatbar-host').getBoundingClientRect(); return rect.left >= 10 && rect.right <= innerWidth - 10 && rect.top >= 10 && innerHeight - rect.bottom >= 64; });
+      await page.screenshot({ path: path.join(testRoot, 'application-prompt-narrow.png') });
+      await page.setViewportSize(viewport);
     });
     await t.test('检测提示可拖动，松手不误打开，缩窗后仍在视口内', async () => {
       const before = await page.locator('#wsa-floatbar-host').boundingBox(); const viewport = page.viewportSize();
