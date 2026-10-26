@@ -200,6 +200,17 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 .workspace-multi-entry .workspace-tags button { padding: 3px 8px; background: var(--brand-weak); color: var(--brand); border-color: transparent; }
 .workspace-multi > button { justify-self: start; }
 .workspace-region > small { color: var(--sub); }
+/* 专业分类可在原内容框搜索；候选弹层不挤动其他字段，已选与键盘活动项分别高亮。 */
+.workspace-search-select { position: relative; min-width: 0; }
+.workspace-select-entry { position: relative; }
+.workspace-select-entry > input[type="text"] { padding-right: 38px; }
+.workspace-select-trigger { position: absolute; top: 1px; right: 1px; bottom: 1px; width: 36px; border: 0; border-radius: 0 8px 8px 0; background: transparent; color: var(--sub); cursor: pointer; }
+.workspace-select-popup { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 25; padding: 6px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--card); box-shadow: 0 8px 24px #0002; }
+.workspace-select-options { max-height: 280px; overflow-y: auto; overscroll-behavior: contain; }
+.workspace-select-option { display: block; width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ink); text-align: left; font: inherit; overflow-wrap: anywhere; cursor: pointer; }
+.workspace-select-option[aria-selected="true"] { background: var(--brand-weak); color: var(--brand); }
+.workspace-select-option.active, .workspace-select-option:hover { border-color: var(--brand); }
+.workspace-select-popup > small { display: block; padding: 6px 10px 2px; color: var(--sub); }
 .resume-profile-controls { padding: 12px; margin: -12px -12px 8px; border: 1px solid transparent; border-radius: 12px; }
 /* 当前简历及管理操作独立成行，窄窗沿用工作台换行规则。 */
 .resume-profile-actions select { flex: 1; }

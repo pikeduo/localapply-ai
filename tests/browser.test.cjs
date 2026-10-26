@@ -1891,11 +1891,21 @@ for (const withExtension of [true, false]) {
         assert.equal(await page.locator('#resumeToc').getByRole('button', { name: group, exact: true }).count(), 1);
       }
       assert.equal(await page.locator('.entry-card,[data-add-entry-kind]').count(), 0);
-      assert.equal(await field('majorCategory').locator('select option').count(), 239);
+      assert.equal(initial.fieldDefinitions.find((item) => item.fieldId === 'builtin.majorCategory').options.length, 238);
       assert.equal(await field('ethnic').locator('select option').count(), 57);
       await field('identityType').locator('select').selectOption('护照'); await saved();
-      const majorOption = await field('majorCategory').locator('select option').last().getAttribute('value');
-      await field('majorCategory').locator('select').selectOption(majorOption); await saved();
+      // 专业分类改为真实搜索下拉，保留完整候选、仅确认保存、取消恢复和键盘选择的回归。
+      const major = field('majorCategory'); const majorInput = major.getByRole('combobox'); const searchRevision = (await page.evaluate(() => dataRequest('localapply:read'))).database.revision;
+      await majorInput.click(); assert.equal(await major.getByRole('option').count(), 239); await majorInput.fill('计算机'); assert.equal(await major.getByRole('option').count(), 2);
+      assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, searchRevision);
+      await major.locator('.workspace-select-popup').screenshot({ path: path.join(testRoot, `major-category-search-${mode}.png`) });
+      await major.getByRole('option', { name: '学术型硕士 / 工学 / 计算机科学与技术', exact: true }).click(); await saved();
+      await major.getByRole('button', { name: '展开选项 · 专业分类', exact: true }).click(); assert.equal(await major.getByRole('option').count(), 239); assert.equal(await major.locator('[role="option"][aria-selected="true"]').textContent(), '学术型硕士 / 工学 / 计算机科学与技术');
+      const confirmedRevision = (await page.evaluate(() => dataRequest('localapply:read'))).database.revision;
+      await majorInput.fill('合成无匹配专业'); assert.equal(await major.getByRole('option').count(), 0); await majorInput.press('Enter'); await majorInput.press('Escape'); assert.equal(await majorInput.inputValue(), '学术型硕士 / 工学 / 计算机科学与技术');
+      assert.equal((await page.evaluate(() => dataRequest('localapply:read'))).database.revision, confirmedRevision);
+      await majorInput.fill('学术型硕士 艺术学 音乐'); assert.equal(await major.getByRole('option').count(), 1); await majorInput.press('ArrowDown'); await majorInput.press('Enter'); await saved();
+      const majorOption = initial.fieldDefinitions.find((item) => item.fieldId === 'builtin.majorCategory').options.at(-1); assert.equal(await majorInput.inputValue(), majorOption);
       await field('currentSalary').locator('input').fill('0'); await field('currentSalary').locator('input').blur(); await saved();
       await field('employmentCompany').locator('input').fill('合成工作单位'); await field('employmentCompany').locator('input').blur(); await saved();
       // 自绘日历使用可手输文本替代原生弹窗，精度和原有持久化断言保持不变。
@@ -1968,9 +1978,14 @@ for (const withExtension of [true, false]) {
       assert.equal(await field('homeRegion').locator('[data-primary]').inputValue(), '江苏省 / 合成市 / 合成区');
       assert.equal(await field('employmentCompany').locator('input').inputValue(), '合成工作单位');
       assert.equal(await field('identityType').locator('select').inputValue(), '护照');
+      await expandResumeGroup(page, '教育背景'); assert.equal(await field('majorCategory').getByRole('combobox').inputValue(), majorOption);
       database = (await page.evaluate(() => dataRequest('localapply:read'))).database;
       assert.deepEqual(database.fieldValues.find((row) => row.fieldId === 'builtin.expectedCities').value, ['合成乙城']);
-      assert.equal(database.fieldValues.find((row) => row.fieldId === 'builtin.currentSalary').value, 0); assert.deepEqual(errors, []);
+      assert.equal(database.fieldValues.find((row) => row.fieldId === 'builtin.currentSalary').value, 0);
+      // 附加教育记录沿用同一可搜索模板，其选中值不得覆盖首条记录。
+      await expandResumeGroup(page, '教育背景'); const education = page.locator('.resume-group[data-group="教育背景"]'); await education.locator('[data-module-action="add"]').click(); await page.waitForFunction(() => document.querySelectorAll('.resume-group[data-group="教育背景"] .resume-record').length === 2);
+      const secondEducation = education.locator('.resume-record:not(.resume-primary-record)'); await secondEducation.locator('.resume-more-toggle').click(); const secondMajor = secondEducation.locator('[data-field-id="builtin.majorCategory"]'); await secondMajor.getByRole('combobox').fill('软件工程'); await secondMajor.getByRole('option', { name: '学术型硕士 / 工学 / 软件工程', exact: true }).click(); await saved();
+      assert.equal(await education.locator('.resume-primary-record [data-field-id="builtin.majorCategory"]').getByRole('combobox').inputValue(), majorOption); assert.equal(await secondMajor.getByRole('combobox').inputValue(), '学术型硕士 / 工学 / 软件工程'); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }

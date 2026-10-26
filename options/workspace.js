@@ -162,12 +162,66 @@ function workspaceOpenMultiControl(def, value) {
 function workspaceRegionControl(def, value) {
   return LocalApplyRegionPicker.create(def.label, value);
 }
-// 按定义和参考控件创建编辑器；旧日期文本保持兼容，静态下拉完整显示并保留历史自定义值。
+// 搜索下拉的 DOM 编号仅在当前页面递增，不包含资料值。
+let workspaceSelectSequence = 0;
+// 搜索下拉只在选定候选时保存，搜索词不进入个人值；每条教育记录保持独立状态。
+function workspaceSearchSelectControl(def, value) {
+  const box = workspaceNode('div', '', 'workspace-search-select'); box.setAttribute('role', 'group');
+  const entry = workspaceNode('div', '', 'workspace-select-entry');
+  const input = document.createElement('input'); input.type = 'text'; input.dataset.primary = ''; input.autocomplete = 'off'; input.placeholder = '尚未填写 · 输入关键词搜索';
+  input.setAttribute('role', 'combobox'); input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('aria-haspopup', 'listbox'); input.setAttribute('aria-expanded', 'false');
+  const trigger = workspaceNode('button', '⌄', 'workspace-select-trigger'); trigger.type = 'button'; trigger.setAttribute('aria-label', '展开选项 · ' + def.label);
+  const popup = workspaceNode('div', '', 'workspace-select-popup'); popup.hidden = true;
+  const list = workspaceNode('div', '', 'workspace-select-options'); list.id = 'workspaceSelect' + (++workspaceSelectSequence); list.setAttribute('role', 'listbox'); list.setAttribute('aria-label', def.label + '候选'); input.setAttribute('aria-controls', list.id);
+  const status = workspaceNode('small'); status.setAttribute('role', 'status');
+  let current = value == null ? '' : String(value); let matches = []; let active = -1;
+  const options = ['', ...new Set([...(def.options || []), ...(current ? [current] : [])])]; input.value = current;
+  Object.defineProperty(box, 'value', { get: () => current });
+  // 收起恢复已确认值，取消搜索不会清空或改写资料。
+  function close() { popup.hidden = true; input.value = current; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); }
+  // 高亮键盘活动候选，并保留当前已选项的独立标记。
+  function mark() {
+    [...list.children].forEach((option, index) => option.classList.toggle('active', index === active));
+    const option = list.children[active]; if (option) { input.setAttribute('aria-activedescendant', option.id); option.scrollIntoView({ block: 'nearest' }); } else input.removeAttribute('aria-activedescendant');
+  }
+  // 只提交完整候选值；事件复用现有串行保存、版本冲突和错误处理链路。
+  function choose(index) { if (index < 0 || index >= matches.length) return; current = matches[index]; close(); box.dispatchEvent(new Event('change', { bubbles: true })); input.focus({ preventScroll: true }); }
+  // 多关键词匹配完整分类路径，不截断候选；模型或用户文字只通过 textContent 展示。
+  function render(query = '') {
+    const words = query.trim().toLocaleLowerCase().split(/[\s/、，,]+/).filter(Boolean);
+    matches = options.filter((option) => words.every((word) => option.toLocaleLowerCase().includes(word))); list.replaceChildren();
+    matches.forEach((value, index) => {
+      const option = workspaceNode('button', value || '尚未填写', 'workspace-select-option'); option.type = 'button'; option.tabIndex = -1; option.id = list.id + '-' + index;
+      option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(value === current)); option.title = value;
+      option.addEventListener('mousedown', (event) => event.preventDefault()); option.addEventListener('click', () => choose(index)); list.append(option);
+    });
+    active = matches.indexOf(current); if (active < 0 && matches.length) active = 0;
+    status.textContent = matches.length ? '共 ' + matches.length + ' 个选项' : '未找到匹配选项，请更换关键词';
+    popup.hidden = false; input.setAttribute('aria-expanded', 'true'); mark();
+  }
+  // 点击已选内容仍打开完整列表；真正输入后才过滤，避免选中项把其他候选隐藏。
+  input.addEventListener('focus', () => { render(); input.select(); });
+  input.addEventListener('click', () => { if (popup.hidden) { render(); input.select(); } });
+  input.addEventListener('input', (event) => { event.stopPropagation(); render(input.value); });
+  input.addEventListener('change', (event) => event.stopPropagation());
+  input.addEventListener('keydown', (event) => {
+    if (event.isComposing) return;
+    if (event.key === 'Escape') { event.preventDefault(); close(); }
+    else if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); if (popup.hidden) render(); else if (matches.length) { active = (active + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length; mark(); } }
+    else if (event.key === 'Enter') { event.preventDefault(); if (!popup.hidden) choose(active); }
+  });
+  trigger.addEventListener('mousedown', (event) => event.preventDefault());
+  trigger.addEventListener('click', () => { if (popup.hidden) { input.focus(); render(); input.select(); } else close(); });
+  box.addEventListener('focusout', (event) => { if (!box.contains(event.relatedTarget)) close(); });
+  entry.append(input, trigger); popup.append(list, status); box.append(entry, popup); return box;
+}
+// 按定义创建编辑器；专业分类支持搜索，其他下拉及旧日期和自定义历史值保持兼容。
 function workspaceControl(def, value) {
   const standard = def.fieldId?.startsWith('builtin.') && WangshenTemplates.FIELD_INDEX[def.fieldId.slice(8)];
   if (def.type === 'date' || (def.type === 'text' && standard?.widget === 'date')) return workspaceDateControl(def, value);
   if (def.type === 'text' && standard?.widget === 'region') return workspaceRegionControl(def, value);
   if (def.type === 'multiSelect' && !def.options.length) return workspaceOpenMultiControl(def, value);
+  if (def.type === 'select' && def.fieldId === 'builtin.majorCategory') return workspaceSearchSelectControl(def, value);
   let input;
   if (['boolean', 'select', 'multiSelect'].includes(def.type)) {
     input = document.createElement('select'); input.multiple = def.type === 'multiSelect';
