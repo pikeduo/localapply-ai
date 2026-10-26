@@ -150,6 +150,10 @@ async function confirmResume() {
 }
 // 串行保存同一页面的字段；读取最新版本后只写当前行，避免多个自动保存互相覆盖。
 let resumeSaveQueue = Promise.resolve();
+// 展开状态只驻留当前设置页，按档案隔离；切换导航或重绘不影响未保存的字段草稿。
+const resumeExpandedGroups = new Map();
+// 大模块沿用参考页常用字段的分界；其他模块先展示少量字段，剩余内容由用户展开。
+const resumePrimaryFieldCounts = { '基本信息': 18, '求职意向': 8, '教育背景': 7, '实习经历': 7, '工作经历': 9, '项目经历': 7, '家庭成员': 4, '获奖经历': 4, '英语能力': 3, '证书信息': 4, '论文期刊': 4 };
 // 所有基础字段共用保存链路；复合编辑器标注内部输入，失败保留草稿且不重建其他字段。
 function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = definition.label) {
   const multiline = definition.type === 'text' && typeof row?.value === 'string' && row.value.includes('\n');
@@ -204,7 +208,34 @@ async function clearLegacyResumeEntries() {
   } catch (error) { status.textContent = '清理失败：' + error.message; }
   finally { button.disabled = false; }
 }
-// 只渲染现有基础字段分类，旧经历仅提供清理提示，不自动生成新模块或覆盖基础值。
+// 分类保留全部编辑器，只通过显隐收起选填字段；不删除节点、清空值或触发保存。
+function resumeGroupEditor(profileId, group, index) {
+  const section = workspaceNode('section', '', 'resume-group'); section.dataset.group = group.group;
+  const header = workspaceNode('div', '', 'resume-group-header');
+  const heading = workspaceNode('h3', group.group, 'center-group-heading'); heading.id = 'resumeGroupHeading' + index;
+  section.setAttribute('aria-labelledby', heading.id); header.append(heading); section.append(header);
+  const limit = Object.hasOwn(resumePrimaryFieldCounts, group.group) ? resumePrimaryFieldCounts[group.group] : group.items.length > 4 ? 4 : 2;
+  const fields = workspaceNode('div', '', 'basic-grid');
+  const extra = workspaceNode('div', '', 'basic-grid resume-more-fields'); extra.id = 'resumeMoreFields' + index;
+  group.items.forEach(({ definition, row }, position) => (position < limit ? fields : extra).append(resumeFieldEditor(profileId, null, definition, row)));
+  section.append(fields);
+  if (extra.childElementCount) {
+    const toggle = workspaceNode('button', '', 'resume-more-toggle'); toggle.type = 'button'; toggle.setAttribute('aria-controls', extra.id);
+    const text = workspaceNode('span'); const arrow = workspaceNode('span', '⌄', 'resume-more-arrow'); arrow.setAttribute('aria-hidden', 'true'); toggle.append(text, arrow);
+    // 切换只改本页显示状态，数量来自字段节点，不读取或展示个人值。
+    function update(expanded) { extra.hidden = !expanded; toggle.setAttribute('aria-expanded', String(expanded)); text.textContent = (expanded ? '收起更多内容' : '展开更多内容') + '（' + extra.childElementCount + ' 项）'; }
+    update(resumeExpandedGroups.get(profileId)?.has(group.group) || false);
+    toggle.addEventListener('click', () => {
+      if (!resumeExpandedGroups.has(profileId)) resumeExpandedGroups.set(profileId, new Set());
+      const expanded = extra.hidden; const groups = resumeExpandedGroups.get(profileId);
+      if (expanded) groups.add(group.group); else groups.delete(group.group);
+      update(expanded); scheduleResumePosition();
+    });
+    section.append(toggle, extra);
+  }
+  return section;
+}
+// 只渲染现有基础字段分类，旧经历仅提供清理提示；每个分类先显示常用字段。
 async function renderResumeCenter() {
   const { database } = await dataRequest('localapply:read'); const profileId = $('#entryProfile').value;
   const root = $('#basicFields'); root.replaceChildren();
@@ -213,16 +244,7 @@ async function renderResumeCenter() {
   $('#legacyEntriesHint').textContent = `当前简历保留 ${legacyCount} 条旧经历记录，已停止显示独立经历卡片。可清空后按基础字段重新整理。`;
   if (!database.profiles.some((profile) => profile.profileId === profileId)) { renderResumeToc(); return; }
   for (const [index, group] of LocalApplyProfileView.editorSections(database, profileId).entries()) {
-    const section = workspaceNode('section', '', 'resume-group'); section.dataset.group = group.group;
-    const header = workspaceNode('div', '', 'resume-group-header');
-    const heading = workspaceNode('h3', group.group, 'center-group-heading'); heading.id = 'resumeGroupHeading' + index;
-    section.setAttribute('aria-labelledby', heading.id); header.append(heading);
-    section.append(header);
-    if (group.items.length) {
-      const fields = workspaceNode('div', '', 'basic-grid');
-      group.items.forEach(({ definition, row }) => fields.append(resumeFieldEditor(profileId, null, definition, row))); section.append(fields);
-    }
-    root.append(section);
+    root.append(resumeGroupEditor(profileId, group, index));
   }
   renderResumeToc();
 }

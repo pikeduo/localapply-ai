@@ -172,6 +172,13 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 .resume-group { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); scroll-margin-top: 24px; }
 .resume-group .center-group-heading { margin: 0 0 20px; padding: 0 0 0 12px; border: 0; border-left: 4px solid var(--brand); font-size: 16px; color: var(--heading); }
 .resume-group > .basic-grid { gap: 20px 18px; }
+/* 更多字段延续同一模块的编辑网格，展开按钮固定在常用字段之后，避免展开时按钮跳走。 */
+.resume-more-toggle { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; margin-top: 22px; padding: 11px 14px; border: 1px solid transparent; border-radius: 9px; color: var(--brand); background: var(--brand-weak); font: inherit; font-size: 12px; cursor: pointer; }
+.resume-more-toggle:hover { background: var(--hover); }
+.resume-more-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.resume-more-arrow { display: inline-block; font-size: 18px; line-height: 1; }
+.resume-more-toggle[aria-expanded="true"] .resume-more-arrow { transform: rotate(180deg); }
+.resume-more-fields { padding-top: 22px; margin-top: 20px; border-top: 1px dashed var(--line-strong); }
 /* 基础字段分类统一编辑；旧经历只在资料入口提供一次性清理提示。 */
 .resume-group-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
 .resume-group-header .center-group-heading { margin: 5px 0 0; }

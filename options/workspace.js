@@ -83,7 +83,7 @@ function updateResumePosition() {
 function scheduleResumePosition() {
   if (!workspaceResumeFrame) workspaceResumeFrame = requestAnimationFrame(updateResumePosition);
 }
-// 短区块完整居中显示，长区块从顶部阅读；先展开并恢复全部字段，不改变路由或草稿。
+// 短区块居中、长区块顶对齐；仅展开外层容器，更多字段保持用户选择的显隐状态。
 function locateResumeSection(key) {
   const target = workspaceResumeSections.find((section) => section.key === key)?.target;
   if (!target) return;

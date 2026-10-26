@@ -289,6 +289,13 @@ async function workspacePage(page, target) {
   await page.locator('[data-workspace-page="' + target + '"]').waitFor({ state: 'visible' });
 }
 
+// 先通过目录定位再点击更多，回归用例不能绕过真实界面操作隐藏字段。
+async function expandResumeGroup(page, name) {
+  await page.locator('#resumeToc').getByRole('button', { name, exact: true }).click();
+  const toggle = page.locator('.resume-group').filter({ has: page.getByRole('heading', { name, exact: true }) }).locator('.resume-more-toggle[aria-expanded="false"]');
+  if (await toggle.count()) await toggle.click();
+}
+
 // 通过真实控件建立保险库，测试口令及 Key 全为合成数据。
 async function setupVault(page) {
   await workspacePage(page, 'aiSettings');
@@ -1698,14 +1705,15 @@ for (const withExtension of [true, false]) {
       const revision = (await page.evaluate(() => dataRequest('localapply:read'))).database.revision;
       assert.equal(await page.locator('#basicFields > .resume-group').count(), await page.locator('#resumeToc button[data-toc-key^="group:"]').count());
       assert.equal(await page.locator('#basicFields .center-field').evaluateAll((fields) => fields.every((field) => !!field.closest('.resume-group')?.querySelector('h3'))), true);
-      // 求职分类补齐后已是长模块；用六项证书字段继续验证短模块的完整居中显示。
+      // 新需求默认收起选填项；目录定位仍应完整显示证书模块当前可见的内容。
       const group = page.locator('.resume-group[data-group="证书信息"]');
       await page.locator('#resumeToc').getByRole('button', { name: '证书信息', exact: true }).click();
       await page.waitForFunction(() => document.querySelector('#resumeToc [aria-current="location"]')?.dataset.tocKey === 'group:证书信息');
       const bounds = await group.boundingBox(); assert.ok(bounds.y >= 20 && bounds.y + bounds.height <= 880, '可容纳的分类必须连同全部字段一起进入视口');
       assert.ok(await group.locator('.center-field').count() > 1); assert.equal(await group.locator('h3.is-target').count(), 0);
       assert.equal(await group.evaluate((element) => element.classList.contains('is-target') && document.activeElement === element), true);
-      assert.equal(await group.locator('input,textarea,select').evaluateAll((fields) => fields.every((field) => { const rect = field.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; })), true);
+      assert.equal(await group.locator('.resume-more-toggle').getAttribute('aria-expanded'), 'false');
+      assert.equal(await group.locator('input:visible,textarea:visible,select:visible').evaluateAll((fields) => fields.every((field) => { const rect = field.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; })), true);
       await page.screenshot({ path: path.join(testRoot, `resume-module-light-${mode}.png`) });
       await page.locator('#themeToggle').click(); await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(16, 23, 34)');
       await page.screenshot({ path: path.join(testRoot, `resume-module-dark-${mode}.png`) });
@@ -1717,6 +1725,8 @@ for (const withExtension of [true, false]) {
       };
       const first = page.locator('.resume-group[data-group="合成长分类"]');
       const second = page.locator('.resume-group[data-group="合成下一分类"]');
+      // 显式展开合成长模块，保留原有长内容滚动及目录同步断言。
+      await expandResumeGroup(page, '合成长分类');
       const focus = await page.evaluate(() => document.activeElement.id);
       await wheelTo(first, 'group:合成长分类');
       await page.mouse.wheel(0, 450); await page.waitForFunction(() => document.querySelector('.resume-group[data-group="合成长分类"] h3').getBoundingClientRect().bottom < 0);
@@ -1854,6 +1864,8 @@ for (const withExtension of [true, false]) {
       const saved = async () => { await page.evaluate(() => resumeSaveQueue); assert.ok(!(await page.locator('#centerStatus').textContent()).includes('保存失败')); };
       const initial = (await page.evaluate(() => dataRequest('localapply:read'))).database; const profileId = initial.activeProfileId;
       assert.equal(await page.locator('#basicFields .center-field').count(), 175);
+      // 完整候选、地区和多城市属于选填区，先按新交互显式展开再验证原有编辑链路。
+      for (const name of ['基本信息', '教育背景', '求职意向']) await expandResumeGroup(page, name);
       for (const group of ['基本信息','求职意向','教育背景','实习经历','工作经历','项目经历','家庭成员','获奖经历','英语能力','证书信息','论文期刊','自我介绍']) {
         assert.equal(await page.locator(`.resume-group[data-group="${group}"]`).count(), 1);
         assert.equal(await page.locator('#resumeToc').getByRole('button', { name: group, exact: true }).count(), 1);
@@ -1993,6 +2005,55 @@ for (const withExtension of [true, false]) {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await page.screenshot({ path: path.join(testRoot, `calendar-narrow-${mode}.png`) });
       await workspacePage(page, 'aiSettings'); assert.equal(await popup.count(), 0, '模块切换应清理日历'); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 更多字段在真实扩展和文件入口均只控制显示，不改变字段数量、数据库或编辑能力。
+for (const withExtension of [true, false]) {
+  test(`简历更多字段：${withExtension ? '扩展' : 'file://'}默认收起、编辑与档案隔离`, { timeout: 90000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+    const profile = await fs.mkdtemp(path.join(testRoot, 'resume-more-')); let context; const errors = []; const mode = withExtension ? 'extension' : 'file';
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.goto(url); await workspacePage(page, 'resumeCenter');
+      const primaryId = await page.locator('#entryProfile').inputValue();
+      // 只读取后台版本和值，验证展开行为没有触发隐式保存。
+      const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
+      const before = await read(); const basic = page.locator('.resume-group[data-group="基本信息"]'); const education = page.locator('.resume-group[data-group="教育背景"]'); const job = page.locator('.resume-group[data-group="求职意向"]');
+      assert.equal(await page.locator('#basicFields .center-field').count(), 175);
+      for (const [section, visible] of [[basic, 18], [education, 7], [job, 8]]) {
+        assert.equal(await section.locator('.center-field:visible').count(), visible); assert.equal(await section.locator('.resume-more-toggle').getAttribute('aria-expanded'), 'false');
+        assert.ok(await section.locator('.center-field').count() > visible);
+      }
+      assert.equal(await page.locator('.resume-group[data-group="自我介绍"] .resume-more-toggle').count(), 0);
+      for (const toggle of await page.locator('.resume-more-toggle').all()) assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+      await page.locator('#resumeToc').getByRole('button', { name: '求职意向', exact: true }).click();
+      assert.equal(await job.locator('.resume-more-toggle').getAttribute('aria-expanded'), 'false', '目录定位不得自动展开选填字段');
+      await page.screenshot({ path: path.join(testRoot, `resume-more-collapsed-${mode}.png`) });
+      await job.locator('.resume-more-toggle').click(); assert.equal(await job.locator('.center-field:visible').count(), await job.locator('.center-field').count());
+      await page.screenshot({ path: path.join(testRoot, `resume-more-expanded-${mode}.png`) });
+      await job.locator('.resume-more-toggle').click(); assert.equal(await job.locator('.center-field:visible').count(), 8); assert.equal((await read()).revision, before.revision);
+      await expandResumeGroup(page, '基本信息'); const wechat = basic.locator('[data-field-id="builtin.wechat"] input');
+      await wechat.fill('合成更多字段值'); await wechat.blur(); await page.evaluate(() => resumeSaveQueue);
+      assert.equal((await read()).fieldValues.find((row) => row.profileId === primaryId && row.fieldId === 'builtin.wechat').value, '合成更多字段值');
+      const revision = (await read()).revision;
+      // 无效日期留作未保存草稿，折叠/再展开不得重建输入或丢失文字。
+      const date = basic.locator('[data-field-id="builtin.joinPartyDate"] input'); await date.fill('2027-02-30');
+      await basic.locator('.resume-more-toggle').click(); await basic.locator('.resume-more-toggle').click(); assert.equal(await date.inputValue(), '2027-02-30'); assert.equal(await date.getAttribute('aria-invalid'), 'true'); assert.equal((await read()).revision, revision);
+      await date.fill('2027-02-28'); await date.blur(); await page.evaluate(() => resumeSaveQueue);
+      await workspacePage(page, 'aiSettings'); await workspacePage(page, 'resumeCenter'); assert.equal(await basic.locator('.resume-more-toggle').getAttribute('aria-expanded'), 'true');
+      await page.evaluate(() => renderResumeCenter()); assert.equal(await basic.locator('.resume-more-toggle').getAttribute('aria-expanded'), 'true'); assert.equal(await wechat.inputValue(), '合成更多字段值');
+      // 新简历默认收起，返回原简历只恢复本页展开状态，不串用个人值。
+      await page.locator('#newProfileName').fill('合成第二份简历'); await page.locator('#createResumeProfile').click(); await page.waitForFunction(() => !document.getElementById('createResumeProfile').disabled);
+      assert.notEqual(await page.locator('#entryProfile').inputValue(), primaryId); assert.equal(await basic.locator('.resume-more-toggle').getAttribute('aria-expanded'), 'false'); assert.equal(await wechat.inputValue(), '');
+      await page.locator('#entryProfile').selectOption(primaryId); await page.waitForFunction((profileId) => document.getElementById('entryProfile').value === profileId && document.querySelector('.resume-group[data-group="基本信息"] .resume-more-toggle')?.getAttribute('aria-expanded') === 'true', primaryId);
+      assert.equal(await wechat.inputValue(), '合成更多字段值');
+      await page.locator('#themeToggle').click(); await page.setViewportSize({ width: 390, height: 844 }); await expandResumeGroup(page, '证书信息');
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); await page.screenshot({ path: path.join(testRoot, `resume-more-narrow-${mode}.png`) });
+      await page.reload(); await workspacePage(page, 'resumeCenter'); assert.equal(await basic.locator('.resume-more-toggle').getAttribute('aria-expanded'), 'false'); assert.equal(await wechat.inputValue(), '合成更多字段值'); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
