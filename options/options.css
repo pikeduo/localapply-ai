@@ -270,3 +270,13 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 .resume-record-caption strong { color: var(--ink); }
 .resume-record-subtitle { color: var(--sub); font-weight: 400; }
 .basic-grid > .center-field-wide { grid-column: 1 / -1; }
+/* 起止日期共用一行标题，保留各自的日期精度、日历和错误提示。 */
+.resume-date-range { display: flex; flex-direction: column; gap: 5px; min-width: 0; color: var(--sub); font-size: 12px; }
+.resume-date-range-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; align-items: start; }
+.resume-date-range-controls > .center-field { min-width: 0; }
+.resume-date-range-controls > .center-field > span:first-child { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.resume-date-range-separator { display: grid; place-items: center; min-height: 38px; }
+@media (max-width: 680px) {
+  .resume-date-range-controls { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .resume-date-range-separator { min-height: 18px; }
+}

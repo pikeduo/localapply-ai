@@ -268,8 +268,8 @@ function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = d
   const multiline = definition.type === 'text' && typeof row?.value === 'string' && row.value.includes('\n');
   const input = workspaceControl(multiline ? { ...definition, type: 'textarea' } : definition, row?.value);
   const label = workspaceNode(input.tagName === 'DIV' ? 'div' : 'label', '', 'center-field'); label.dataset.fieldId = definition.fieldId;
-  // 自我介绍使用整行宽度，不改变其他字段的双列布局。
-  if (definition.fieldId === 'builtin.selfIntroduction') label.classList.add('center-field-wide');
+  // 描述、自我介绍及已有多行文本统一占满整行，短文本继续使用双列布局。
+  if (input.tagName === 'TEXTAREA') label.classList.add('center-field-wide');
   (input.querySelector('[data-primary]') || input).setAttribute('aria-label', (entryId ? '经历字段 · ' : '简历中心 · ') + accessibleLabel);
   const hint = workspaceNode('small', input.classList.contains('workspace-region') ? '选择候选或“使用输入内容”后保存 · 搜索不改动资料' : ''); hint.setAttribute('role', 'status'); hint.hidden = !hint.textContent;
   let saved = row ? structuredClone(row) : null;
@@ -320,22 +320,37 @@ async function clearLegacyResumeEntries() {
   } catch (error) { status.textContent = '清理失败：' + error.message; }
   finally { button.disabled = false; }
 }
-// 共享模块字段模板生成一条记录的全部控件；各记录仅值和展开状态不同，不复制定义。
+// 按共享模板生成记录；明确的起止日期成组展示，仍分别沿用原字段和独立保存链路。
 function resumeRecordFields(profileId, group, items, entryId, index, ordinal) {
   const root = workspaceNode('div', '', 'resume-record-fields'); const key = group.group + ':' + (entryId || 'primary');
   const limit = Object.hasOwn(resumePrimaryFieldCounts, group.group) ? resumePrimaryFieldCounts[group.group] : group.items.length > 4 ? 4 : 2;
   const fields = workspaceNode('div', '', 'basic-grid');
   const extra = workspaceNode('div', '', 'basic-grid resume-more-fields'); extra.id = 'resumeMoreFields' + index + 'Record' + ordinal;
-  items.forEach(({ definition, row }, position) => {
+  const datePairs = { '教育背景': ['educationStartDate', 'graduationDate'], '实习经历': ['internshipStartDate', 'internshipEndDate'], '工作经历': ['employmentStartDate', 'employmentEndDate'], '项目经历': ['projectStartDate', 'projectEndDate'] };
+  const dates = datePairs[group.group]?.map((fieldId) => items.findIndex((item) => item.definition.fieldId === 'builtin.' + fieldId));
+  const paired = dates?.every((position) => position >= 0);
+  // 家庭字段保留专用无障碍名称；日期成组时也不改变任何输入的原标签和取值方式。
+  function editor({ definition, row }) {
     const label = group.group === '家庭成员' ? definition.label.replace(/^家庭成员一[·・]/, '') : definition.label;
-    (position < limit ? fields : extra).append(resumeFieldEditor(profileId, entryId, definition, row, label, group.group === '家庭成员' ? '家庭成员 · ' + label : label));
+    return resumeFieldEditor(profileId, entryId, definition, row, label, group.group === '家庭成员' ? '家庭成员 · ' + label : label);
+  }
+  items.forEach((item, position) => {
+    if (paired && position === Math.max(...dates)) return;
+    let control;
+    if (paired && position === Math.min(...dates)) {
+      control = workspaceNode('div', '', 'resume-date-range center-field-wide'); control.setAttribute('role', 'group'); control.setAttribute('aria-label', '起止日期');
+      const controls = workspaceNode('div', '', 'resume-date-range-controls');
+      const separator = workspaceNode('span', '至', 'resume-date-range-separator'); separator.setAttribute('aria-hidden', 'true');
+      controls.append(editor(items[dates[0]]), separator, editor(items[dates[1]])); control.append(workspaceNode('span', '起止日期'), controls);
+    } else control = editor(item);
+    (position < limit ? fields : extra).append(control);
   });
   root.append(fields);
   if (extra.childElementCount) {
     const toggle = workspaceNode('button', '', 'resume-more-toggle'); toggle.type = 'button'; toggle.setAttribute('aria-controls', extra.id);
     const text = workspaceNode('span'); const arrow = workspaceNode('span', '⌄', 'resume-more-arrow'); arrow.setAttribute('aria-hidden', 'true'); toggle.append(text, arrow);
     // 切换只改本页显示状态，数量来自字段节点，不读取或展示个人值。
-    function update(expanded) { extra.hidden = !expanded; toggle.setAttribute('aria-expanded', String(expanded)); text.textContent = (expanded ? '收起更多内容' : '展开更多内容') + '（' + extra.childElementCount + ' 项）'; }
+    function update(expanded) { extra.hidden = !expanded; toggle.setAttribute('aria-expanded', String(expanded)); text.textContent = (expanded ? '收起更多内容' : '展开更多内容') + '（' + extra.querySelectorAll('.center-field').length + ' 项）'; }
     update(resumeExpandedGroups.get(profileId)?.has(key) || false);
     toggle.addEventListener('click', () => {
       if (!resumeExpandedGroups.has(profileId)) resumeExpandedGroups.set(profileId, new Set());

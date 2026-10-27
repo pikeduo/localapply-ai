@@ -2627,8 +2627,46 @@ for (const withExtension of [true, false]) {
       // 检查所有可见单行控件，也包含复合日期/地区控件内的输入框；多选列表保留其合理高度。
       const oversized = await page.locator('#basicFields .center-field input:not([type="checkbox"]), #basicFields .center-field select:not([multiple])').evaluateAll((nodes) => nodes.filter((node) => node.getClientRects().length && node.getBoundingClientRect().height >= 65).map((node) => node.closest('[data-field-id]').dataset.fieldId));
       assert.deepEqual(oversized, []); assert.ok((await description.boundingBox()).height >= 240);
+      // 所有可见长文本都占满所属网格，包括展开更多后显示的经历描述。
+      const narrowTextareas = await page.locator('#basicFields textarea').evaluateAll((nodes) => nodes.filter((node) => node.getClientRects().length && Math.abs(node.getBoundingClientRect().width - node.closest('.basic-grid').getBoundingClientRect().width) > 3).map((node) => node.closest('[data-field-id]').dataset.fieldId)); assert.deepEqual(narrowTextareas, []);
       await page.locator('#themeToggle').click(); await link.scrollIntoViewIfNeeded(); await page.locator('.resume-group[data-group="论文期刊"]').screenshot({ path: path.join(testRoot, `field-height-${withExtension ? 'extension' : 'file'}.png`) });
       await page.setViewportSize({ width: 390, height: 844 }); assert.ok((await link.boundingBox()).height < 65); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 组合日期只改变布局；两种入口验证首条/附加记录独立保存，刷新与移除单个日期也不丢值。
+for (const withExtension of [true, false]) {
+  test(`起止日期布局：${withExtension ? '扩展' : 'file://'}成组、独立保存及窄屏`, { timeout: 60000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'date-range-')); let context;
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000); const page = await context.newPage(); const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      const pairs = [['教育背景','educationStartDate','graduationDate'], ['实习经历','internshipStartDate','internshipEndDate'], ['工作经历','employmentStartDate','employmentEndDate'], ['项目经历','projectStartDate','projectEndDate']];
+      for (const [name, start, end] of pairs) {
+        const section = page.locator(`.resume-group[data-group="${name}"]`); await section.locator('[data-module-action="add"]').click(); await section.locator('.resume-record').nth(1).waitFor();
+        for (let index = 0; index < 2; index++) {
+          const record = section.locator('.resume-record').nth(index); const range = record.locator('.resume-date-range'); assert.equal(await range.count(), 1); assert.equal(await range.locator('.center-field').count(), 2);
+          for (const [key, value] of [[start, `${2024 + index}-09`], [end, `${2027 + index}-06`]]) {
+            const field = range.locator(`[data-field-id="builtin.${key}"]`); await field.locator('select').selectOption('month'); await field.locator('input').fill(value); await field.locator('input').blur(); await page.evaluate(() => resumeSaveQueue);
+          }
+          const bounds = await range.locator('.center-field').evaluateAll((nodes) => nodes.map((node) => ({ y: node.getBoundingClientRect().y, x: node.getBoundingClientRect().x }))); assert.ok(Math.abs(bounds[0].y - bounds[1].y) < 2); assert.ok(bounds[1].x > bounds[0].x);
+        }
+      }
+      await page.locator('.resume-group[data-group="教育背景"]').screenshot({ path: path.join(testRoot, `date-range-${withExtension ? 'extension' : 'file'}.png`) });
+      await page.reload(); await workspacePage(page, 'resumeCenter');
+      for (const [name, start, end] of pairs) {
+        const section = page.locator(`.resume-group[data-group="${name}"]`);
+        for (let index = 0; index < 2; index++) {
+          const record = section.locator('.resume-record').nth(index); assert.equal(await record.locator(`[data-field-id="builtin.${start}"] input`).inputValue(), `${2024 + index}-09`); assert.equal(await record.locator(`[data-field-id="builtin.${end}"] input`).inputValue(), `${2027 + index}-06`);
+        }
+      }
+      // 用户移除一端后恢复普通单字段编辑，不生成残缺组合或重复控件。
+      await workspacePage(page, 'fieldLibrary'); page.once('dialog', (dialog) => dialog.accept()); await page.locator('.library-row[data-field-id="builtin.graduationDate"]').getByRole('button', { name: '移除当前档案字段' }).click(); await page.waitForFunction(() => document.getElementById('fieldStatus').textContent.includes('已从当前档案移除')); await workspacePage(page, 'resumeCenter');
+      const education = page.locator('.resume-group[data-group="教育背景"]'); assert.equal(await education.locator('.resume-date-range').count(), 0); assert.equal(await education.locator('[data-field-id="builtin.educationStartDate"]').count(), 2);
+      await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#themeToggle').click(); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+      await page.locator('.resume-group[data-group="实习经历"]').screenshot({ path: path.join(testRoot, `date-range-dark-mobile-${withExtension ? 'extension' : 'file'}.png`) }); assert.deepEqual(errors, []);
     } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
