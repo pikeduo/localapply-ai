@@ -67,5 +67,11 @@
     result.forEach((section) => { const compare = (a, b) => (fieldOrder.get(a.definition.fieldId) ?? Infinity) - (fieldOrder.get(b.definition.fieldId) ?? Infinity); section.items.sort(compare); (section.records || []).forEach((record) => record.items.sort(compare)); });
     return result.sort((a, b) => (groupOrder.includes(a.group) ? groupOrder.indexOf(a.group) : Infinity) - (groupOrder.includes(b.group) ? groupOrder.indexOf(b.group) : Infinity));
   }
-  global.LocalApplyProfileView = { hasValue, text, sensitive, sections, editorSections };
+  // 仅用当前记录的明确字段生成摘要，缺失时回退模块名，不跨记录补值。
+  function recordHeading(group, items) {
+    const keys = { '教育背景': ['school', 'degree', 'major'], '实习经历': ['internshipCompany', 'internshipPosition'], '工作经历': ['employmentCompany', 'employmentPosition'], '项目经历': ['projectName', 'projectRole'], '家庭成员': ['familyName1', 'familyRelation1'], '获奖经历': ['awardName', 'awardLevel', 'awardRank'], '证书信息': ['certificateName', 'certificateLevel'], '论文期刊': ['paperName', 'journalName'] };
+    const values = (keys[group] || []).map((key) => text(items.find((item) => item.definition.fieldId === 'builtin.' + key)?.row?.value).trim());
+    return { title: values[0] || group, detail: values.slice(1).filter(Boolean).join(' · ') };
+  }
+  global.LocalApplyProfileView = { hasValue, text, sensitive, sections, editorSections, recordHeading };
 })(globalThis);

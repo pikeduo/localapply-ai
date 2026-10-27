@@ -268,6 +268,8 @@ function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = d
   const multiline = definition.type === 'text' && typeof row?.value === 'string' && row.value.includes('\n');
   const input = workspaceControl(multiline ? { ...definition, type: 'textarea' } : definition, row?.value);
   const label = workspaceNode(input.tagName === 'DIV' ? 'div' : 'label', '', 'center-field'); label.dataset.fieldId = definition.fieldId;
+  // 自我介绍使用整行宽度，不改变其他字段的双列布局。
+  if (definition.fieldId === 'builtin.selfIntroduction') label.classList.add('center-field-wide');
   (input.querySelector('[data-primary]') || input).setAttribute('aria-label', (entryId ? '经历字段 · ' : '简历中心 · ') + accessibleLabel);
   const hint = workspaceNode('small', input.classList.contains('workspace-region') ? '选择候选或“使用输入内容”后保存 · 搜索不改动资料' : ''); hint.setAttribute('role', 'status'); hint.hidden = !hint.textContent;
   let saved = row ? structuredClone(row) : null;
@@ -288,6 +290,7 @@ function resumeFieldEditor(profileId, entryId, definition, row, displayLabel = d
         if (!!current !== !!saved || JSON.stringify(current?.value) !== JSON.stringify(saved?.value)) throw new Error('该字段已被其他页面修改，请刷新后重新核对');
         await dataCommand('setValue', { profileId, entryId, fieldId: definition.fieldId, value }, latest.revision);
         saved = { value };
+        label.dispatchEvent(new CustomEvent('resume-field-saved', { bubbles: true, detail: { fieldId: definition.fieldId, value } }));
         if (JSON.stringify(workspaceValue(input, definition)) === JSON.stringify(value)) input.dataset.dirty = '';
         hint.textContent = ''; hint.hidden = true; $('#centerStatus').textContent = '已保存在本地';
         if (workspaceInitialized) await refreshWorkspace();
@@ -369,7 +372,21 @@ function resumeGroupEditor(profileId, group, index) {
   records.forEach((record, ordinal) => {
     const details = workspaceNode('details', '', 'resume-record' + (record.entryId ? '' : ' resume-primary-record')); details.dataset.entryId = record.entryId || 'primary';
     const key = group.group + ':' + (record.entryId || 'primary'); details.open = resumeRecordExpansion.get(profileId)?.get(key) ?? !record.entryId;
-    const summary = workspaceNode('summary'); summary.append(workspaceNode('span', `第 ${ordinal + 1} 条${group.group} · 展开 / 收起`));
+    const summary = workspaceNode('summary');
+    const caption = workspaceNode('span', '', 'resume-record-caption');
+    const number = workspaceNode('span', String(ordinal + 1).padStart(2, '0'), 'resume-record-number');
+    const title = workspaceNode('strong'); const subtitle = workspaceNode('span', '', 'resume-record-subtitle');
+    caption.append(number, title, subtitle); summary.append(caption);
+    // 摘要只显示本条已保存内容；使用文本节点，避免将个人文本解释为 HTML。
+    function updateHeading() {
+      const heading = LocalApplyProfileView.recordHeading(group.group, record.items);
+      title.textContent = heading.title; subtitle.textContent = heading.detail; subtitle.hidden = !heading.detail;
+    }
+    updateHeading();
+    details.addEventListener('resume-field-saved', (event) => {
+      const item = record.items.find((item) => item.definition.fieldId === event.detail.fieldId);
+      if (item) { item.row = { ...item.row, value: event.detail.value }; updateHeading(); }
+    });
     const remove = workspaceNode('button', '删除此条记录', 'btn ghost'); remove.type = 'button'; remove.dataset.moduleAction = 'delete'; remove.setAttribute('aria-label', `删除第 ${ordinal + 1} 条${group.group}`);
     // 删除按钮常驻标题，鼠标与键盘激活均不触发 summary 的展开/收起。
     remove.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); manageModuleRecord(profileId, group.group, record.entryId, remove); }); summary.append(remove); details.append(summary);

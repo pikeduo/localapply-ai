@@ -3,6 +3,15 @@
 const { test } = require('node:test'); const assert = require('node:assert/strict'); const vm = require('node:vm'); const fs = require('node:fs'); const path = require('node:path');
 // 直接执行发行模块，避免复制实现逻辑到测试。
 function view() { const context = vm.createContext({}); for (const file of ['templates', 'profile-view']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../data/' + file + '.js'), 'utf8'), context); return context.LocalApplyProfileView; }
+// 摘要仅使用当前条目的字段，空值不向其他经历借用资料。
+test('八类经历摘要包含主名称与辅助信息，空记录保留模块名', () => {
+  const api = view();
+  for (const [group, primary, secondary] of [['教育背景','school','degree'], ['实习经历','internshipCompany','internshipPosition'], ['工作经历','employmentCompany','employmentPosition'], ['项目经历','projectName','projectRole'], ['家庭成员','familyName1','familyRelation1'], ['获奖经历','awardName','awardLevel'], ['证书信息','certificateName','certificateLevel'], ['论文期刊','paperName','journalName']]) {
+    const items = [primary, secondary].map((key, index) => ({ definition: { fieldId: 'builtin.' + key }, row: { value: index ? '合成辅助信息' : '合成名称' } }));
+    assert.equal(api.recordHeading(group, items).title, '合成名称'); assert.equal(api.recordHeading(group, items).detail, '合成辅助信息');
+    assert.equal(api.recordHeading(group, []).title, group); assert.equal(api.recordHeading(group, []).detail, '');
+  }
+});
 test('预览保留 false/0，空数组和空值可以隐藏，中文显示不改变类型', () => { const api = view(); assert.equal(api.hasValue(false), true); assert.equal(api.hasValue(0), true); assert.equal(api.hasValue([]), false); assert.equal(api.text(false), '否'); assert.equal(api.text(['甲','乙']), '甲、乙'); });
 test('同名重复经历按稳定 ID 分开，空经历可显示且不混入其他档案', () => { const api = view(); const db = { fieldDefinitions: [{ fieldId: 'school', label: '院校', group: '教育', aliases: [] }], bindings: [], entries: [{ entryId: 'e1', profileId: 'p1', kind: 'education', title: '同名', order: 1 }, { entryId: 'e2', profileId: 'p1', kind: 'education', title: '同名', order: 0 }, { entryId: 'empty', profileId: 'p1', kind: 'project', title: '', order: 0 }], fieldValues: [{ profileId: 'p1', fieldId: 'school', entryId: 'e1', value: '合成甲' }, { profileId: 'p1', fieldId: 'school', entryId: 'e2', value: '合成乙' }, { profileId: 'p2', fieldId: 'school', entryId: null, value: '其他档案' }] }; const sections = api.sections(db, 'p1'); assert.equal(sections.length, 2); assert.equal(sections[0].entryId, 'e2'); assert.equal(sections[1].entryId, 'e1'); assert.equal(api.sections(db, 'p1', true).length, 3); });
 test('敏感字段包含未绑定的生日地址和联系方式，普通技能不误遮挡', () => { const api = view(); for (const label of ['出生日期','联系电话','电子邮箱','现居地址','家庭成员']) assert.equal(api.sensitive({ label }), true); assert.equal(api.sensitive({ label: '技能' }), false); assert.equal(api.sensitive({ label: '技能' }, { sensitive: true }), true); });

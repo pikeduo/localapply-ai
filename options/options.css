@@ -254,3 +254,9 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 .resume-record > summary > span { flex: 1; min-width: 0; }
 .resume-record > summary > [data-module-action="delete"] { flex-shrink: 0; }
 .resume-record[open] > summary { margin-bottom: 16px; }
+/* 序号及经历摘要在收起时仍可辨认，长标题换行，兼容明暗主题和窄屏。 */
+.resume-record-caption { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; overflow-wrap: anywhere; }
+.resume-record-number { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; background: var(--brand-weak); color: var(--brand); font-size: 12px; }
+.resume-record-caption strong { color: var(--ink); }
+.resume-record-subtitle { color: var(--sub); font-weight: 400; }
+.basic-grid > .center-field-wide { grid-column: 1 / -1; }

@@ -2633,6 +2633,39 @@ for (const withExtension of [true, false]) {
   });
 }
 
+// 摘要与整行布局通过真实编辑验证，两种入口均只使用合成学校及独立浏览器资料。
+for (const withExtension of [true, false]) {
+  test(`经历摘要布局：${withExtension ? '扩展' : 'file://'}保存更新、记录隔离及自我介绍整行`, { timeout: 60000 }, async () => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'record-heading-')); let context;
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000); const page = await context.newPage(); const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      await page.setViewportSize({ width: 1440, height: 1000 }); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      const education = page.locator('.resume-group[data-group="教育背景"]'); const first = education.locator('.resume-primary-record');
+      assert.equal(await first.locator('.resume-record-caption strong').textContent(), '教育背景');
+      await first.locator('[data-field-id="builtin.school"] input').fill('合成第一学校'); await first.locator('[data-field-id="builtin.school"] input').blur(); await page.evaluate(() => resumeSaveQueue);
+      await first.locator('[data-field-id="builtin.degree"] select').selectOption({ label: '本科' }); await page.evaluate(() => resumeSaveQueue);
+      assert.equal(await first.locator('.resume-record-caption strong').textContent(), '合成第一学校'); assert.equal(await first.locator('.resume-record-subtitle').textContent(), '本科');
+      await education.locator('[data-module-action="add"]').click(); await education.locator('.resume-record:not(.resume-primary-record)').waitFor();
+      const second = education.locator('.resume-record:not(.resume-primary-record)'); assert.equal(await second.locator('.resume-record-caption strong').textContent(), '教育背景');
+      const unsafe = '<img src=x onerror="window.unexpectedExecution=true">';
+      await second.locator('[data-field-id="builtin.school"] input').fill(unsafe); await second.locator('[data-field-id="builtin.school"] input').blur(); await page.evaluate(() => resumeSaveQueue);
+      assert.equal(await second.locator('.resume-record-caption strong').textContent(), unsafe); assert.equal(await second.locator('summary img').count(), 0); assert.equal(await page.evaluate(() => !!window.unexpectedExecution), false);
+      await second.locator('[data-field-id="builtin.school"] input').fill('合成第二学校'); await second.locator('[data-field-id="builtin.school"] input').blur(); await page.evaluate(() => resumeSaveQueue);
+      await first.locator(':scope > summary').click(); await second.locator(':scope > summary').click();
+      assert.equal(await first.locator('.resume-record-caption strong').textContent(), '合成第一学校'); assert.equal(await second.locator('.resume-record-caption strong').textContent(), '合成第二学校'); assert.equal(await second.locator('[data-module-action="delete"]').isVisible(), true);
+      await education.screenshot({ path: path.join(testRoot, `record-heading-${withExtension ? 'extension' : 'file'}.png`) });
+      const intro = page.locator('[data-field-id="builtin.selfIntroduction"] textarea'); const grid = intro.locator('..').locator('..');
+      assert.ok(Math.abs((await intro.boundingBox()).width - (await grid.boundingBox()).width) < 3);
+      await intro.fill('合成自我介绍\n第二行'); await intro.blur(); await page.evaluate(() => resumeSaveQueue);
+      await page.locator('.resume-group[data-group="自我介绍"]').screenshot({ path: path.join(testRoot, `intro-full-width-${withExtension ? 'extension' : 'file'}.png`) });
+      await page.reload(); await workspacePage(page, 'resumeCenter'); assert.equal(await first.locator('.resume-record-caption strong').textContent(), '合成第一学校'); assert.equal(await second.locator('.resume-record-caption strong').textContent(), '合成第二学校'); assert.equal(await intro.inputValue(), '合成自我介绍\n第二行');
+      await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#themeToggle').click();
+      assert.ok(Math.abs((await intro.boundingBox()).width - (await grid.boundingBox()).width) < 3); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true); assert.deepEqual(errors, []);
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
 // 删除入口验收：首条、收起记录及最后空模板均通过真实按钮操作，不访问用户浏览器资料。
 for (const withExtension of [true, false]) {
   test(`经历删除入口：${withExtension ? '扩展' : 'file://'}标题常驻、首条接替、最后清空及恢复`, { timeout: 120000 }, async (t) => {
