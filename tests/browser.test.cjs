@@ -2728,7 +2728,7 @@ for (const withExtension of [true, false]) {
         for (const [name, key] of slots) {
           let section = group(name); const first = section.locator('.resume-primary-record'); assert.equal(await section.locator('.resume-record').count(), 1);
           await first.locator(`[data-field-id="builtin.${key}"] input`).fill('合成首条' + name); await first.locator(`[data-field-id="builtin.${key}"] input`).blur(); await page.evaluate(() => resumeSaveQueue);
-          await section.locator('.resume-group-header [data-module-action="add"]').click(); await page.waitForFunction((name) => document.querySelector(`.resume-group[data-group="${name}"]`)?.querySelectorAll('.resume-record').length === 2, name);
+          await section.locator('.resume-group-footer [data-module-action="add"]').click(); await page.waitForFunction((name) => document.querySelector(`.resume-group[data-group="${name}"]`)?.querySelectorAll('.resume-record').length === 2, name);
           section = group(name); const second = section.locator('.resume-record:not(.resume-primary-record)'); assert.notEqual(await second.getAttribute('open'), null);
           const fields = await section.locator('.resume-primary-record .center-field').evaluateAll((nodes) => nodes.map((node) => node.dataset.fieldId)); assert.deepEqual(await second.locator('.center-field').evaluateAll((nodes) => nodes.map((node) => node.dataset.fieldId)), fields);
           assert.equal(await second.locator(`[data-field-id="builtin.${key}"] input`).inputValue(), ''); await second.locator(`[data-field-id="builtin.${key}"] input`).fill('合成第二条' + name); await second.locator(`[data-field-id="builtin.${key}"] input`).blur(); await page.evaluate(() => resumeSaveQueue);

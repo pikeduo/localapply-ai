@@ -361,13 +361,13 @@ async function manageModuleRecord(profileId, group, entryId, button) {
   } catch (error) { $('#centerStatus').textContent = '记录未变更：' + error.message; }
   finally { button.disabled = false; }
 }
-// 八个重复模块内逐条展开/收起，首条兼容原有平面值，其他条目共享相同字段模板。
+// 八个重复模块内逐条展开/收起，底部统一提供高亮新增入口，各条目共享字段模板。
 function resumeGroupEditor(profileId, group, index) {
   const section = workspaceNode('section', '', 'resume-group'); section.dataset.group = group.group;
   const header = workspaceNode('div', '', 'resume-group-header'); const heading = workspaceNode('h3', group.group, 'center-group-heading'); heading.id = 'resumeGroupHeading' + index;
   section.setAttribute('aria-labelledby', heading.id); header.append(heading); section.append(header);
   if (!Object.values(WangshenTemplates.RECORD_GROUPS).includes(group.group)) { section.append(resumeRecordFields(profileId, group, group.items, null, index, 0)); return section; }
-  const add = workspaceNode('button', group.group === '教育背景' ? '添加教育经历' : '添加' + (group.group === '证书信息' ? '证书' : group.group), 'btn ghost'); add.type = 'button'; add.dataset.moduleAction = 'add'; add.addEventListener('click', () => manageModuleRecord(profileId, group.group, null, add)); header.append(add);
+  const add = workspaceNode('button', group.group === '教育背景' ? '添加教育经历' : '添加' + (group.group === '证书信息' ? '证书' : group.group), 'btn'); add.type = 'button'; add.dataset.moduleAction = 'add'; add.addEventListener('click', () => manageModuleRecord(profileId, group.group, null, add));
   const records = [{ entryId: null, items: group.items }, ...(group.records || [])];
   records.forEach((record, ordinal) => {
     const details = workspaceNode('details', '', 'resume-record' + (record.entryId ? '' : ' resume-primary-record')); details.dataset.entryId = record.entryId || 'primary';
@@ -393,6 +393,8 @@ function resumeGroupEditor(profileId, group, index) {
     details.addEventListener('toggle', () => { if (!details.isConnected) return; if (!resumeRecordExpansion.has(profileId)) resumeRecordExpansion.set(profileId, new Map()); resumeRecordExpansion.get(profileId).set(key, details.open); scheduleResumePosition(); });
     details.append(resumeRecordFields(profileId, group, record.items, record.entryId, index, ordinal)); section.append(details);
   });
+  // 新增按钮始终位于全部记录之后，不随任何一条记录收起而隐藏。
+  const footer = workspaceNode('div', '', 'resume-group-footer'); footer.append(add); section.append(footer);
   return section;
 }
 // 渲染基础模块及目录经历；旧契约经历保留清理提示，各模块先显示常用字段。

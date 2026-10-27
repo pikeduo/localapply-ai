@@ -245,6 +245,8 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 /* 同一模块的所有记录使用一致容器，首条也可收起；控件节点保留，避免收起时丢失草稿。 */
 .resume-group-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .resume-group-header .center-group-heading { margin-right: auto; }
+/* 重复模块底部集中放置主色新增按钮，与记录内容保持间距。 */
+.resume-group-footer { display: flex; margin-top: 20px; }
 .resume-record { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
 /* 删除入口固定在标题旁，收起时仍可操作；保留自绘箭头及键盘焦点样式。 */
 .resume-record > summary { display: flex; align-items: center; gap: 10px; margin-bottom: 0; list-style: none; }
