@@ -361,13 +361,22 @@ async function manageModuleRecord(profileId, group, entryId, button) {
   } catch (error) { $('#centerStatus').textContent = '记录未变更：' + error.message; }
   finally { button.disabled = false; }
 }
-// 八个重复模块内逐条展开/收起，底部统一提供高亮新增入口，各条目共享字段模板。
+// 绘制本地线条图标，不加载参考页资源；图标仅装饰，按钮另有完整无障碍名称。
+function resumeRecordIcon(kind) {
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); icon.setAttribute('viewBox', '0 0 24 24'); icon.setAttribute('aria-hidden', 'true'); icon.setAttribute('focusable', 'false');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', kind === 'delete' ? 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7' : 'm6 9 6 6 6-6'); icon.append(path); return icon;
+}
+// 八个重复模块内逐条展开/收起，标题右侧集中操作，底部统一提供高亮新增入口。
 function resumeGroupEditor(profileId, group, index) {
   const section = workspaceNode('section', '', 'resume-group'); section.dataset.group = group.group;
   const header = workspaceNode('div', '', 'resume-group-header'); const heading = workspaceNode('h3', group.group, 'center-group-heading'); heading.id = 'resumeGroupHeading' + index;
   section.setAttribute('aria-labelledby', heading.id); header.append(heading); section.append(header);
   if (!Object.values(WangshenTemplates.RECORD_GROUPS).includes(group.group)) { section.append(resumeRecordFields(profileId, group, group.items, null, index, 0)); return section; }
-  const add = workspaceNode('button', group.group === '教育背景' ? '添加教育经历' : '添加' + (group.group === '证书信息' ? '证书' : group.group), 'btn'); add.type = 'button'; add.dataset.moduleAction = 'add'; add.addEventListener('click', () => manageModuleRecord(profileId, group.group, null, add));
+  const add = workspaceNode('button', '', 'btn resume-record-add'); add.type = 'button'; add.dataset.moduleAction = 'add';
+  const plus = workspaceNode('span', '+', 'resume-record-add-icon'); plus.setAttribute('aria-hidden', 'true');
+  add.append(plus, workspaceNode('span', group.group === '教育背景' ? '添加教育经历' : '添加' + (group.group === '证书信息' ? '证书' : group.group)));
+  add.addEventListener('click', () => manageModuleRecord(profileId, group.group, null, add));
   const records = [{ entryId: null, items: group.items }, ...(group.records || [])];
   records.forEach((record, ordinal) => {
     const details = workspaceNode('details', '', 'resume-record' + (record.entryId ? '' : ' resume-primary-record')); details.dataset.entryId = record.entryId || 'primary';
@@ -387,11 +396,21 @@ function resumeGroupEditor(profileId, group, index) {
       const item = record.items.find((item) => item.definition.fieldId === event.detail.fieldId);
       if (item) { item.row = { ...item.row, value: event.detail.value }; updateHeading(); }
     });
-    const remove = workspaceNode('button', '删除此条记录', 'btn ghost'); remove.type = 'button'; remove.dataset.moduleAction = 'delete'; remove.setAttribute('aria-label', `删除第 ${ordinal + 1} 条${group.group}`);
+    const actions = workspaceNode('span', '', 'resume-record-actions');
+    const collapse = workspaceNode('button', '', 'resume-record-action resume-record-collapse'); collapse.type = 'button'; collapse.append(resumeRecordIcon('collapse'));
+    const fields = resumeRecordFields(profileId, group, record.items, record.entryId, index, ordinal); fields.id = `resumeRecordFields${index}_${ordinal}`; collapse.setAttribute('aria-controls', fields.id);
+    // 原生 summary 和独立箭头共用展开状态，保留键盘操作及准确的按钮提示。
+    function updateCollapse() {
+      const action = `${details.open ? '收起' : '展开'}第 ${ordinal + 1} 条${group.group}`;
+      collapse.setAttribute('aria-expanded', String(details.open)); collapse.setAttribute('aria-label', action); collapse.title = action;
+    }
+    updateCollapse();
+    collapse.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); details.open = !details.open; updateCollapse(); });
+    const remove = workspaceNode('button', '', 'resume-record-action resume-record-delete'); remove.type = 'button'; remove.dataset.moduleAction = 'delete'; remove.setAttribute('aria-label', `删除第 ${ordinal + 1} 条${group.group}`); remove.title = '删除此条记录'; remove.append(resumeRecordIcon('delete'));
     // 删除按钮常驻标题，鼠标与键盘激活均不触发 summary 的展开/收起。
-    remove.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); manageModuleRecord(profileId, group.group, record.entryId, remove); }); summary.append(remove); details.append(summary);
-    details.addEventListener('toggle', () => { if (!details.isConnected) return; if (!resumeRecordExpansion.has(profileId)) resumeRecordExpansion.set(profileId, new Map()); resumeRecordExpansion.get(profileId).set(key, details.open); scheduleResumePosition(); });
-    details.append(resumeRecordFields(profileId, group, record.items, record.entryId, index, ordinal)); section.append(details);
+    remove.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); manageModuleRecord(profileId, group.group, record.entryId, remove); }); actions.append(collapse, remove); summary.append(actions); details.append(summary);
+    details.addEventListener('toggle', () => { if (!details.isConnected) return; updateCollapse(); if (!resumeRecordExpansion.has(profileId)) resumeRecordExpansion.set(profileId, new Map()); resumeRecordExpansion.get(profileId).set(key, details.open); scheduleResumePosition(); });
+    details.append(fields); section.append(details);
   });
   // 新增按钮始终位于全部记录之后，不随任何一条记录收起而隐藏。
   const footer = workspaceNode('div', '', 'resume-group-footer'); footer.append(add); section.append(footer);

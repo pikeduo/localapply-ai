@@ -245,16 +245,24 @@ input::placeholder, textarea::placeholder { color: var(--sub); opacity: .85; }
 /* 同一模块的所有记录使用一致容器，首条也可收起；控件节点保留，避免收起时丢失草稿。 */
 .resume-group-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .resume-group-header .center-group-heading { margin-right: auto; }
-/* 重复模块底部集中放置主色新增按钮，与记录内容保持间距。 */
+/* 参考页的底部加号新增入口占满模块宽度，与右上角紧凑操作区形成层级。 */
 .resume-group-footer { display: flex; margin-top: 20px; }
+.resume-record-add { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 44px; }
+.resume-record-add-icon { font-size: 23px; line-height: 1; font-weight: 400; }
 .resume-record { padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
-/* 删除入口固定在标题旁，收起时仍可操作；保留自绘箭头及键盘焦点样式。 */
+/* 标题左侧保留序号和摘要；右侧箭头及删除图标常驻，收起时仍可键盘操作。 */
 .resume-record > summary { display: flex; align-items: center; gap: 10px; margin-bottom: 0; list-style: none; }
 .resume-record > summary::-webkit-details-marker { display: none; }
-.resume-record > summary::before { content: '▸'; flex: 0 0 auto; }
-.resume-record[open] > summary::before { transform: rotate(90deg); }
-.resume-record > summary > span { flex: 1; min-width: 0; }
-.resume-record > summary > [data-module-action="delete"] { flex-shrink: 0; }
+.resume-record > summary > .resume-record-caption { flex: 1; min-width: 0; }
+.resume-record-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.resume-record-action { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; padding: 7px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--brand); cursor: pointer; }
+.resume-record-action svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.resume-record-action:hover { background: var(--brand-weak); border-color: var(--line); }
+.resume-record-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.resume-record-delete { color: var(--err); }
+.resume-record-delete:hover { background: color-mix(in srgb, var(--err) 10%, var(--card)); border-color: currentColor; }
+.resume-record-action:disabled { opacity: .5; cursor: not-allowed; }
+.resume-record[open] .resume-record-collapse svg { transform: rotate(180deg); }
 .resume-record[open] > summary { margin-bottom: 16px; }
 /* 序号及经历摘要在收起时仍可辨认，长标题换行，兼容明暗主题和窄屏。 */
 .resume-record-caption { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; overflow-wrap: anywhere; }

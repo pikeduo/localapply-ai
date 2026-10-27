@@ -2646,6 +2646,9 @@ for (const withExtension of [true, false]) {
       await first.locator('[data-field-id="builtin.school"] input').fill('合成第一学校'); await first.locator('[data-field-id="builtin.school"] input').blur(); await page.evaluate(() => resumeSaveQueue);
       await first.locator('[data-field-id="builtin.degree"] select').selectOption({ label: '本科' }); await page.evaluate(() => resumeSaveQueue);
       assert.equal(await first.locator('.resume-record-caption strong').textContent(), '合成第一学校'); assert.equal(await first.locator('.resume-record-subtitle').textContent(), '本科');
+      // 右侧独立箭头支持键盘展开收起，按钮状态与原生 details 保持一致。
+      const collapse = first.locator('.resume-record-collapse'); await collapse.press('Enter'); assert.equal(await first.getAttribute('open'), null); assert.equal(await collapse.getAttribute('aria-expanded'), 'false');
+      await collapse.press('Enter'); assert.notEqual(await first.getAttribute('open'), null); assert.equal(await collapse.getAttribute('aria-expanded'), 'true');
       await education.locator('[data-module-action="add"]').click(); await education.locator('.resume-record:not(.resume-primary-record)').waitFor();
       const second = education.locator('.resume-record:not(.resume-primary-record)'); assert.equal(await second.locator('.resume-record-caption strong').textContent(), '教育背景');
       const unsafe = '<img src=x onerror="window.unexpectedExecution=true">';
@@ -2654,6 +2657,9 @@ for (const withExtension of [true, false]) {
       await second.locator('[data-field-id="builtin.school"] input').fill('合成第二学校'); await second.locator('[data-field-id="builtin.school"] input').blur(); await page.evaluate(() => resumeSaveQueue);
       await first.locator(':scope > summary').click(); await second.locator(':scope > summary').click();
       assert.equal(await first.locator('.resume-record-caption strong').textContent(), '合成第一学校'); assert.equal(await second.locator('.resume-record-caption strong').textContent(), '合成第二学校'); assert.equal(await second.locator('[data-module-action="delete"]').isVisible(), true);
+      const footer = education.locator('.resume-group-footer'); const add = footer.locator('[data-module-action="add"]');
+      assert.ok(Math.abs((await add.boundingBox()).width - (await footer.boundingBox()).width) < 2); assert.ok((await add.boundingBox()).y >= (await second.boundingBox()).y + (await second.boundingBox()).height);
+      assert.equal(await second.locator('.resume-record-actions [data-module-action="delete"] svg').count(), 1);
       await education.screenshot({ path: path.join(testRoot, `record-heading-${withExtension ? 'extension' : 'file'}.png`) });
       const intro = page.locator('[data-field-id="builtin.selfIntroduction"] textarea'); const grid = intro.locator('..').locator('..');
       assert.ok(Math.abs((await intro.boundingBox()).width - (await grid.boundingBox()).width) < 3);
