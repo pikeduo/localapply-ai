@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成多段经历申请</title>
+<style>body{font:15px system-ui;margin:24px;max-width:850px}.apply-block-synthetic{border:1px solid #ddd;padding:18px;margin-bottom:16px}.blockTitle-synthetic{display:flex;justify-content:space-between}.apply-fields-synthetic{border-top:1px solid #ddd;padding:15px 0}.apply-field-synthetic{margin:9px 0}.title-synthetic{margin-bottom:5px}input,textarea,select{padding:8px}.month-range-select{display:flex;gap:6px}label.sd-Select-container-synthetic{display:inline-block}.sd-Dropdown-overlay-synthetic{position:fixed;top:15px;left:15px;z-index:999999;background:white;border:1px solid #aaa;max-height:300px;overflow:auto}[role=option]{padding:6px;cursor:pointer}.rc-picker-dropdown{position:fixed;top:30px;left:20px;background:white;border:1px solid #aaa;z-index:999999}[hidden]{display:none!important}</style></head>
+<body><div class="job-form__title"><div class="company-name-synthetic">合成多段招聘企业</div><div class="job-info-synthetic"><div class="title-synthetic">合成开发工程师</div></div></div><form id="application"><div id="blocks"></div><button type="submit">提交申请</button></form>
+<script>
+  let submissions = 0; let changes = 0; const additions = {}; let serial = 0;
+  // 只使用合成内容；模块、记录和多类名顺序模拟上传页，不执行上传页任何脚本。
+  function moduleBlock(name, kind, factory) {
+    const block = document.createElement('section'); block.className = 'apply-block-synthetic'; block.dataset.kind = kind;
+    const title = document.createElement('div'); title.className = 'blockTitle-synthetic'; title.innerHTML = '<div><span class="text-synthetic"></span></div>'; title.querySelector('span').textContent = name; block.append(title); document.getElementById('blocks').append(block);
+    // 新记录由页面自身事件创建，测试填写器不得直接克隆 DOM 或复制内部状态。
+    const append = () => { const record = document.createElement('div'); record.className = 'apply-fields-synthetic'; record.dataset.index = block.querySelectorAll('.apply-fields-synthetic').length; block.append(record); factory(record); };
+    if (kind) { const add = document.createElement('button'); add.type = 'button'; add.textContent = '+ 添加'; title.firstElementChild.append(add); add.addEventListener('click', () => { additions[kind] = (additions[kind] || 0) + 1; append(); }); }
+    append(); return block;
+  }
+  // 字段标题与控件分离，避免扫描器从整条经历正文中猜测标签。
+  function field(parent, label) { const wrap = document.createElement('div'); wrap.className = 'apply-field-synthetic'; const title = document.createElement('div'); title.className = 'title-synthetic'; title.textContent = label; const control = document.createElement('div'); control.className = 'ctrl-synthetic'; wrap.append(title, control); parent.append(wrap); return control; }
+  // 合成普通输入仍带站点非标准防补全属性，事件记录用于检查是否真正发生写入。
+  function text(parent, label, multiline = false) { const input = document.createElement(multiline ? 'textarea' : 'input'); input.setAttribute('autocomplete', 'new_password'); input.placeholder = label; field(parent,label).append(input); input.addEventListener('input', () => changes++); return input; }
+  // portal 与其他下拉分离，无 aria-controls；每次打开必须重新建立唯一弹层归属。
+  function dropdown(parent, placeholder, options, searchable = false, preset = '') {
+    const root = document.createElement('div'); root.className = 'sd-Dropdown-container-synthetic'; root.innerHTML = '<label class="sd-Input-container-synthetic sd-Select-container-synthetic select"><span class="sd-Input-display-value-synthetic"></span><input type="text" autocomplete="nope"></label>'; parent.append(root);
+    const input = root.querySelector('input'); const display = root.querySelector('span'); input.placeholder = placeholder; display.textContent = preset; if (searchable) root.querySelector('label').classList.remove('select');
+    const popup = document.createElement('div'); popup.className = 'sd-Dropdown-overlay-synthetic'; popup.hidden = true; popup.innerHTML = '<div role="listbox"></div>'; const list = popup.firstElementChild; document.body.append(popup);
+    for (const value of options) { const option = document.createElement('div'); option.setAttribute('role','option'); option.innerHTML = '<span class="sd-Select-option-label-synthetic"></span>'; option.firstElementChild.textContent = value; list.append(option); option.addEventListener('click', () => { display.textContent = value; input.value = ''; popup.hidden = true; changes++; }); }
+    input.addEventListener('click', () => { document.querySelectorAll('.sd-Dropdown-overlay-synthetic').forEach((node) => { node.hidden = true; }); popup.hidden = false; });
+    input.addEventListener('input', () => { if (searchable) [...list.children].forEach((node) => { node.hidden = !node.textContent.includes(input.value); }); });
+    input.addEventListener('blur', () => { input.value = ''; setTimeout(() => { popup.hidden = true; }, 60); }); return input;
+  }
+  // 每个年月范围属于自己的记录，月份选项带单位及补零，验证数值等价精确选择。
+  function dates(parent, title, single = false) { const root = document.createElement('div'); root.className = 'month-range-select'; field(parent,title).append(root); for (const side of single ? [''] : ['start','end']) { const year = dropdown(root,'年',['2018','2020','2022','2024','2026']); year.dataset.side = side; const month = dropdown(root,'月',['06月','09月']); month.dataset.side = side; } }
+  // 出生日期使用只读日历和 portal；年/月控件由页面更新日期格，点击后记录框架状态。
+  function birth(parent) {
+    const control = field(parent,'出生日期 (年龄)'); control.parentElement.classList.add('day_info-synthetic'); const input = document.createElement('input'); input.id = 'birth'; input.readOnly = true; input.placeholder = '出生日期 (年龄)'; control.append(input);
+    const popup = document.createElement('div'); popup.className = 'rc-picker-dropdown'; popup.setAttribute('role','dialog'); popup.hidden = true; popup.innerHTML = '<select data-part="year"><option>2000</option><option selected>2026</option></select><select data-part="month"><option>6</option><option selected>10</option></select><div class="days"></div>'; document.body.append(popup);
+    // 每次翻年/月重新生成日期，不能将 DOM 文本修改冒充框架接受选择。
+    const render = () => { const [year,month] = [...popup.querySelectorAll('select')].map((node) => node.value); const days = popup.querySelector('.days'); days.replaceChildren(); for (let day=1; day<=28; day++) { const cell = document.createElement('button'); cell.type = 'button'; cell.title = `${year}-${month.padStart(2,'0')}-${String(day).padStart(2,'0')}`; cell.textContent = day; cell.addEventListener('click', () => { input.value = cell.title; window.acceptedBirth = input.value; input.dispatchEvent(new Event('change',{bubbles:true})); popup.hidden = true; changes++; }); days.append(cell); } };
+    popup.querySelectorAll('select').forEach((node) => node.addEventListener('change',render)); input.addEventListener('click',()=>{ render(); popup.hidden=false; });
+  }
+  const basic = moduleBlock('个人信息','', (record) => { text(record,'姓名').value = '网页原有姓名'; birth(record); dropdown(field(record,'工作经验'),'请选择',['应届生','1-3年','3-5年']); dropdown(field(record,'最高学历'),'请选择',['本科','硕士'],false,'硕士'); });
+  moduleBlock('工作经历','employment',(record)=>{dates(record,'起止时间');text(record,'公司名称');text(record,'职位名称');text(record,'工作职责',true);});
+  moduleBlock('教育背景','education',(record)=>{dates(record,'就读时间');dropdown(field(record,'学校名称'),'请输入就读学校',['合成本科大学','合成硕士大学'],true);dropdown(field(record,'专业名称'),'请输入专业名称',['合成专业甲','合成专业乙'],true);dropdown(field(record,'学历'),'请选择',['本科','硕士']);});
+  moduleBlock('项目经验','project',(record)=>{dates(record,'起止时间');text(record,'项目名称');text(record,'职责');text(record,'项目描述',true);text(record,'项目中职责',true);});
+  moduleBlock('语言能力','',(record)=>{text(record,'语言类型').value='英语';dropdown(field(record,'掌握程度'),'请选择',['精通','熟练','一般'],false,'一般');dropdown(field(record,'听说'),'请选择',['精通','熟练','一般']);dropdown(field(record,'读写'),'请选择',['精通','熟练','一般']);});
+  moduleBlock('获奖经历','award',(record)=>{dates(record,'获奖时间',true);text(record,'奖项名称');});
+  document.getElementById('application').addEventListener('submit',(event)=>{event.preventDefault();submissions++;});
+</script></body></html>

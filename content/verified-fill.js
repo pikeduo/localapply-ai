@@ -38,7 +38,8 @@
     const before = global.LocalApplyPageScanner.readValue(item);
     const occupied = Array.isArray(before) ? before.length > 0 : before !== '' && before !== null && before !== undefined && before !== false && !(item.field.type === 'combobox' && /^(请选择|请选择一项|Select|Please select)$/i.test(before));
     if (options.overwrite && JSON.stringify(before) !== JSON.stringify(options.expectedCurrent)) return { status: 'needs_confirmation', ok: false, reason: '网页内容在确认后已变化，请重新核对差异', conflict: { before, after: value } };
-    if (!options.overwrite && occupied && !accepted(item, value)) return { status: 'needs_confirmation', ok: false, reason: '网页已有不同内容，已保留；核对差异后可单独允许覆盖', conflict: { before, after: value } };
+    const different = item.compound ? A.hasConflict(item, value) : occupied && !accepted(item, value);
+    if (!options.overwrite && different) return { status: 'needs_confirmation', ok: false, reason: '网页已有不同内容，已保留；核对差异后可单独允许覆盖', conflict: { before, after: value } };
     return null;
   }
 

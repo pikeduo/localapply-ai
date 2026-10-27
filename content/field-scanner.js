@@ -39,7 +39,7 @@
       const group = M.redact(block.querySelector(':scope > [class^="blockTitle-"] [class^="text-"]')?.textContent);
       const record = el.closest('[class^="apply-fields-"],[class*=" apply-fields-"]');
       const records = [...block.children].filter((node) => node.matches('[class^="apply-fields-"],[class*=" apply-fields-"]'));
-      const kind = /教育|学历/.test(group) ? 'education' : /实习/.test(group) ? 'internship' : /工作经历/.test(group) ? 'employment' : /项目/.test(group) ? 'project' : /获奖/.test(group) ? 'award' : '';
+      const kind = global.WangshenTemplates.recordKind(group) || (/教育|学历/.test(group) ? 'education' : /实习/.test(group) ? 'internship' : /工作经历/.test(group) ? 'employment' : /项目/.test(group) ? 'project' : /获奖/.test(group) ? 'award' : '');
       const probe = label(el); const degree = /第一学历/.test(probe) ? 'first' : /最高学历/.test(probe) ? 'highest' : '';
       return { group, kind, degree, index: Math.max(0, records.indexOf(record)) };
     }
@@ -152,6 +152,40 @@
     });
   }
 
+  // 只描述已识别的 Moka 重复模块；记录/按钮节点不离开本页，字段实际值不进入描述。
+  function recordBlocks() {
+    if (!granted || currentUrl !== location.href) throw new Error('请先主动扫描当前招聘页面');
+    return [...document.querySelectorAll('[class^="apply-block-"],[class*=" apply-block-"]')].flatMap((block) => {
+      const heading = block.querySelector(':scope > [class^="blockTitle-"]');
+      const kind = global.WangshenTemplates.recordKind(heading?.querySelector('[class^="text-"]')?.textContent.trim());
+      if (!kind || ['family'].includes(kind)) return [];
+      const add = [...(heading?.querySelectorAll('button[type="button"]') || [])].filter((node) => /^\+?\s*添加(?:经历|记录)?$/.test(node.textContent.trim()) && !node.disabled && node.getClientRects().length);
+      const records = [...block.children].filter((node) => node.matches('[class^="apply-fields-"],[class*=" apply-fields-"]'));
+      // 已有超多记录仍可扫描单项，只停止自动增补，不能让整页扫描报错。
+      if (records.length > 20) return [];
+      return [{ blockId: id(block), kind, canAdd: add.length === 1, records: records.map((node) => ({ recordId: id(node), scanIds: [...registry.values()].filter((item) => node.contains(item.el)).map((item) => item.field.scanId) })) }];
+    });
+  }
+
+  // 一次只点当前模块唯一的“添加”，必须观察到恰好新增一条；不点击删除/提交或无限重试。
+  async function addRecord(blockId, expectedDocument) {
+    if (!granted || currentUrl !== location.href || documentId !== expectedDocument) throw new Error('页面已变化，请重新扫描');
+    const block = [...document.querySelectorAll('[class^="apply-block-"],[class*=" apply-block-"]')].find((node) => nodeIds.get(node) === blockId);
+    const group = recordBlocks().find((item) => item.blockId === blockId);
+    if (!block || !group?.canAdd || group.records.length >= 20) throw new Error('该模块不能安全添加记录或已达到上限');
+    const button = [...block.querySelectorAll(':scope > [class^="blockTitle-"] button[type="button"]')].find((node) => /^\+?\s*添加(?:经历|记录)?$/.test(node.textContent.trim()) && !node.disabled && node.getClientRects().length);
+    if (!button) throw new Error('添加按钮已变化，请重新扫描');
+    button.click();
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (!block.isConnected || currentUrl !== location.href) throw new Error('添加时页面结构已变化，请重新扫描');
+      const count = [...block.children].filter((node) => node.matches('[class^="apply-fields-"],[class*=" apply-fields-"]')).length;
+      if (count === group.records.length + 1) return;
+      if (count !== group.records.length) break;
+    }
+    throw new Error('网页未确认新增一条记录，已停止添加');
+  }
+
   // 只通知结构变化，不向后台发送值；导航会撤销当前文档授权。
   const observer = new MutationObserver(() => {
     if (!granted) return;
@@ -166,5 +200,5 @@
 
   // 撤销只清理本页内存，不删除用户资料或已确认规则。
   function revoke() { granted = false; registry.clear(); lastSignature = ''; }
-  global.LocalApplyPageScanner = { scan, record, readValue, completion, revoke, documentId };
+  global.LocalApplyPageScanner = { scan, record, readValue, completion, recordBlocks, addRecord, revoke, documentId };
 })(globalThis);

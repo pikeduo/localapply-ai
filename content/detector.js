@@ -422,9 +422,12 @@
             const snapshot = globalThis.LocalApplyPageScanner.scan(msg.authorize === true);
             // 完成标记与结构元数据分开，AI 契约不会接收网页输入值或完成状态。
             snapshot.completion = globalThis.LocalApplyPageScanner.completion();
+            snapshot.recordBlocks = globalThis.LocalApplyPageScanner.recordBlocks();
             if (msg.authorize === true) { authorized = true; authorizedUrl = location.href; detect(); }
             sendResponse({ ok: true, snapshot }); return;
           }
+          case 'learning:addRecord':
+            await globalThis.LocalApplyPageScanner.addRecord(msg.blockId, msg.documentId); sendResponse({ ok: true }); return;
           case 'learning:revoke':
             authorized = false; globalThis.LocalApplyPageScanner.revoke(); detect(); sendResponse({ ok: true }); return;
           case 'learning:read':

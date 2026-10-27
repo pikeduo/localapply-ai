@@ -202,7 +202,7 @@
   $('smartAICancel').addEventListener('click', async () => { aiPreview = null; $('smartAIReview').hidden = true; if (current) { try { await request('cancelAI'); } catch { /* 失效会话无需继续等待取消。 */ } } });
   $('smartAISend').addEventListener('click', () => task(async () => { if (!$('smartAIConsent').checked || !aiPreview) throw new Error('请先核对模型接收方及发送内容并勾选确认'); const preview = aiPreview; aiPreview = null; $('smartAICancel').disabled = false; const result = await request('recognize', { token: preview.token, confirmed: true }); update(result); $('smartAIReview').hidden = true; $('smartStatus').textContent = `AI 返回 ${result.suggestionCount} 条待确认建议；没有修改个人资料`; }));
   $('smartFillAll').addEventListener('click', () => task(async () => {
-    if (directFill) await ensureCurrent();
+    if (directFill) { await ensureCurrent(); update(await request('prepareRecords', { confirmed: true })); current.rows.filter((row) => row.source === 'record' && row.status === 'matched').forEach((row) => selected.add(row.field.scanId)); }
     else if (!current) throw new Error('请先扫描页面');
     await prepareFill([...selected]);
   }));
@@ -216,7 +216,7 @@
       const status = current.rows.find((row) => row.field.scanId === scanId)?.status;
       if (status === 'success') { success++; if (remember) update(await request('remember', { scanId, confirmed: true })); } else if (status === 'needs_confirmation') pending++; else failed++;
     }
-    $('smartStatus').textContent = `填写完成：成功填入 ${success} 个字段，失败/不支持 ${failed}，需确认 ${pending}${directFill ? `，剩余 ${current.rows.filter(unfinished).length} 个未完成` : ''}。未提交申请。`;
+    $('smartStatus').textContent = `填写完成：成功填入 ${success} 个字段，失败/不支持 ${failed}，需确认 ${pending}${directFill ? `，剩余 ${current.rows.filter(unfinished).length} 个未完成` : ''}。未提交申请。${current.notice || ''}`;
   }
   $('smartFillConfirm')?.addEventListener('click', () => task(async () => {
     if (!$('smartFillConsent').checked) throw new Error('请先核对填写预览并勾选确认');

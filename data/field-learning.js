@@ -52,6 +52,9 @@
       const oldSources = item.sources || [];
       item.fields = fields; item.rows = M.match(db, item.profileId, item.origin, fields);
       for (const row of item.rows) {
+        // 自动增补只绑定到本次明确分配的整条记录，绝不改变同站已验证的映射优先级。
+        const assigned = item.recordTargets?.[row.field.scanId]; const assignedTarget = assigned && { fieldId: assigned.fieldId, entryId: assigned.entryId };
+        if (assigned?.semanticId === row.field.semanticId && row.source !== 'memory' && db.publicFieldIds.includes(assigned.fieldId)) Object.assign(row, { target: assignedTarget, candidates: [assignedTarget], source: 'record', reason: '当前简历的整条经历已绑定此网页记录，只填写空白项', status: M.hasValue(M.valueOf(db, item.profileId, assignedTarget)?.value) ? 'matched' : 'missing_value' });
         const previous = old.find((value) => value.field.scanId === row.field.scanId && value.field.semanticId === row.field.semanticId);
         if (previous) row.webFilled = previous.webFilled === true;
         if (previous?.ignored) row.ignored = true;
@@ -70,12 +73,14 @@
           const latest = source && sources(db, item.profileId).find((value) => value.fieldId === source.fieldId && value.entryId === source.entryId && JSON.stringify(value.value) === JSON.stringify(source.value));
           if ((!suggestion.existingFieldId || db.fieldDefinitions.some((def) => def.fieldId === suggestion.existingFieldId)) && (suggestion.sourceRef === null || latest)) row.suggestion = { ...suggestion, sourceRef: latest?.ref || null };
         }
+        // 未确认来源的已有经历不能将另一条简历资料补进其空字段，需逐项明确选择。
+        if (item.protectedRecords?.has(row.field.scanId) && !row.chosen && row.source !== 'memory' && row.target) Object.assign(row, { target: null, status: 'needs_confirmation', reason: '网页已有经历但尚未绑定来源，请手动选择，避免混入另一条记录' });
       }
       item.revision = db.revision; item.sources = sources(db, item.profileId);
     }
     // 仅可信 UI 接收个人值预览；字段元数据不夹带 HTML 或网页其他输入值。
     function view(item, db) {
-      return { sessionId: item.sessionId, origin: item.origin, profileId: item.profileId, revision: db.revision, notice: item.notice || '',
+      return { sessionId: item.sessionId, origin: item.origin, profileId: item.profileId, revision: db.revision, notice: [item.notice, item.recordNotice].filter(Boolean).join('；'),
         rows: item.rows.map((row) => ({ ...row, value: row.target ? M.valueOf(db, item.profileId, row.target)?.value ?? null : null })),
         sources: item.sources, entries: db.entries.filter((entry) => entry.profileId === item.profileId).map(({ entryId, kind, order }) => ({ entryId, kind, order })),
         definitions: db.fieldDefinitions.filter((def) => item.sources.some((source) => source.fieldId === def.fieldId)),
@@ -89,13 +94,63 @@
         const state = rows.find((item) => item.scanId === row.field.scanId); row.webFilled = state?.present === true;
         if (state?.present === false && row.status === 'success' && !(row.field.type === 'checkbox' && row.verification?.value === false)) { row.status = 'matched'; row.reason = '网页内容已清空，可以重新填写'; delete row.verification; }
       }
+      // 重复模块只接受本次扫描字段的引用，不接收网页值或任意按钮选择器。
+      const blocks = snapshot.recordBlocks || []; const ids = new Set(); const referenced = new Set();
+      check(Array.isArray(blocks) && blocks.length <= 20, '网页经历结构格式错误');
+      for (const block of blocks) {
+        check(block && Object.keys(block).sort().join() === 'blockId,canAdd,kind,records' && /^scan\.[\w.-]{1,100}$/.test(block.blockId) && !ids.has(block.blockId) && Object.hasOwn(global.WangshenTemplates.RECORD_GROUPS, block.kind) && typeof block.canAdd === 'boolean' && Array.isArray(block.records) && block.records.length <= 20, '网页经历结构格式错误'); ids.add(block.blockId);
+        for (const record of block.records) {
+          check(record && Object.keys(record).sort().join() === 'recordId,scanIds' && /^scan\.[\w.-]{1,100}$/.test(record.recordId) && !ids.has(record.recordId) && Array.isArray(record.scanIds) && record.scanIds.length <= 100 && new Set(record.scanIds).size === record.scanIds.length && record.scanIds.every((scanId) => !referenced.has(scanId) && item.rows.some((row) => row.field.scanId === scanId && row.field.kind === block.kind)), '网页经历结构格式错误'); ids.add(record.recordId); record.scanIds.forEach((scanId) => referenced.add(scanId));
+        }
+      }
+      item.recordBlocks = blocks;
+    }
+
+    // 本地整条记录按简历现有顺序分配空白网页槽位；已有非空且未绑定的记录保留，避免混写或重复添加。
+    async function prepareRecords(item, db) {
+      await refresh(item, db); item.recordBindings ||= {}; item.recordTargets ||= {}; item.protectedRecords = new Set(); let added = 0; let protectedGroups = 0; let remaining = 0;
+      for (const initial of item.recordBlocks.filter((block) => block.canAdd)) {
+        const belongs = (fieldId) => global.WangshenTemplates.recordKind(db.fieldDefinitions.find((def) => def.fieldId === fieldId)?.group) === initial.kind;
+        const local = [null, ...db.entries.filter((entry) => entry.profileId === item.profileId && entry.kind === initial.kind).sort((a, b) => a.order - b.order || a.entryId.localeCompare(b.entryId)).map((entry) => entry.entryId)]
+          .filter((entryId) => db.fieldValues.some((value) => value.profileId === item.profileId && value.entryId === entryId && belongs(value.fieldId) && M.hasValue(value.value)));
+        if (!local.length) continue;
+        const occupied = (record) => record.scanIds.some((id) => item.rows.find((row) => row.field.scanId === id)?.webFilled);
+        // 单项人工选择不能推断为整条经历授权；已有映射/手选或非空的未绑定模块交给用户处理。
+        if (initial.records.some((record) => !Object.hasOwn(item.recordBindings, record.recordId) && (occupied(record) || record.scanIds.some((id) => { const row = item.rows.find((row) => row.field.scanId === id); return row?.source === 'memory' || row?.chosen && row.source === 'manual'; })))) {
+          protectedGroups++; initial.records.forEach((record) => record.scanIds.forEach((scanId) => item.protectedRecords.add(scanId))); continue;
+        }
+        const used = initial.records.filter((record) => Object.hasOwn(item.recordBindings, record.recordId)).map((record) => item.recordBindings[record.recordId]);
+        const pending = local.filter((entryId) => !used.includes(entryId));
+        let block = initial;
+        while (block.records.filter((record) => !occupied(record) && !Object.hasOwn(item.recordBindings, record.recordId)).length < pending.length && block.records.length < 20 && added < 20) {
+          const latest = await session(item.sessionId); check(latest.db.revision === db.revision, '资料已变化，已停止添加，请重新扫描');
+          await pageMessage(item.tabId, { type: 'learning:addRecord', documentId: item.documentId, blockId: block.blockId }); added++;
+          const after = await session(item.sessionId); check(after.db.revision === db.revision, '添加期间资料已变化，已停止，请重新扫描');
+          await refresh(item, db); block = item.recordBlocks.find((value) => value.blockId === initial.blockId);
+          check(block, '模块已重建，请重新扫描，不继续猜测添加按钮');
+        }
+        check(sessions.has(item.sessionId), '页面已关闭，已停止补充经历');
+        for (const record of block.records) {
+          if (!Object.hasOwn(item.recordBindings, record.recordId) && !occupied(record) && pending.length) item.recordBindings[record.recordId] = pending.shift();
+          // 网页槽位多于本地记录时保留多余空槽，不能让单来源回退把同一段经历重复填入。
+          if (!Object.hasOwn(item.recordBindings, record.recordId)) { record.scanIds.forEach((scanId) => item.protectedRecords.add(scanId)); continue; }
+          for (const scanId of record.scanIds) {
+            const field = item.fields.find((field) => field.scanId === scanId); const def = M.definitionFor(db, field)?.definition;
+            if (def && belongs(def.fieldId) && db.publicFieldIds.includes(def.fieldId)) item.recordTargets[scanId] = { fieldId: def.fieldId, entryId: item.recordBindings[record.recordId], semanticId: field.semanticId };
+          }
+        }
+        remaining += pending.length;
+      }
+      item.recordNotice = `已补充 ${added} 条网页经历${protectedGroups ? `；${protectedGroups} 个模块已有未绑定内容，保留原记录，请手动选择来源` : ''}${remaining ? `；已达到本次添加上限，另有 ${remaining} 条经历尚未分配，请检查网页后继续` : ''}`;
+      rebuild(item, db); return view(item, db);
     }
     // 再扫描只读取已经授权的同一文档，动态新增时清理旧建议/确认令牌。
     async function refresh(item, db) {
       const response = await pageMessage(item.tabId, { type: 'learning:scan', authorize: false });
       check(response.snapshot.documentId === item.documentId, '页面已刷新，请重新授权扫描');
       response.snapshot.fields.forEach(M.validateField);
-      if (JSON.stringify(response.snapshot.fields) !== JSON.stringify(item.fields)) { item.rows = []; item.aiPreview = null; item.valuePreview = null; }
+      // 新增记录会改变字段集合；保留稳定字段的人工来源与验证，仅清除依赖旧扫描的 AI 建议和确认令牌。
+      if (JSON.stringify(response.snapshot.fields) !== JSON.stringify(item.fields)) { item.rows.forEach((row) => { delete row.suggestion; }); item.aiPreview = null; item.valuePreview = null; }
       rebuild(item, db, response.snapshot.fields); completion(item, response.snapshot); item.excluded = response.snapshot.excluded || []; item.dirty = false;
     }
     // 选择仅允许本档案来源，不能通过 AI/页面提供的 ID 读取其他人的值。
@@ -154,6 +209,7 @@
       if (msg.type === 'learning:revoke') { await pageMessage(item.tabId, { type: 'learning:revoke' }); drop(item.sessionId); return {}; }
       if (msg.type === 'learning:session') { await refresh(item, db); return view(item, db); }
       check(item.revision === db.revision, '资料已变化，请重新扫描并预览');
+      if (msg.type === 'learning:prepareRecords') { check(msg.confirmed === true, '补充网页经历需要用户主动操作'); return prepareRecords(item, db); }
       if (msg.type === 'learning:prepareAI') {
         check(Array.isArray(msg.scanIds) && msg.scanIds.length > 0 && msg.scanIds.length <= 20 && new Set(msg.scanIds).size === msg.scanIds.length, '请勾选 1–20 个需要 AI 识别的未知字段');
         const fields = msg.scanIds.map((scanId) => { const row = rowOf(item, scanId); check(!row.target && !row.ignored && row.status !== 'unsupported', '只能选择未忽略的未知字段使用 AI'); return row.field; });

@@ -4,6 +4,22 @@
   const containers = '.form-item,.form-group,.field,.el-form-item,.ant-form-item,[role="group"],.date-control,.phone-control,[class^="apply-field-"],[class*=" apply-field-"]';
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const selections = new WeakMap();
+  const popups = new WeakMap();
+
+  // 只枚举明确的列表/日历弹层；用于将一次主动打开中新出现的唯一弹层绑定回输入框。
+  function popupRoots() { return [...document.querySelectorAll('[role="listbox"],[role="dialog"],[class*="sd-Dropdown-popup-"],[class*="sd-Dropdown-overlay-"],[class*="sd-picker-panel-"],.rc-picker-dropdown,.ant-picker-dropdown')].filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'); }
+
+  // portal 没有 aria-controls 时也须有本次打开的证据；多个新弹层或焦点已离开时拒绝猜归属。
+  function popupFor(el, before) {
+    const linked = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+    if (linked) return el.getRootNode().getElementById?.(linked) || null;
+    const cached = popups.get(el); if (cached?.isConnected && cached.getClientRects().length) return cached;
+    if (!before || !(document.activeElement === el || dropdown(el)?.contains(document.activeElement))) return null;
+    const opened = popupRoots().filter((node) => !before.has(node));
+    const roots = opened.filter((node) => !opened.some((other) => other !== node && other.contains(node)));
+    if (roots.length === 1) { popups.set(el, roots[0]); return roots[0]; }
+    return null;
+  }
 
   // 只识别上传页面使用的 Moka 下拉容器，不将普通带装饰的文本框升级为下拉。
   function dropdown(el) { return el.matches?.('input') ? el.closest('[class^="sd-Select-container-"],[class*=" sd-Select-container-"]') : null; }
@@ -14,22 +30,22 @@
   // 候选必须属于该输入的显式弹层或同一个下拉容器，禁止到全页任意点击相似文字。
   function dropdownOptions(el) {
     const owner = dropdown(el); if (!owner) return [];
-    const linked = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
-    const root = linked ? el.getRootNode().getElementById?.(linked) : owner.closest('[class^="sd-Dropdown-container-"],[class*=" sd-Dropdown-container-"]');
+    const root = popupFor(el) || owner.closest('[class^="sd-Dropdown-container-"],[class*=" sd-Dropdown-container-"]');
     return [...(root?.querySelectorAll('[role="option"],[class*="option-" i],[class*="menu-item-" i]') || [])].filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'
       && node.getAttribute('aria-disabled') !== 'true' && !node.matches('button,input,a,[role="button"]') && !node.closest('button,a') && !node.querySelector('button,input,a,[role="button"],[role="option"],[class*="option-" i]'));
   }
 
   // 精确点选才登记本次选择证据；仅输入文字即使暂时显示相同也不能算填写成功。
   async function fillDropdown(el, value, unit = '') {
-    const desired = String(value); selections.delete(el); el.focus(); el.click();
+    const desired = String(value); const before = new Set(popupRoots()); selections.delete(el); popups.delete(el); el.focus(); el.click();
     if (!el.readOnly && !dropdown(el).classList.contains('select')) {
       // 搜索时保持弹层焦点，不能复用会立即 blur 的普通文本填写路径。
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, desired);
       el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    for (let attempt = 0; attempt < 10; attempt++) {
+    for (let attempt = 0; attempt < 30; attempt++) {
       await sleep(60);
+      popupFor(el, before);
       const found = dropdownOptions(el).filter((node) => node.textContent.trim() === desired || node.getAttribute('data-value') === desired || unit && new RegExp('^\\d+' + unit + '?$').test(node.textContent.trim()) && Number(node.textContent.trim().replace(unit, '')) === Number(desired));
       if (found.length > 1) break;
       if (found.length === 1) {
@@ -187,7 +203,20 @@
   }
 
   // 判断日期语义只用控件类型/格式提示；普通描述中的日期字样不触发自动改写。
-  function handles(item) { return !!item.compound || ['date','month','datetime-local'].includes(item.el.type) || /YYYY[-/.]MM/i.test(item.el.getAttribute('placeholder') || '') || (item.el.readOnly && item.el.getAttribute('aria-haspopup') === 'dialog' && /日期|时间|出生|生日/.test(item.field.label)); }
+  function handles(item) { return !!item.compound || ['date','month','datetime-local'].includes(item.el.type) || /YYYY[-/.]MM/i.test(item.el.getAttribute('placeholder') || '') || (item.el.readOnly && (item.el.getAttribute('aria-haspopup') === 'dialog' || item.el.closest('[class*="day_info-"]')) && /日期|时间|出生|生日/.test(item.field.label)); }
+
+  // 比较复合控件中已填写的每个子项；只补空白，已有不同年月/号码必须走单项差异确认。
+  function hasConflict(item, value) {
+    const next = plan(item, value); if (next.error || !item.compound) return false;
+    // 电话只有默认国码且号码为空时仍是空字段；保留原有国际号码填写能力。
+    if (item.compound.kind === 'phone' && !item.compound.parts.number.value) return false;
+    return Object.entries(item.compound.parts).some(([key, el]) => {
+      const current = dropdown(el) ? dropdownText(el) : el.value;
+      if (!current) return false;
+      if (item.compound.kind === 'date') return Number(String(current).replace(/[年月日]$/, '')) !== Number(next.parts[key]);
+      return String(current) !== next.parts[key];
+    });
+  }
 
   // 读取复合字段时仅访问当前授权项的成员，不把默认国码单独当成用户填写内容。
   function read(item) {
@@ -228,11 +257,11 @@
 
   // 日历仅点击绑定弹层内有完整日期的唯一候选；不猜“上一月/下一月”或任意网页按钮。
   async function calendar(item, next) {
-    const el = item.el; const popupId = el.getAttribute('aria-controls');
-    if (!popupId || !next.date.month) return { ok: false, status: 'unsupported', reason: '日历缺少明确弹层关联或年月，请在网页手选' };
-    el.click(); await sleep(80);
-    const popup = el.getRootNode().getElementById?.(popupId);
-    if (!popup || !popup.matches('[role="dialog"],.calendar,.ant-picker-panel,.el-picker-panel')) return { ok: false, status: 'unsupported', reason: '日历弹层结构暂不支持，请在网页手选' };
+    const el = item.el;
+    if (!next.date.day) return { ok: false, status: 'needs_confirmation', reason: '网页日历需要完整日期，本地只有年或年月；请补充日期，不自动补日' };
+    const before = new Set(popupRoots()); popups.delete(el); el.focus(); el.click();
+    let popup; for (let attempt = 0; attempt < 15 && !popup; attempt++) { await sleep(60); popup = popupFor(el, before); }
+    if (!popup || !popup.matches('[role="dialog"],.calendar,.ant-picker-panel,.el-picker-panel,[class*="sd-picker-panel-"],.rc-picker-dropdown,.ant-picker-dropdown')) return { ok: false, status: 'unsupported', reason: '日历未出现唯一关联弹层，请在网页手选' };
     // 有明确年/月选择器时按目标值选择，避免跨年依赖次数猜测或无限翻月。
     for (const [key, value] of [['year', next.date.year], ['month', next.date.month]]) {
       const selectors = [...popup.querySelectorAll('select')].filter((node) => slot(node) === key);
@@ -256,5 +285,5 @@
     }
     return { ok: true };
   }
-  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, dropdown, dropdownText, dropdownOptions, fillDropdown, dropdownAccepted };
+  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, fillDropdown, dropdownAccepted };
 })(globalThis);

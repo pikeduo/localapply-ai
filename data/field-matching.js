@@ -104,7 +104,8 @@
     if (exact.length === 1) return { definition: exact[0], reason: '标准字段或别名精确匹配' };
     // 只映射页面中含义明确的同义标题；薪资周期、最近公司等含义不明项不猜。
     const aliases = { education: { '学校名称': 'school', '专业名称': 'major' }, employment: { '工作职责': 'employmentResponsibilities' }, internship: { '工作职责': 'internshipDescription' }, project: { '职责': 'projectRole', '项目描述': 'projectDescription' } };
-    const alias = aliases[field.kind]?.[field.label] || ({ '出生日期 (年龄)': 'birthDate', '出生日期（年龄）': 'birthDate', '自我描述': 'selfIntroduction' })[field.label];
+    const language = /英语能力|语言能力/.test(field.group) ? ({ '掌握程度': 'englishProficiency', '听说': 'englishListening', '读写': 'englishReading' })[norm] : '';
+    const alias = aliases[field.kind]?.[field.label] || language || ({ '出生日期年龄': 'birthDate', '自我描述': 'selfIntroduction', '所在地': 'currentCity' })[norm];
     if (alias) { const definition = db.fieldDefinitions.find((def) => def.fieldId === 'builtin.' + alias); if (definition) return { definition, reason: '明确字段别名与模块匹配' }; }
     let key = '';
     if (/院校|学校/.test(field.label) && (field.kind === 'education' || field.degree)) key = 'school';
@@ -132,12 +133,13 @@
       if (candidates.length !== 1) return { ...base, candidates, reason: candidates.length ? '存在多段经历，请明确选择来源' : '缺少符合该学历或经历语义的资料', source: 'context' };
       const target = candidates[0];
       const privateSuggestion = !db.publicFieldIds.includes(found.definition.fieldId);
-      return { ...base, target, candidates, source: privateSuggestion ? 'definition-suggestion' : 'local',
-        reason: privateSuggestion ? '私有字段的通用语义建议，请确认当前网站含义' : found.reason,
-        status: hasValue(valueOf(db, profileId, target)?.value) ? privateSuggestion ? 'needs_confirmation' : 'matched' : 'missing_value' };
+      const languageChoice = /语言能力/.test(field.group) && !/英语/.test(field.label);
+      return { ...base, target, candidates, source: privateSuggestion || languageChoice ? 'definition-suggestion' : 'local',
+        reason: languageChoice ? '网页语种未明确，请先选择对应语种的本地来源；不将英语水平套用到其他语言' : privateSuggestion ? '私有字段的通用语义建议，请确认当前网站含义' : found.reason,
+        status: hasValue(valueOf(db, profileId, target)?.value) ? privateSuggestion || languageChoice ? 'needs_confirmation' : 'matched' : 'missing_value' };
     });
   }
 
   global.FieldMappingMemory = { find: memory };
-  global.FieldMatchingEngine = { redact, features, semanticId, validateField, restricted, hasValue, valueOf, match, degreeOf };
+  global.FieldMatchingEngine = { redact, features, semanticId, validateField, restricted, hasValue, valueOf, match, degreeOf, definitionFor };
 })(globalThis);

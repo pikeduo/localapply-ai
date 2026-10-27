@@ -9,7 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 
 // 构建与生产相同的 repository/匹配/学习服务，网络和网页只由明确桩响应。
 async function fixture() {
-  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let completion = [];
+  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let completion = []; let recordBlocks = []; let onAdd = () => {};
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
   for (const file of ['templates','providers','key-vault','resume','field-matching','field-suggestions','applications','local-store','field-learning']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
@@ -18,7 +18,8 @@ async function fixture() {
   const db = await repo.read(); const profileId = db.activeProfileId;
   const browser = { tabs: { get: async () => ({ id: 42, url }), sendMessage: async (tabId, msg) => {
     calls.push({ type: msg.type, ...msg });
-    if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', origin: new URL(url).origin, fields: structuredClone(fields), completion } };
+    if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', origin: new URL(url).origin, fields: structuredClone(fields), completion, recordBlocks } };
+    if (msg.type === 'learning:addRecord') { await onAdd(); return { ok: true }; }
     if (msg.type === 'learning:read') return { ok: true, value: actual };
     if (msg.type === 'learning:fill') { if (fillGate) await fillGate; actual = failFill ? '' : msg.value; return { ok: true, result: { status: failFill ? 'failed' : 'success', reason: failFill ? '受控组件回退' : '', verifiedAt: new Date().toISOString() } }; }
     if (msg.type === 'learning:verify') return { ok: true, result: { status: actual === msg.value ? 'success' : 'failed', verifiedAt: new Date().toISOString() } };
@@ -35,6 +36,7 @@ async function fixture() {
   const setValue = (fieldId, value, entryId = null) => repo.command({ action: 'setValue', payload: { profileId, fieldId, entryId, value } });
   return { context, repo, disk, profileId, calls, aiCalls, field, scan, send, service, setValue,
     response: (next) => { response = next; }, navigate: () => { url += '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, completion: (value) => { completion = value; },
+    recordBlocks: (value) => { recordBlocks = value; }, pageFields: (value) => { fields = value; }, onAdd: (callback) => { onAdd = callback; },
     holdFill: () => { let release; fillGate = new Promise((resolve) => { release = resolve; }); return release; } };
 }
 
@@ -70,6 +72,82 @@ test('岗位申请页明确别名与模块对应，无内容时保持缺资料�
   const env = await fixture(); await env.setValue('builtin.birthDate', '2000-06'); await env.setValue('builtin.employmentResponsibilities', '合成职责');
   const view = await env.scan(env.field('出生日期 (年龄)'), env.field('工作职责', { kind: 'employment' }), env.field('项目描述', { kind: 'project' }), env.field('当前薪资'));
   assert.equal(view.rows[0].value, '2000-06'); assert.equal(view.rows[1].value, '合成职责'); assert.equal(view.rows[2].target?.fieldId, 'builtin.projectDescription'); assert.equal(view.rows[2].status, 'missing_value'); assert.notEqual(view.rows[3].target?.fieldId, 'builtin.currentMonthlySalary'); assert.equal(env.context.FieldMatchingEngine.hasValue(view.rows[3].value), false); assert.equal(env.aiCalls.length, 0);
+});
+
+// 分配整条已保存经历，而非按每个字段分别猜来源；页面添加不会修改个人库。
+test('用户直填时按整条经历补充空网页记录，字段绑定不串条且不重复添加', async () => {
+  const env = await fixture(); await env.setValue('builtin.school','合成本科学校');
+  const entry = (await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'education',title:'合成硕士'}})).result; await env.setValue('builtin.school','合成硕士学校',entry);
+  const first = env.field('学校名称',{kind:'education',group:'教育背景'}); const second = env.field('学校名称',{kind:'education',group:'教育背景',index:1});
+  const blocks = [{blockId:'scan.block',kind:'education',canAdd:true,records:[{recordId:'scan.record0',scanIds:[first.scanId]}]}]; env.recordBlocks(blocks);
+  env.onAdd(()=>{blocks[0].records.push({recordId:'scan.record1',scanIds:[second.scanId]});env.pageFields([first,second]);});
+  let view=await env.scan(first); const revision=(await env.repo.read()).revision;
+  await assert.rejects(env.send(view,'prepareRecords'),/主动操作/); view=await env.send(view,'prepareRecords',{confirmed:true});
+  assert.equal(view.rows[0].target.entryId,null);assert.equal(view.rows[1].target.entryId,entry);assert.equal(view.rows[0].value,'合成本科学校');assert.equal(view.rows[1].value,'合成硕士学校');
+  view=await env.send(view,'prepareRecords',{confirmed:true});assert.equal(env.calls.filter((msg)=>msg.type==='learning:addRecord').length,1);assert.equal((await env.repo.read()).revision,revision);assert.equal(env.aiCalls.length,0);
+});
+
+// 动态增补不能把用户明确选择的来源改回默认顺序，也不能越过用户已验证的历史规则。
+test('补充网页记录保留人工来源和历史映射，来源绑定不持久化', async () => {
+  const env = await fixture(); await env.setValue('builtin.school', '合成首条学校'); await env.setValue('builtin.phone', '13800000000');
+  const entry = (await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'education', title: '合成第二条' } })).result;
+  await env.setValue('builtin.school', '合成第二条学校', entry);
+  const first = env.field('学校名称', { kind: 'education', group: '教育背景' }); const second = env.field('学校名称', { kind: 'education', group: '教育背景', index: 1 }); const manual = env.field('合成独立联系');
+  const block = { blockId: 'scan.block', kind: 'education', canAdd: true, records: [{ recordId: 'scan.record0', scanIds: [first.scanId] }] };
+  env.recordBlocks([block]); env.onAdd(() => { block.records.push({ recordId: 'scan.record1', scanIds: [second.scanId] }); env.pageFields([first, second, manual]); });
+  let view = await env.scan(first, manual); view = await env.send(view, 'select', { scanId: manual.scanId, fieldId: 'builtin.phone' });
+  view = await env.send(view, 'prepareRecords', { confirmed: true });
+  assert.equal(view.rows[0].target.entryId, null); assert.equal(view.rows[1].target.entryId, entry); assert.equal(view.rows[2].source, 'manual'); assert.equal(view.rows[2].target.fieldId, 'builtin.phone');
+  // 未绑定模块内的单项选择不能被自动分配覆盖，也不能继续为其追加未知记录。
+  view = await env.scan(first, second); view = await env.send(view, 'select', { scanId: first.scanId, fieldId: 'builtin.school', entryId: entry }); view = await env.send(view, 'prepareRecords', { confirmed: true });
+  assert.equal(view.rows[0].source, 'manual'); assert.equal(view.rows[0].target.entryId, entry); assert.ok(view.notice.includes('保留原记录'));
+  view = await env.send(view, 'fill', { scanId: first.scanId, confirmed: true }); await env.send(view, 'remember', { scanId: first.scanId, confirmed: true });
+  view = await env.scan(first, second); view = await env.send(view, 'prepareRecords', { confirmed: true });
+  assert.equal(view.rows[0].source, 'memory'); assert.equal(view.rows[0].target.entryId, entry);
+  assert.equal((await env.repo.read()).mappingRules.length, 1); assert.ok(!JSON.stringify(env.disk).includes('recordBindings'));
+});
+
+// 大量经历有固定上限；会话在添加事件中失效时必须立即停止后续扫描/分配。
+test('经历增补限制数量，导航或关闭后不再继续扫描和添加', async () => {
+  const env = await fixture(); await env.setValue('builtin.school', '合成首条学校');
+  for (let index = 1; index <= 20; index++) {
+    const entry = (await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'education', title: '合成记录' } })).result;
+    await env.setValue('builtin.school', '合成学校' + index, entry);
+  }
+  const fields = Array.from({ length: 20 }, (_, index) => env.field('学校名称', { kind: 'education', group: '教育背景', index }));
+  const block = { blockId: 'scan.block', kind: 'education', canAdd: true, records: fields.map((field, index) => ({ recordId: 'scan.record' + index, scanIds: [field.scanId] })) };
+  env.recordBlocks([block]); let view = await env.scan(...fields); view = await env.send(view, 'prepareRecords', { confirmed: true });
+  assert.ok(view.notice.includes('另有 1 条')); assert.equal(new Set(view.rows.map((row) => row.target.entryId)).size, 20); assert.equal(env.calls.filter((msg) => msg.type === 'learning:addRecord').length, 0);
+  block.records = block.records.slice(0, 1); env.onAdd(() => env.service.invalidate(42)); view = await env.scan(fields[0]);
+  const before = env.calls.length; await assert.rejects(env.send(view, 'prepareRecords', { confirmed: true }), /过期|关闭/);
+  assert.deepEqual(env.calls.slice(before).map((msg) => msg.type), ['learning:scan', 'learning:addRecord']);
+});
+
+// 已有网页经历缺乏可靠绑定时不得重新分配或继续追加，结构描述不能夹带个人内容。
+test('网页记录多于本地经历时保留多余空槽，不重复填同一条资料', async () => {
+  const env = await fixture(); await env.setValue('builtin.school', '合成唯一学校');
+  const fields = [0, 1].map((index) => env.field('学校名称', { kind: 'education', group: '教育背景', index }));
+  env.recordBlocks([{ blockId: 'scan.block', kind: 'education', canAdd: true, records: fields.map((field, index) => ({ recordId: 'scan.record' + index, scanIds: [field.scanId] })) }]);
+  let view = await env.scan(...fields); view = await env.send(view, 'prepareRecords', { confirmed: true });
+  assert.equal(view.rows[0].value, '合成唯一学校'); assert.equal(view.rows[1].target, null); assert.equal(env.calls.filter((msg) => msg.type === 'learning:addRecord').length, 0);
+  view = await env.send(view, 'session'); assert.equal(view.rows[1].target, null);
+});
+
+// 非空记录还包含未填项时，也不能将另一条个人记录混入其中。
+test('已有非空经历保留原记录，经历结构拒绝实际值及跨模块引用', async () => {
+  const env=await fixture(); await env.setValue('builtin.school','合成本科学校'); await env.setValue('builtin.major','合成本地专业'); const field=env.field('学校名称',{kind:'education',group:'教育背景'}); const empty = env.field('专业名称',{kind:'education',group:'教育背景'});
+  const block={blockId:'scan.block',kind:'education',canAdd:true,records:[{recordId:'scan.record0',scanIds:[field.scanId,empty.scanId]}]};env.recordBlocks([block]);env.completion([{scanId:field.scanId,present:true}]);
+  let view=await env.scan(field,empty);view=await env.send(view,'prepareRecords',{confirmed:true});assert.ok(view.notice.includes('保留原记录'));assert.equal(env.calls.filter((msg)=>msg.type==='learning:addRecord').length,0); assert.equal(view.rows[1].target,null); assert.equal(view.rows[1].status,'needs_confirmation');
+  await assert.rejects(env.send(view,'fill',{scanId:empty.scanId,confirmed:true}),/本地来源/);
+  env.completion([]);
+  for(const broken of [{...block,value:'禁止夹带值'},{...block,kind:'project'},{...block,records:[{...block.records[0],value:'禁止夹带值'}]}]){env.recordBlocks([broken]);await assert.rejects(env.scan(field),/经历结构/);}
+});
+
+// 语言能力只有明确语种才可直接用对应资料，考试成绩不能推算听说和读写。
+test('项目和语言别名准确匹配，未明确语种的英语建议需要人工选择', async () => {
+  const env=await fixture();await env.setValue('builtin.projectRole','合成角色');await env.setValue('builtin.projectResponsibilities','合成项目职责');await env.setValue('builtin.englishListening','熟练');await env.setValue('builtin.englishReading','精通');
+  const view=await env.scan(env.field('职责',{kind:'project',group:'项目经验'}),env.field('项目中职责',{kind:'project',group:'项目经验'}),env.field('听说',{group:'语言能力'}),env.field('读写',{group:'英语能力'}),env.field('语言类型',{group:'语言能力'}));
+  assert.equal(view.rows[0].value,'合成角色');assert.equal(view.rows[1].value,'合成项目职责');assert.equal(view.rows[2].target.fieldId,'builtin.englishListening');assert.equal(view.rows[2].status,'needs_confirmation');assert.equal(view.rows[3].status,'matched');assert.equal(view.rows[4].target,null);assert.equal(env.aiCalls.length,0);
 });
 
 // 目录首段的平面值和后续记录共同匹配；只有明确学历/模块才能缩小来源，不能默认选最高学历。

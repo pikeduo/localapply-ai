@@ -52,6 +52,21 @@ test('独立城市字段不被当成单字地址子控件', () => {
   const el={getAttribute:(key)=>key==='aria-label'?'城市':null}; assert.equal(A.slot(el),'');
 });
 
+// 半填日期只补缺少部分，任何已有不同子项都必须阻止无确认写入。
+test('复合日期逐项比较已有值，保留年份并允许补月份，不覆盖不同年月', () => {
+  const item={el:input(),compound:{kind:'date',parts:{year:{value:'2020'},month:{value:''}}}};
+  assert.equal(A.hasConflict(item,'2020-09'),false);assert.equal(A.hasConflict(item,'2024-09'),true);
+  item.compound.parts.month.value='09月';assert.equal(A.hasConflict(item,'2020-09'),false);assert.equal(A.hasConflict(item,'2020-06'),true);
+});
+
+// 默认区号不代表用户已填电话，已有号码才需要保留国码和号码的一致性。
+test('空号码可选择明确的国际国码，非空电话的任一不同子项均受保护', () => {
+  const item={el:input('tel'),compound:{kind:'phone',parts:{country:{value:'cn',options:[{value:'cn',textContent:'中国 (+86)'},{value:'gb',textContent:'英国 (+44)'}]},number:{value:''}}}};
+  assert.equal(A.hasConflict(item,'+44 2070000000'),false);
+  item.compound.parts.number.value='13800000000';assert.equal(A.hasConflict(item,'+44 2070000000'),true);assert.equal(A.hasConflict(item,'13800000000'),false);
+  assert.equal(A.hasConflict(item,'13800000001'),true);
+});
+
 // 非标准防补全属性不能吞掉姓名等普通字段，真实密码/认证名称仍需排除。
 test('Moka new_password 文本提示不等于密码，标准认证属性仍被拦截', () => {
   // 构造适配器过滤所需的最小 DOM 接口，不读取任何控件实际值。

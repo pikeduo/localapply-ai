@@ -203,6 +203,48 @@ test('岗位页面修复：Moka结构、自动识别及只显示未填写字段'
   } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
+// 上传页的第二轮回归使用 portal 和多段记录，检查真正点选、整条对应及非空保护。
+test('Moka多段补全：portal下拉、日历、项目获奖、自动添加及已有内容保护', {timeout:120000}, async(t)=>{
+  const testRoot=path.join(ROOT,'.browser-tests');await fs.mkdir(testRoot,{recursive:true});const profile=await fs.mkdtemp(path.join(testRoot,'moka-experiences-'));const api=await serve();let context;
+  try{
+    context=await launch(profile);context.setDefaultTimeout(10000);const {worker,extensionId}=await extension(context);const options=await context.newPage();await options.goto(`chrome-extension://${extensionId}/options/options.html`);await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+    const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
+    // 所有字段值均为合成数据，多段记录使用现有数据库接口保存，不模拟浏览器持久化。
+    const set=async(key,value,entryId=null)=>rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.'+key,entryId,value}}});
+    for(const [key,value] of [['name','不应覆盖网页的合成姓名'],['birthDate','2000-06-15'],['workExperience','1-3年'],['englishProficiency','精通'],['englishListening','熟练'],['englishReading','精通']])await set(key,value);
+    const modules={education:[['school','合成本科大学','合成硕士大学'],['major','合成专业甲','合成专业乙'],['degree','本科','硕士'],['educationStartDate','2020-09','2018-09'],['graduationDate','2024-06','2022-06']],employment:[['employmentCompany','合成单位甲','合成单位乙'],['employmentPosition','合成职位甲','合成职位乙'],['employmentResponsibilities','合成职责甲','合成职责乙'],['employmentStartDate','2020-09','2018-09'],['employmentEndDate','2024-06','2022-06']],project:[['projectName','合成项目甲','合成项目乙'],['projectRole','合成角色甲','合成角色乙'],['projectDescription','合成描述甲','合成描述乙'],['projectResponsibilities','合成项目职责甲','合成项目职责乙'],['projectStartDate','2020-09','2018-09'],['projectEndDate','2024-06','2022-06']],award:[['awardName','合成奖项甲','合成奖项乙'],['awardDate','2020-09','2024-06']]};
+    for(const [kind,values] of Object.entries(modules)){const created=await rpc(options,'localapply:command',{request:{action:'createEntry',payload:{profileId,kind,title:'合成附加记录'}}});for(const [key,first,second] of values){await set(key,first);await set(key,second,created.result);}}
+    const page=await context.newPage();const errors=[];page.on('pageerror',(error)=>errors.push(error.message));await page.goto(api.base+'/test-pages/moka-experiences.html');
+    const loaded=page.waitForEvent('framenavigated',{predicate:(frame)=>frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url());const frame=await loaded;await frame.locator('#profileSel option').first().waitFor({state:'attached'});
+    await t.test('点击直填自动补足四类经历，跨记录日期和内容对应，portal点选及生日状态有效',async()=>{
+      await frame.locator('#smartFillAll').click();await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('填写完成'),null,{timeout:70000});
+      const status=await frame.locator('#smartStatus').textContent();assert.ok(status.includes('成功填入 38 个字段'),status);
+      for(const kind of ['education','employment','project','award'])assert.equal(await page.locator(`[data-kind="${kind}"] .apply-fields-synthetic`).count(),2);
+      assert.equal(await page.locator('[data-kind="education"] .apply-fields-synthetic').nth(1).getByPlaceholder('请输入就读学校').evaluate((input)=>input.closest('label').querySelector('span').textContent),'合成硕士大学');
+      assert.equal(await page.locator('[data-kind="employment"] .apply-fields-synthetic').nth(1).getByPlaceholder('公司名称',{exact:true}).inputValue(),'合成单位乙');
+      assert.equal(await page.locator('[data-kind="project"] .apply-fields-synthetic').nth(1).getByPlaceholder('项目中职责',{exact:true}).inputValue(),'合成项目职责乙');
+      assert.equal(await page.locator('[data-kind="award"] .apply-fields-synthetic').nth(1).getByPlaceholder('奖项名称').inputValue(),'合成奖项乙');
+      assert.equal(await page.locator('[data-kind="education"] .apply-fields-synthetic').nth(1).getByPlaceholder('年').first().evaluate((input)=>input.closest('label').querySelector('span').textContent),'2018');assert.equal(await page.locator('#birth').inputValue(),'2000-06-15');assert.equal(await page.evaluate(()=>acceptedBirth),'2000-06-15');
+      assert.equal(await page.getByPlaceholder('姓名',{exact:true}).inputValue(),'网页原有姓名');assert.equal(await page.locator('[data-kind=""] .apply-fields-synthetic').first().getByPlaceholder('请选择').nth(1).evaluate((input)=>input.closest('label').querySelector('span').textContent),'硕士');assert.equal(await page.evaluate(()=>submissions),0);assert.equal(api.calls.length,0);assert.deepEqual(errors,[]);
+      const logs=await rpc(options,'diagnostics:read');assert.ok(logs.rows.some((row)=>row.operation==='learning.prepareRecords'));for(const secret of ['合成项目乙','合成奖项乙','2000-06-15'])assert.ok(!JSON.stringify(logs).includes(secret));
+      await frame.locator('#smartMetrics').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(testRoot,'moka-experiences-filled.png')});
+    });
+    await t.test('再次填写不新增重复记录，语言不猜语种，明确选择来源后才写入空项',async()=>{
+      const before=await page.evaluate(()=>JSON.stringify(additions));await frame.locator('#smartFillAll').click();await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('本次成功填入 0'));assert.equal(await page.evaluate(()=>JSON.stringify(additions)),before);
+      // 选择来源后状态从待处理变为已匹配，定位仍跟随同一语义字段。
+      const card=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:/^听说 ·/})});assert.equal(await card.count(),1);await card.locator('.smart-source').selectOption({label:'听说能力'});await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');await card.getByRole('button',{name:'单项填写',exact:true}).click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+      const language=page.locator('.apply-block-synthetic').filter({has:page.locator('.text-synthetic').filter({hasText:'语言能力'})});assert.equal(await language.getByPlaceholder('请选择').nth(0).evaluate((input)=>input.closest('label').querySelector('span').textContent),'一般');assert.equal(await language.getByPlaceholder('请选择').nth(1).evaluate((input)=>input.closest('label').querySelector('span').textContent),'熟练');
+    });
+    await t.test('只含出生年月不能补日，已有陌生项目保留，超过自动添加上限仍可扫描',async()=>{
+      await set('birthDate','2000-06');await page.locator('#birth').evaluate((input)=>{input.value='';});await frame.locator('#smartRefresh').click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+      const birth=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'出生日期 (年龄)'})});await birth.getByRole('button',{name:'单项填写',exact:true}).click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');assert.equal(await page.locator('#birth').inputValue(),'');assert.ok((await birth.textContent()).includes('不自动补日'));
+      const guarded=await context.newPage();await guarded.goto(api.base+'/test-pages/moka-experiences.html?guarded=1');await guarded.getByPlaceholder('项目名称',{exact:true}).fill('网页原有项目');const tabId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((tab)=>tab.url===url).id,guarded.url());const scan=await rpc(options,'learning:scanPage',{tabId,confirmed:true});const view=await rpc(options,'learning:prepareRecords',{sessionId:scan.sessionId,confirmed:true});assert.ok(view.notice.includes('保留原记录'));assert.equal(await guarded.locator('[data-kind="project"] .apply-fields-synthetic').count(),1);assert.equal(await guarded.getByPlaceholder('项目名称',{exact:true}).inputValue(),'网页原有项目');assert.equal(await guarded.evaluate(()=>additions.project||0),0);
+      // 模拟用户已创建的大量记录，限制自动增补不能让正常扫描失败或丢失分组。
+      await guarded.evaluate(()=>{const add=document.querySelector('[data-kind="project"] button');for(let index=0;index<20;index++)add.click();});const large=await rpc(options,'learning:session',{sessionId:scan.sessionId});assert.equal(large.rows.filter((row)=>row.field.kind==='project').length,126);await guarded.close();
+    });
+  }finally{if(context)await context.close();await new Promise((resolve)=>api.server.close(resolve));await fs.rm(profile,{recursive:true,force:true,maxRetries:3});}
+});
+
 // 使用损坏、歧义及缺失元数据验证保守回退，所有页面修改只作用于合成夹具。
 test('阶段五岗位边界：DOM回退、标题、缺失信息及异步成功', { timeout: 60000 }, async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'stage5-job-boundaries-')); const api = await serve(); let context;
