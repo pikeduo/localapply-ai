@@ -55,7 +55,7 @@ async function renderEntries(profileId) {
 async function initDataManagement() {
   // 兼容包明确说明申请表缺失，避免回滚时误以为已备份全部资料。
   for (const version of [3, 4]) document.getElementById('btnExportV' + version).addEventListener('click', async () => {
-    try { await flushSaves(); const response = await dataRequest('localapply:exportBackup', { version }); downloadJson(response.backup, `localapply-v${version}-backup.json`); backupMsg(`已导出兼容 v${version} 备份；${version === 3 ? '附加记录转为私有平面字段；' : ''}不含申请追踪。请另存普通完整备份和申请追踪 JSON 后再回滚。`); }
+    try { await flushSaves(); const response = await dataRequest('localapply:exportBackup', { version }); downloadJson(response.backup, `localapply-v${version}-backup.json`); backupMsg(`已导出兼容 v${version} 备份；${version === 3 ? '附加记录转为私有平面字段；' : ''}不含已投职位。请另存普通完整备份和已投职位 JSON 后再回滚。`); }
     catch (error) { backupMsg(escapeHtml('兼容导出失败：' + error.message)); }
   });
   document.getElementById('restoreMode').addEventListener('change', () => {

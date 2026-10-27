@@ -46,7 +46,7 @@ for (const withExtension of [true, false]) {
         await page.locator('#appImportFile').setInputFiles({ name: 'synthetic-applications-again.json', mimeType: 'application/json', buffer: exported }); await page.locator('#appImportPreview').waitFor({ state: 'visible' }); assert.ok((await page.locator('#appImportSummary').textContent()).includes('新增 0')); await page.locator('#appImportConfirm').click(); await page.locator('#appImportPreview').waitFor({ state: 'hidden' }); assert.equal((await read()).applications.length, 1);
         const full = (await page.evaluate(() => dataRequest('localapply:exportBackup'))).backup; assert.equal(full.database.schemaVersion, 5); assert.equal(full.database.applications.length, 1);
         // 通过真实兼容导出和恢复预览确认旧备份的申请缺失提示，预览不执行覆盖。
-        await workspacePage(page, 'privacySettings'); const compatibilityDownload = page.waitForEvent('download'); await page.locator('#btnExportV4').click(); const compatible = await fs.readFile(await (await compatibilityDownload).path()); assert.equal(JSON.parse(compatible).schemaVersion, 4); assert.ok((await page.locator('#backupMsg').textContent()).includes('不含申请追踪'));
+        await workspacePage(page, 'privacySettings'); const compatibilityDownload = page.waitForEvent('download'); await page.locator('#btnExportV4').click(); const compatible = await fs.readFile(await (await compatibilityDownload).path()); assert.equal(JSON.parse(compatible).schemaVersion, 4); assert.ok((await page.locator('#backupMsg').textContent()).includes('不含已投职位'));
         await page.locator('#restoreMode').selectOption('replace'); await page.locator('#backupFile').setInputFiles({ name: 'synthetic-compatible-v4.json', mimeType: 'application/json', buffer: compatible }); await page.locator('#btnApplyRestore').waitFor({ state: 'visible' }); assert.ok((await page.locator('#restorePreview').textContent()).includes('移除档案 0、申请 1')); assert.equal((await read()).applications.length, 1); await workspacePage(page, 'applications');
         if (withExtension) { const logs = await rpc(page, 'diagnostics:read'); for (const secret of ['合成阶段五公司', '合成备注', 'must-not-store', api.base]) assert.ok(!JSON.stringify(logs).includes(secret)); }
       });
@@ -1666,7 +1666,7 @@ for (const withExtension of [true, false]) {
       const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
       const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url);
       await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
-      assert.deepEqual(await page.locator('.workspace-sidebar nav a').allTextContents(), ['导入简历','AI 与模型','我的简历','申请追踪','字段库','数据与备份','诊断与关于']);
+      assert.deepEqual(await page.locator('.workspace-sidebar nav a').allTextContents(), ['导入简历','AI 与模型','我的简历','已投职位','字段库','数据与备份','诊断与关于']);
       assert.equal(await page.locator('.workspace-page:visible').count(), 1); assert.equal(await page.locator('#pdfCard').isVisible(), true);
       assert.equal(await page.locator('#workspaceMode').count(), 0); assert.equal(await page.locator('.workspace-sidebar small').count(), 0);
       assert.equal(await page.locator('#workspaceOverview').isVisible(), false); assert.equal(await page.locator('#provider').isVisible(), false);
