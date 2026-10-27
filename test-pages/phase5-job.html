@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成职位申请 · 阶段五</title><style>body{font:16px/1.6 system-ui;max-width:850px;margin:32px auto;padding:0 20px}form{display:grid;gap:12px}label{display:grid;gap:5px}input,select,button{padding:9px}aside{margin-top:24px;color:#68758a}</style>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"JobPosting","title":"合成 AI 开发工程师","url":"/test-pages/phase5-job.html","hiringOrganization":{"name":"合成科技有限公司"},"identifier":{"value":"SYN-5001"},"employmentType":"全职","jobLocation":{"address":{"addressLocality":"合成甲城"}}},{"@type":"JobPosting","title":"不应识别的推荐岗位","url":"/jobs/recommended","hiringOrganization":{"name":"推荐公司"}}]}</script></head>
+<body><main><h1 data-job-title>合成 AI 开发工程师</h1><p data-company>合成科技有限公司</p><p data-job-location>合成甲城</p><p data-job-type>全职</p><section data-job-description>使用合成任务验证岗位识别与本地追踪，测试页面不会连接招聘平台。</section>
+<h2>简历申请</h2><form id="jobApplication"><label>姓名<input id="syntheticName" autocomplete="off"></label><label>手机号<input id="syntheticPhone" type="tel"></label><label>电子邮箱<input id="syntheticEmail" type="email"></label><label>测试反馈<select id="testOutcome"><option value="success">成功</option><option value="failed">失败</option><option value="cancel">无结果 / 取消</option><option value="async">异步成功</option><option value="navigate">进入成功页</option></select></label><button id="jobSubmit" type="submit">提交申请（合成测试）</button></form><p role="status" id="applicationResult"></p></main>
+<aside><h2>推荐岗位</h2><h3>推荐岗位不应成为当前职位</h3></aside>
+<script>
+// 只有 Playwright 或用户点击本地表单会触发反馈；插件不得自行提交。
+window.__stage5Submissions = 0;
+document.getElementById('jobApplication').addEventListener('submit', function(event) {
+  event.preventDefault(); window.__stage5Submissions++;
+  const mode = document.getElementById('testOutcome').value;
+  if (mode === 'navigate') { setTimeout(function() { location.href = '/test-pages/phase5-success.html'; }, 250); return; }
+  // 异步成功必须等待实际状态区变化，点击提交本身不表示成功。
+  if (mode === 'async') { document.getElementById('applicationResult').textContent = '正在提交合成申请'; setTimeout(function() { document.getElementById('applicationResult').textContent = '申请提交成功，已收到合成申请。'; }, 600); return; }
+  document.getElementById('applicationResult').textContent = mode === 'success' ? '申请提交成功，已收到合成申请。' : mode === 'failed' ? '投递失败，请稍后重试。' : '';
+});
+</script></body></html>

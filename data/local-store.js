@@ -8,7 +8,7 @@
   const VAULT_KEY = 'localapply.keyVault';
   const DEVICE_KEY = 'localapply.deviceKeys';
   const CATALOG_KEY = 'localapply.fieldCatalog'; // 独立升级标记，用户删掉字段后不再自动补回。
-  const SCHEMA_VERSION = 4;
+  const SCHEMA_VERSION = 5; // v5 新增本地申请记录，原简历表和独立凭据保持不变。
   const TYPES = ['text', 'textarea', 'select', 'number', 'boolean', 'date', 'multiSelect'];
   const LEGACY_KINDS = ['education', 'internship', 'employment', 'project'];
   const KINDS = Object.keys(global.WangshenTemplates.RECORD_GROUPS);
@@ -152,7 +152,7 @@
     const defs = builtins();
     return { schemaVersion: SCHEMA_VERSION, revision: 0, fieldDefinitions: defs, publicFieldIds: defs.map((d) => d.fieldId),
       profiles: [], fieldValues: [], entries: [], bindings: [], mappingRules: [], activeProfileId: '',
-      settings: { autoThreshold: 0.85, privacyMask: true, autoFloatbar: true }, ledger: [], drafts: {}, onboardingDone: false };
+      settings: { autoThreshold: 0.85, privacyMask: true, autoFloatbar: true }, ledger: [], applications: [], drafts: {}, onboardingDone: false };
   }
   // 校验非敏感设置，不能夹带 API Key。
   function settings(value) {
@@ -182,8 +182,9 @@
   }
   // 校验数据库完整性和所有引用；输入错误时不进行任何写入。
   function validate(db, version = SCHEMA_VERSION) {
-    keys(db, ['schemaVersion', 'revision', ...TABLES, 'publicFieldIds', 'activeProfileId', 'settings', 'ledger', 'drafts', 'onboardingDone'], '数据库');
-    check([3, SCHEMA_VERSION].includes(version) && db.schemaVersion === version, '不支持的数据库版本');
+    keys(db, ['schemaVersion', 'revision', ...TABLES, 'publicFieldIds', 'activeProfileId', 'settings', 'ledger', 'drafts', 'onboardingDone', ...(version >= 5 ? ['applications'] : [])], '数据库');
+    check([3, 4, SCHEMA_VERSION].includes(version) && db.schemaVersion === version, '不支持的数据库版本');
+    if (version >= 5) global.LocalApplyApplications.validateAll(db.applications);
     check(Number.isInteger(db.revision) && db.revision >= 0, '数据库 revision 错误');
     for (const table of [...TABLES, 'publicFieldIds', 'ledger']) list(db[table], table);
     const defs = new Map();
@@ -272,15 +273,16 @@
     }
     return db;
   }
-  // v2→v3 保留来源边界，v3→v4 只扩展模块类型；先按旧结构完整校验，不改动任何旧资料。
+  // 按各历史版本完整校验后逐级迁移；v5 只新增空申请表，恢复点和凭据由初始化统一保护。
   function upgradeDatabase(input) {
-    check(input && [2, 3, SCHEMA_VERSION].includes(input.schemaVersion), '不支持的数据库版本');
+    check(input && [2, 3, 4, SCHEMA_VERSION].includes(input.schemaVersion), '不支持的数据库版本');
     const db = clone(input);
     if (db.schemaVersion === 2) {
       check(Array.isArray(db.fieldValues) && db.fieldValues.every((row) => row.evidence === undefined), '旧版本不支持来源证据');
       db.schemaVersion = 3;
     }
-    if (db.schemaVersion === 3) { validate(db, 3); db.schemaVersion = SCHEMA_VERSION; }
+    if (db.schemaVersion === 3) { validate(db, 3); db.schemaVersion = 4; }
+    if (db.schemaVersion === 4) { validate(db, 4); db.schemaVersion = SCHEMA_VERSION; db.applications = []; }
     return validate(db);
   }
   // 分离旧 API 配置，不改动原始对象。
@@ -433,7 +435,7 @@
     for (const row of [...db.fieldValues, ...db.mappingRules]) if (extended.has(row.entryId)) { row.fieldId = convert(row.entryId, row.fieldId); row.entryId = null; }
     db.entries = db.entries.filter((entry) => !extended.has(entry.entryId));
     // 旧代码不认识新增模块语义指纹；保留映射目标但移除验证状态，降级后必须重新确认。
-    db.mappingRules = db.mappingRules.map(({ mappingId, origin, path, label, fieldId, profileId, entryId }) => ({ mappingId, origin, path, label, fieldId, profileId, entryId })); db.schemaVersion = 3;
+    db.mappingRules = db.mappingRules.map(({ mappingId, origin, path, label, fieldId, profileId, entryId }) => ({ mappingId, origin, path, label, fieldId, profileId, entryId })); db.schemaVersion = 3; delete db.applications; // 申请记录须另存独立 JSON，旧版不认识此表。
     return validate(db, 3);
   }
   // 导入支持旧档案备份和新备份；所有校验在写入前完成。
@@ -447,14 +449,14 @@
       return migrate({ schemaVersion: 1, profiles: data.profiles, activeProfileId: data.activeProfileId || data.profiles?.[0]?.id }).db;
     }
     keys(data, ['kind', 'formatVersion', 'schemaVersion', 'exportedAt', 'database'], '备份');
-    check(data.kind === 'localapply-ai-backup' && data.formatVersion === 1 && [2, 3, SCHEMA_VERSION].includes(data.schemaVersion)
+    check(data.kind === 'localapply-ai-backup' && data.formatVersion === 1 && [2, 3, 4, SCHEMA_VERSION].includes(data.schemaVersion)
       && data.database?.schemaVersion === data.schemaVersion, '不支持的备份版本');
     return upgradeDatabase(data.database);
   }
   // 合并备份保留现有冲突数据，差异预览会列出冲突数量；覆盖模式需显式选择。
   function importPlan(current, incoming, mode) {
     check(['merge', 'replace'].includes(mode), '未知导入方式');
-    const summary = { mode, profilesAdded: 0, fieldsAdded: 0, valuesAdded: 0, conflicts: 0, profilesRemoved: 0 };
+    const summary = { mode, profilesAdded: 0, fieldsAdded: 0, valuesAdded: 0, conflicts: 0, profilesRemoved: 0, applicationsAdded: 0, applicationsRemoved: 0 };
     const result = mode === 'replace' ? clone(incoming) : clone(current);
     const identities = { fieldDefinitions: (row) => row.fieldId, profiles: (row) => row.profileId,
       fieldValues: (row) => JSON.stringify([row.profileId, row.fieldId, row.entryId]), entries: (row) => row.entryId,
@@ -470,7 +472,13 @@
         } else if (!equal(existing, row)) summary.conflicts++;
       }
     }
-    if (mode === 'replace') summary.profilesRemoved = current.profiles.filter((profile) => !incoming.profiles.some((row) => row.profileId === profile.profileId)).length;
+    const applicationPlan = global.LocalApplyApplications.importPlan(current.applications, incoming.applications);
+    if (mode === 'merge') result.applications = applicationPlan.records;
+    summary.applicationsAdded = applicationPlan.added; summary.conflicts += applicationPlan.conflicts;
+    if (mode === 'replace') {
+      summary.profilesRemoved = current.profiles.filter((profile) => !incoming.profiles.some((row) => row.profileId === profile.profileId)).length;
+      summary.applicationsRemoved = current.applications.filter((record) => !incoming.applications.some((row) => row.applicationId === record.applicationId)).length;
+    }
     // 私人备份不能自行提升公开权限；仅保留本机已审核且元数据完全相同的定义。
     result.publicFieldIds = current.publicFieldIds.filter((fieldId) => {
       const known = current.fieldDefinitions.find((def) => def.fieldId === fieldId);
@@ -646,6 +654,24 @@
         if (request.expectedRevision !== undefined) check(request.expectedRevision === db.revision, '数据版本已变化，请重新预览');
         let result = null;
         switch (request.action) {
+          // 所有申请写入复用唯一仓库队列、版本校验与完整数据库校验。
+          case 'saveApplication': {
+            check(request.expectedRevision !== undefined, '保存申请需要预览版本');
+            result = global.LocalApplyApplications.save(db.applications, input); break;
+          }
+          case 'deleteApplication': {
+            keys(input, ['applicationId', 'confirmed'], '删除申请');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '删除申请需要确认及版本');
+            check(db.applications.some((row) => row.applicationId === input.applicationId), '申请记录不存在');
+            db.applications = db.applications.filter((row) => row.applicationId !== input.applicationId); break;
+          }
+          case 'importApplications': {
+            keys(input, ['backup', 'confirmed'], '导入申请');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '导入申请需要预览并确认');
+            const plan = global.LocalApplyApplications.importPlan(db.applications, global.LocalApplyApplications.parsePackage(input.backup));
+            db.applications = plan.records; result = { added: plan.added, conflicts: plan.conflicts, duplicates: plan.duplicates };
+            await commit(db, null, previous, true); return { result, revision: db.revision };
+          }
           case 'confirmField': {
             keys(input, ['profileId', 'fieldId', 'entryId', 'definition', 'value', 'confirmed', 'source'], '确认学习字段');
             check(input.confirmed === true && request.expectedRevision !== undefined, '必须先预览差异并明确确认');
@@ -985,7 +1011,13 @@
         await commit(db, api, previous);
         return project({ db, api, vault: previous.vault, device: previous.device });
       }),
-      exportBackup: (version = SCHEMA_VERSION) => run(({ db }) => { check([3, SCHEMA_VERSION].includes(version), '不支持的导出版本'); return backup(version === 3 ? downgradeV3(db) : db); }),
+      // v3/v4 兼容备份不含申请表，回滚前还须保留普通备份及独立申请 JSON。
+      exportBackup: (version = SCHEMA_VERSION) => run(({ db }) => {
+        check([3, 4, SCHEMA_VERSION].includes(version), '不支持的导出版本');
+        if (version === 3) return backup(downgradeV3(db));
+        if (version === 4) { const compatible = clone(db); delete compatible.applications; compatible.schemaVersion = 4; return backup(compatible); }
+        return backup(db);
+      }),
       previewImport: (input, mode) => run(({ db }) => ({ ...importPlan(db, parseBackup(input), mode).summary, revision: db.revision })),
       exportPublicFields: () => run(({ db }) => ({ kind: 'localapply-public-fields', version: 1,
         fields: db.fieldDefinitions.filter((def) => db.publicFieldIds.includes(def.fieldId)).map(definition) })),

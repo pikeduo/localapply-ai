@@ -55,12 +55,14 @@
       "js": [
         "data/templates.js",
         "data/field-matching.js",
+        "data/applications.js",
         "content/field-adapters.js",
         "content/field-scanner.js",
         "content/detector.js",
         "content/filler.js",
         "content/verified-fill.js",
         "content/page-presence.js",
+        "content/job-recognizer.js",
         "content/floatbar.js"
       ],
       "run_at": "document_idle",

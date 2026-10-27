@@ -56,6 +56,16 @@ test('全部 JavaScript 可通过 Node 语法检查（不执行脚本）', () =>
   }
 });
 
+// 各补注入入口必须先加载适配器再启动扫描器，防止页面加载竞态污染扫描器依赖。
+test('补注入脚本与清单保持相同依赖顺序', () => {
+  const expected = JSON.parse(source('manifest.json')).content_scripts[0].js;
+  for (const file of ['sidepanel/sidepanel.js', 'data/field-learning.js', 'data/floating-panel.js']) {
+    const entries = source(file).match(/files:\s*\[([^\]]+)\]/);
+    assert.ok(entries, file);
+    assert.deepEqual([...entries[1].matchAll(/'([^']+)'/g)].map((match) => match[1]), expected, file);
+  }
+});
+
 test('MV3 清单的脚本、页面及图标资源均存在', () => {
   const manifest = JSON.parse(source('manifest.json'));
   assert.equal(manifest.manifest_version, 3);
@@ -427,7 +437,7 @@ test('共享存储首次初始化和再次读取保持档案一致', async () =>
   const first = await context.getState();
   const second = await context.getState();
   assert.equal(first.profiles[0].id, second.profiles[0].id);
-  assert.equal(storage['localapply.database'].schemaVersion, 4); // 模块类型扩展后，规范库使用 v4。
+  assert.equal(storage['localapply.database'].schemaVersion, 5); // 岗位追踪加入后，规范库升级至 v5。
 });
 
 test('AI 回复 JSON 围栏可解析，异常文本返回空结果', () => {

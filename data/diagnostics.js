@@ -3,7 +3,7 @@
   'use strict';
   const KEY = 'localapply.diagnostics';
   const MAX_ROWS = 400;
-  const operations = ['panel.open','panel.close','page.presence','page.error','ui.error','learning.scanPage','learning.prepareAI','learning.recognize','learning.cancelAI','learning.ignore','learning.select','learning.readField','learning.previewValue','learning.commitValue','learning.fill','learning.remember','learning.revoke','learning.editRule','learning.deleteRule','learning.undoRule','localapply.command','localapply.saveLegacy','localapply.vault','localapply.previewImport','wsa.aiChat','wsa.listModels','wsa.probeCapabilities','wsa.resumeRoute','wsa.aiExtractResume','wsa.cancelResume','runtime.request'];
+  const operations = ['panel.open','panel.close','page.presence','page.error','ui.error','jobs.scan','jobs.submitted','jobs.feedback','learning.scanPage','learning.prepareAI','learning.recognize','learning.cancelAI','learning.ignore','learning.select','learning.readField','learning.previewValue','learning.commitValue','learning.fill','learning.remember','learning.revoke','learning.editRule','learning.deleteRule','learning.undoRule','localapply.command','localapply.saveLegacy','localapply.vault','localapply.previewImport','wsa.aiChat','wsa.listModels','wsa.probeCapabilities','wsa.resumeRoute','wsa.aiExtractResume','wsa.cancelResume','runtime.request'];
   // 将异常归为稳定错误码，外部响应、用户标签和凭据不进入日志。
   function errorInfo(error) {
     const message = String(error?.message || error || '');

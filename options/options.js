@@ -357,5 +357,5 @@ function showInitializationError(error) {
 
 // 先初始化既有业务，再启用模块导航；原表单留在各自模块，不再移动成整页列表。
 init().then(async () => {
-  await initDataManagement(); await renderResumeCenter(); await initWorkspace();
+  await initDataManagement(); await renderResumeCenter(); await initWorkspace(); await initApplications();
 }).catch(showInitializationError);

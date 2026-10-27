@@ -9,6 +9,7 @@ const workspacePages = {
   pdfCard: ['导入简历', '选择或拖入 PDF / DOCX，预览后由你决定何时解析。'],
   aiSettings: ['AI 与模型', '配置服务商、密钥和模型，仅在你主动操作时调用。'],
   resumeCenter: ['我的简历', '查看资料概览，在对应分类内编辑全部简历内容。'],
+  applications: ['申请追踪', '确认保存岗位，管理申请进度、备注和待办，数据仅在本机保存。'],
   fieldLibrary: ['字段库', '管理字段定义、分类和别名，个人内容独立保存。'],
   privacySettings: ['数据与备份', '导出、恢复和迁移本地资料，导入前先预览差异。'],
   diagnosticsPanel: ['诊断与关于', '查看本地运行与报错记录，导出脱敏日志协助排查。'],
@@ -28,6 +29,7 @@ function showWorkspacePage(target, focus = false) {
   document.querySelector('.skip-link').hash = key; document.body.dataset.workspaceActivePage = key;
   if (focus) { window.scrollTo(0, 0); document.getElementById('workspaceContent').focus({ preventScroll: true }); }
   scheduleResumePosition();
+  document.dispatchEvent(new CustomEvent('workspace:page', { detail: key })); // 新模块按需刷新，切换不销毁编辑草稿。
 }
 // DOM 构造始终用文本，字段名、经历标题不得拼接到 HTML。
 function workspaceNode(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }

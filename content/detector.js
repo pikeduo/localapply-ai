@@ -397,6 +397,13 @@
       try {
         if (sender.id !== chrome.runtime.id || sender.tab || (sender.url && !['background.js', 'options/options.html', 'sidepanel/sidepanel.html'].some((page) => sender.url.split(/[?#]/)[0] === chrome.runtime.getURL(page)))) throw new Error('仅允许本插件管理入口操作页面');
         switch (msg && msg.type) {
+          // 岗位元数据复用同一可信消息入口，避免多个监听器抢先返回未知消息。
+          case 'jobs:inspect':
+            if (!globalThis.LocalApplyJobRecognizer) throw new Error('岗位识别尚未加载，请刷新网页');
+            sendResponse({ ok: true, ...globalThis.LocalApplyJobRecognizer.inspect() }); return;
+          // 清除已确认的成功提示，不向宿主传递任何申请记录。
+          case 'jobs:notice':
+            globalThis.WangshenFloatbar?.onJobFeedback('unknown', false); sendResponse({ ok: true }); return;
           // 卡片控制仅来自后台；探针不返回令牌或个人信息。
           case 'wsa:floatingProbe':
             sendResponse({ ok: true, open: globalThis.WangshenFloatbar?.isOpen() || false, documentId: globalThis.LocalApplyPageScanner.documentId, presence: globalThis.LocalApplyPagePresence?.get() }); return;

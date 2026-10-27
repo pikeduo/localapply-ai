@@ -8,10 +8,11 @@
   <link rel="stylesheet" href="options.css" />
   <link rel="stylesheet" href="date-picker.css" />
   <link rel="stylesheet" href="region-picker.css" />
+  <link rel="stylesheet" href="applications.css" />
 </head>
 <body>
   <a class="skip-link" href="#pdfCard">跳到工作区</a>
-  <aside class="workspace-sidebar"><a class="workspace-brand" href="#pdfCard">LocalApply<span>本地智能网申助手</span></a><nav aria-label="工作台导航"><a href="#pdfCard" aria-current="page">导入简历</a><a href="#aiSettings">AI 与模型</a><a href="#resumeCenter">我的简历</a><a href="#fieldLibrary">字段库</a><a href="#privacySettings">数据与备份</a><a href="#diagnosticsPanel">诊断与关于</a></nav><p>资料只在本机保存<br>自动填写，不自动投递</p></aside>
+  <aside class="workspace-sidebar"><a class="workspace-brand" href="#pdfCard">LocalApply<span>本地智能网申助手</span></a><nav aria-label="工作台导航"><a href="#pdfCard" aria-current="page">导入简历</a><a href="#aiSettings">AI 与模型</a><a href="#resumeCenter">我的简历</a><a href="#applications">申请追踪</a><a href="#fieldLibrary">字段库</a><a href="#privacySettings">数据与备份</a><a href="#diagnosticsPanel">诊断与关于</a></nav><p>资料只在本机保存<br>自动填写，不自动投递</p></aside>
   <main class="wrap" id="workspaceContent" tabindex="-1">
     <header class="workspace-heading"><div><span class="eyebrow">你的本地求职工作台</span><h1 id="workspaceTitle">导入简历</h1><p class="muted" id="workspaceDescription">选择或拖入 PDF / DOCX，预览后由你决定何时解析。</p></div></header>
     <p id="initializationError" class="init-error" role="alert" hidden></p>
@@ -168,6 +169,35 @@
     </section>
     </section>
 
+    <section class="workspace-page" data-workspace-page="applications" hidden>
+      <section class="card" id="applications">
+        <div class="application-toolbar"><div><h2>我的申请</h2><p class="muted">填写完成不会自动标记为已投递。可在职位页的悬浮卡片识别岗位，也可在这里手动添加。</p></div><button id="appNew" class="btn" type="button">添加申请</button><button id="appRefresh" class="btn ghost" type="button">刷新记录</button></div>
+        <div class="application-filters">
+          <label>搜索<input id="appSearch" type="search" placeholder="公司、岗位、地点、备注或标签" /></label>
+          <label>状态<select id="appStatusFilter"><option value="">全部状态</option></select></label>
+          <label>平台<select id="appSourceFilter"><option value="">全部平台</option></select></label>
+          <label>城市<select id="appCityFilter"><option value="">全部城市</option></select></label>
+          <label>职位类型<select id="appTypeFilter"><option value="">全部类型</option></select></label>
+          <label>开始日期<input id="appDateFrom" type="date" /></label><label>结束日期<input id="appDateTo" type="date" /></label>
+          <label>归档<select id="appArchiveFilter"><option value="">未归档</option><option value="archived">已归档</option><option value="all">全部记录</option></select></label>
+        </div>
+        <div class="application-toolbar"><button id="appListView" class="btn ghost" aria-pressed="true" type="button">列表</button><button id="appBoardView" class="btn ghost" aria-pressed="false" type="button">看板</button><span id="appCount" class="muted" role="status"></span><button id="appExportPreview" class="btn plain" type="button">预览并导出</button><button id="appImport" class="btn ghost" type="button">导入申请 JSON</button><input id="appImportFile" type="file" accept=".json,application/json" hidden /></div>
+        <details id="appColumns" hidden><summary>选择看板显示的状态列</summary><div id="appColumnOptions" class="application-toolbar"></div></details>
+        <p id="appStatusMessage" class="muted" role="status"></p><div id="appImportPreview" class="application-transfer" hidden><p id="appImportSummary"></p><button id="appImportConfirm" class="btn" type="button">确认合并导入</button><button id="appImportCancel" class="btn ghost" type="button">取消</button></div>
+        <div id="appExportPanel" class="application-transfer" hidden><h3>导出当前筛选结果</h3><p id="appExportSummary"></p><p class="muted">JSON 包含完整申请、时间线及待办；CSV 包含岗位、状态、日期、标签和备注。可能包含你的私人备注，请确认保存位置。两者均不含简历正文或 API Key。</p><button id="appExportJson" class="btn" type="button">确认导出 JSON</button><button id="appExportCsv" class="btn plain" type="button">确认导出 CSV</button><button id="appExportCancel" class="btn ghost" type="button">取消</button></div>
+        <div class="application-layout"><div id="appRecords" class="application-records"></div>
+          <aside id="appDetail" class="application-detail" hidden aria-label="申请详情"><h3 id="appDetailTitle">添加申请</h3><form id="appForm">
+            <div class="application-form-grid"><label>公司名称<input id="appCompany" type="text" maxlength="500" required /></label><label>职位名称<input id="appTitle" type="text" maxlength="500" required /></label>
+            <label>工作地点<input id="appLocation" type="text" maxlength="500" /></label><label>招聘平台<input id="appSource" type="text" maxlength="500" /></label><label>职位类型<input id="appEmploymentType" type="text" maxlength="500" /></label><label>职位 ID<input id="appJobId" type="text" maxlength="500" /></label></div>
+            <label>职位链接<input id="appUrl" type="url" maxlength="4000" placeholder="https://…（可留空）" /></label>
+            <div class="application-form-grid"><label>申请状态<select id="appEditStatus"></select></label><label id="appCustomStatusLabel" hidden>自定义状态<input id="appCustomStatus" type="text" maxlength="60" /></label><label>投递日期<input id="appAppliedDate" type="date" /></label></div>
+            <label>职位摘要<textarea id="appSummary" rows="3" maxlength="6000"></textarea></label><label>备注<textarea id="appNotes" rows="3" maxlength="10000"></textarea></label><label>标签<input id="appTags" type="text" placeholder="多个标签用顿号或逗号分隔" /></label><label>待办事项<textarea id="appTodos" rows="3" placeholder="每行一项，已完成的项使用 [x] 开头"></textarea></label><div id="appTodoList"></div>
+            <label class="application-check"><input id="appArchived" type="checkbox" />归档此记录</label><label class="application-check" id="appNewRoundLabel" hidden><input id="appNewRound" type="checkbox" />为同一岗位创建新一轮申请</label>
+            <div class="application-toolbar"><button id="appSave" class="btn" type="submit">确认保存</button><button id="appClose" class="btn ghost" type="button">关闭详情</button><button id="appDelete" class="btn ghost danger" type="button" hidden>删除记录</button></div>
+          </form><h4>申请时间线</h4><ol id="appTimeline" class="application-timeline"></ol></aside>
+        </div>
+      </section>
+    </section>
     <section class="workspace-page" data-workspace-page="fieldLibrary" hidden>
     <section class="card" id="fieldLibrary"><div class="section-heading"><div><h2>字段库</h2><p class="muted">定义说明“是什么”，实际值独立保存在当前档案。自定义字段默认私有。</p></div></div><div class="row"><input id="fieldSearch" type="search" placeholder="搜索字段名称或分类" aria-label="搜索字段库"></div><details id="fieldCreate"><summary>新增自定义字段</summary><form id="fieldForm" class="field-form"><label>字段名称<input id="fieldLabel" required maxlength="100"></label><label>分类<input id="fieldGroup" value="自定义字段" required maxlength="100"></label><label>字段类型<select id="fieldType"><option value="text">短文本</option><option value="textarea">长文本</option><option value="number">数字</option><option value="boolean">是 / 否</option><option value="date">日期</option><option value="select">单选</option><option value="multiSelect">多选</option></select></label><label>别名（顿号分隔）<input id="fieldAliases" maxlength="1000"></label><label>选项（每行一个）<textarea id="fieldOptions" rows="3"></textarea></label><p class="muted">新字段先保存为空，实际内容在简历中心录入。</p><div class="row"><button class="btn" type="submit" id="fieldSave">确认新增字段</button><button class="btn ghost" type="button" id="fieldCancel">取消编辑</button></div></form></details><p id="fieldStatus" class="muted" role="status"></p><div id="fieldList"></div></section>
     <section class="card" id="fieldTemplates">
@@ -182,6 +212,7 @@
       <h2>数据与隐私</h2>
       <div class="row">
         <button id="btnBackup" class="btn plain">导出档案备份（JSON）</button>
+        <button id="btnExportV4" class="btn ghost">导出兼容 v4 备份</button>
         <button id="btnExportV3" class="btn ghost">导出兼容 v3 备份</button>
         <button id="btnRestore" class="btn ghost">从备份恢复</button>
         <label>导入方式 <select id="restoreMode"><option value="merge">合并（冲突保留当前）</option><option value="replace">覆盖（保存恢复点）</option></select></label>
@@ -236,6 +267,7 @@
   <script src="../data/resume.js"></script>
   <script src="../data/resume-catalog.js"></script>
   <script src="../data/field-matching.js"></script>
+  <script src="../data/applications.js"></script>
   <script src="../data/local-store.js"></script>
   <script src="../data/model-capabilities.js"></script>
   <script src="../data/responses.js"></script>
@@ -253,6 +285,7 @@
   <script src="date-picker.js"></script>
   <script src="region-picker.js"></script>
   <script src="workspace.js"></script>
+  <script src="applications.js"></script>
   <script src="options.js"></script>
   <script src="diagnostics.js"></script>
 </body>

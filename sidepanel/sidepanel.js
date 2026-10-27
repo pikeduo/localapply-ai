@@ -162,12 +162,12 @@ async function refreshDetection() {
   }
 }
 
-// 程序化注入内容脚本（需要 scripting 权限 + 对应 host 权限）
+// 旧侧栏补注入保持与清单相同的依赖顺序，避免扫描器抢先缓存缺失的复合控件适配器。
 async function injectContentScripts(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['data/templates.js', 'data/field-matching.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/floatbar.js'],
+      files: ['data/templates.js', 'data/field-matching.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'],
     });
     await new Promise((r) => setTimeout(r, 700)); // 等detector完成首次检测
     return true;

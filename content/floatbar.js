@@ -4,6 +4,7 @@
   if (global.WangshenFloatbar) return;
   let host; let shadow; let frame; let badge; let enabled = true; let dismissed = false; let collapsed = false; let position = null; let previousFocus;
   let badgePosition = null; let badgeDrag = null; let suppressBadgeClick = false; let badgeSummary;
+  let jobSuccess = false; let openedUrl = '';
   // 提示与右边留出 32px、底部留出 96px；小视口自动收缩留白，拖动位置只留在当前页面内存。
   function layoutBadge() {
     if (!host || !badge || badge.hidden || frame) return;
@@ -94,16 +95,20 @@
     shadow.append(style, badge); document.documentElement.append(host);
   }
   // 自动检测后更新卡片数量和无障碍名称；重复检测保留拖动位置，不自动打开私有卡片。
-  function onPresence(result) { ensure(); badge.hidden = !!frame || !enabled || dismissed || result.kind !== 'application'; badgeSummary.textContent = `${result.count} 个控件 · 点击打开填写助手`; badge.setAttribute('aria-label', `检测到简历填写页，${result.count} 个控件。点击打开填写助手，按住可拖动`); host.style.setProperty('display', frame || !badge.hidden ? 'block' : 'none', 'important'); layoutBadge(); }
+  function onPresence(result) { ensure(); badge.hidden = !!frame || !enabled || (!jobSuccess && (dismissed || result.kind !== 'application')); badge.querySelector('.badge-heading').textContent = jobSuccess ? '检测到投递成功，是否记录？' : '检测到简历填写页'; badgeSummary.textContent = jobSuccess ? '点击核对岗位 · 确认后才保存申请' : `${result.count} 个控件 · 点击打开填写助手`; badge.setAttribute('aria-label', jobSuccess ? '检测到投递成功，点击核对岗位并确认记录，按住可拖动' : `检测到简历填写页，${result.count} 个控件。点击打开填写助手，按住可拖动`); host.style.setProperty('display', frame || !badge.hidden ? 'block' : 'none', 'important'); layoutBadge(); }
+  // 只接收后台核验后的布尔建议，不在网页提示中暴露岗位记录或个人资料。
+  function onJobFeedback(status, suggested) { jobSuccess = status === 'success' && suggested === true; onDetection(); }
+  // 延迟发现 SPA 导航时仅关闭旧 URL 的卡片，保留导航后用户重新授权的卡片。
+  function onNavigation() { if (!frame || openedUrl !== location.href) { jobSuccess = false; close(false); } }
   // 扩展后台确认用户打开后才创建私有 iframe，不向宿主网页发送资料。
-  function open(url) { ensure(); previousFocus = document.activeElement; frame?.remove(); collapsed = false; frame = document.createElement('iframe'); frame.src = url; frame.title = 'LocalApply AI 填写助手'; frame.referrerPolicy = 'no-referrer'; shadow.append(frame); badge.hidden = true; host.style.setProperty('display', 'block', 'important'); layout(); frame.addEventListener('load', () => frame?.focus()); }
+  function open(url) { ensure(); previousFocus = document.activeElement; frame?.remove(); collapsed = false; openedUrl = location.href; frame = document.createElement('iframe'); frame.src = url; frame.title = 'LocalApply AI 填写助手'; frame.referrerPolicy = 'no-referrer'; shadow.append(frame); badge.hidden = true; host.style.setProperty('display', 'block', 'important'); layout(); frame.addEventListener('load', () => frame?.focus()); }
   // 关闭释放 iframe；换页时重置提示，用户主动关闭则在本页保持收起。
-  function close(dismiss = true) { frame?.remove(); frame = null; dismissed = dismiss; if (host) host.style.setProperty('display', 'none', 'important'); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); }
+  function close(dismiss = true) { frame?.remove(); frame = null; openedUrl = ''; dismissed = dismiss; if (host) host.style.setProperty('display', 'none', 'important'); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); }
   // 保留旧检测回调以兼容旧填写器，只更新非敏感页面提示。
   function onDetection() { onPresence(global.LocalApplyPagePresence?.get() || { kind: 'other', count: 0 }); }
   // 用户关闭自动提示后仍可通过工具栏主动打开卡片。
   function setSettings(settings) { enabled = settings.autoFloatbar !== false; onDetection(); }
   chrome.runtime.sendMessage({ type: 'wsa:contentSettings' }).then((response) => { if (response?.settings) setSettings(response.settings); }).catch(() => {});
   window.addEventListener('resize', () => layout());
-  global.WangshenFloatbar = { onPresence, onDetection, setSettings, open, close, layout, isOpen: () => !!frame?.isConnected };
+  global.WangshenFloatbar = { onPresence, onDetection, onJobFeedback, onNavigation, setSettings, open, close, layout, isOpen: () => !!frame?.isConnected };
 })(globalThis);

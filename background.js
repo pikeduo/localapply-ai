@@ -1,11 +1,12 @@
 // Service Worker：复用资料/AI 服务，编排右上角悬浮卡片及本地脱敏诊断。
 'use strict';
 
-importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/field-suggestions.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js'); // 字段学习复用唯一仓库与加密凭据。
+importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/field-suggestions.js', 'data/applications.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js', 'data/job-tracking.js'); // 岗位追踪与字段学习复用唯一仓库，不读回密钥。
 
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local);
 const diagnostics = LocalApplyDiagnostics.create(chrome.storage.local);
+const jobTracking = LocalApplyJobTracking.create(repository, chrome);
 const floatingPanel = LocalApplyFloatingPanel.create(chrome, diagnostics, (tabId) => fieldLearning.invalidate(tabId)); // 关闭卡片也中止本页 AI 和未确认候选。
 const presenceTimes = new Map();
 
@@ -104,6 +105,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   }
   (async () => {
     try {
+      // 内容脚本只能报告用户提交及状态枚举，实际申请数据仍需可信界面明确确认。
+      if (['jobs:submitted', 'jobs:feedback'].includes(msg?.type)) { sendResponse({ ok: true, ...await jobTracking.observe(sender, msg) }); return; }
       // 自动检测只接受当前顶层内容脚本的有限枚举与数量，不授予私有数据库权限。
       if (msg?.type === 'diagnostics:presence' && sender.id === chrome.runtime.id && sender.tab && sender.frameId === 0) {
         const now = Date.now();
@@ -145,11 +148,15 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         if (!panelSession) throw new Error('悬浮会话无效');
         const db = await repository.read(); const profileId = db.profiles.some((item) => item.profileId === msg.profileId) ? msg.profileId : db.activeProfileId;
         const params = new URLSearchParams({ profile: profileId, section: typeof msg.section === 'string' ? msg.section.slice(0, 500) : '' });
-        const destination = ['pdfCard', 'privacySettings', 'fieldLibrary', 'aiSettings'].includes(msg.destination) ? msg.destination : 'resumeCenter';
+        const destination = ['pdfCard', 'privacySettings', 'fieldLibrary', 'aiSettings', 'applications'].includes(msg.destination) ? msg.destination : 'resumeCenter';
         await chrome.tabs.create({ url: chrome.runtime.getURL('options/options.html') + '?' + params + '#' + destination });
         sendResponse({ ok: true }); return;
       }
       if (msg?.type === 'diagnostics:read') { sendResponse({ ok: true, ...await diagnostics.read() }); return; }
+      // 岗位扫描始终绑定卡片所在标签，不接受调用方指定的其他页面。
+      if (msg?.type === 'jobs:scan') { if (!panelSession) throw new Error('请从当前网页的悬浮卡片识别岗位'); sendResponse({ ok: true, ...await jobTracking.scan(panelSession.tabId) }); return; }
+      // 保存成功后的确认提示只清理当前卡片所属标签，不改变已写入的申请。
+      if (msg?.type === 'jobs:acknowledge') { if (!panelSession) throw new Error('悬浮会话无效'); await jobTracking.close(panelSession.tabId); await chrome.tabs.sendMessage(panelSession.tabId, { type: 'jobs:notice' }, { frameId: 0 }); sendResponse({ ok: true }); return; }
       if (msg?.type === 'diagnostics:clear') { if (msg.confirmed !== true) throw new Error('清理日志需要确认'); await diagnostics.clear(); sendResponse({ ok: true }); return; }
       if (msg?.type === 'diagnostics:uiError') { await diagnostics.append('ui.error', { level: 'ERROR', error: { message: msg.error, stack: msg.stack } }); sendResponse({ ok: true }); return; }
       if (msg?.type?.startsWith('learning:')) { sendResponse({ ok: true, ...await fieldLearning.handle(msg) }); return; }
@@ -255,5 +262,5 @@ chrome.action?.onClicked?.addListener(async (tab) => {
 // 导航与关闭也清理字段学习的待确认值及进行中的模型任务。
 chrome.tabs?.onUpdated?.addListener((tabId, info) => { if (info.url || info.status === 'loading') { fieldLearning.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); } });
 // 只释放已关闭标签的会话，不删除已确认的资料或映射。
-chrome.tabs?.onRemoved?.addListener((tabId) => { presenceTimes.delete(tabId); fieldLearning.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); });
+chrome.tabs?.onRemoved?.addListener((tabId) => { presenceTimes.delete(tabId); fieldLearning.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); jobTracking.close(tabId).catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => {});

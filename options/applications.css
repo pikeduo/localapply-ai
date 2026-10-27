@@ -1,0 +1,34 @@
+/* 申请追踪复用工作台明暗主题；详情固定在布局右侧，窄窗自动改为单列。 */
+.application-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.application-toolbar > div:first-child { flex: 1 1 260px; }
+.application-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; margin: 18px 0; }
+.application-filters label, .application-detail form > label, .application-form-grid > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--sub); }
+.application-filters input, .application-filters select, .application-detail input:not([type="checkbox"]), .application-detail select, .application-detail textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; }
+.application-layout { display: grid; grid-template-columns: minmax(230px, 1fr); gap: 20px; margin-top: 16px; align-items: start; }
+.application-layout:has(.application-detail:not([hidden])) { grid-template-columns: minmax(230px, 1fr) minmax(300px, 1.2fr); }
+.application-records { display: grid; gap: 12px; min-width: 0; }
+.application-record { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); overflow-wrap: anywhere; }
+.application-record .application-toolbar { align-items: start; flex-wrap: nowrap; }
+.application-open { flex: 1; min-width: 0; border: 0; padding: 0; background: none; color: var(--ink); text-align: left; cursor: pointer; font: inherit; }
+.application-open strong, .application-open span { display: block; overflow-wrap: anywhere; }
+.application-open strong { font-size: 16px; margin-bottom: 4px; }
+.application-open span { color: var(--sub); }
+.application-status { display: inline-block; padding: 2px 8px; border-radius: 6px; color: var(--brand); background: var(--brand-weak); margin-top: 10px; }
+.application-tags { margin-bottom: 0; color: var(--brand); font-size: 12px; }
+.application-detail { border: 1px solid var(--line-strong); border-radius: 12px; padding: 18px; background: var(--card); min-width: 0; }
+.application-detail h3 { margin-top: 0; }
+.application-detail form { display: grid; gap: 14px; }
+.application-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.application-check, .application-detail form > .application-check { display: flex; flex-direction: row; align-items: center; gap: 7px; color: var(--ink); }
+.application-check input { width: auto; flex: none; }
+.application-timeline { padding-left: 18px; color: var(--sub); font-size: 13px; }
+.application-timeline li { margin-bottom: 12px; overflow-wrap: anywhere; }
+.application-transfer { margin-top: 16px; padding: 16px; border: 1px solid var(--brand); border-radius: 10px; background: var(--brand-weak); }
+.application-board { display: flex; overflow-x: auto; align-items: flex-start; gap: 14px; padding-bottom: 12px; }
+.application-column { flex: 0 0 240px; padding: 12px; border-radius: 12px; background: var(--bg); display: grid; gap: 10px; }
+.application-column h3 { font-size: 14px; margin: 0 0 4px; }
+#appColumns { margin-top: 12px; }
+#appColumns summary { cursor: pointer; color: var(--sub); }
+#appColumnOptions { margin-top: 10px; }
+@media (max-width: 1050px) { .application-layout:has(.application-detail:not([hidden])) { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 500px) { .application-form-grid { grid-template-columns: minmax(0, 1fr); } .application-detail { padding: 12px; } }

@@ -24,7 +24,7 @@ async function prepareRestore(text) {
   const mode = document.getElementById('restoreMode').value;
   const { preview } = await dataRequest('localapply:previewImport', { backup: text, mode });
   pendingRestore = { text, mode, revision: preview.revision };
-  document.getElementById('restorePreview').textContent = `校验通过：新增档案 ${preview.profilesAdded}，字段 ${preview.fieldsAdded}，值 ${preview.valuesAdded}，冲突 ${preview.conflicts}，移除档案 ${preview.profilesRemoved}。${mode === 'merge' ? '冲突保留当前内容。' : '确认后覆盖资料并保存恢复点。'}`;
+  document.getElementById('restorePreview').textContent = `校验通过：新增档案 ${preview.profilesAdded}，字段 ${preview.fieldsAdded}，值 ${preview.valuesAdded}，申请 ${preview.applicationsAdded}，冲突 ${preview.conflicts}，移除档案 ${preview.profilesRemoved}、申请 ${preview.applicationsRemoved}。${mode === 'merge' ? '冲突保留当前内容。' : '确认后覆盖资料并保存恢复点。'}`;
   document.getElementById('btnApplyRestore').hidden = false;
 }
 
@@ -53,8 +53,9 @@ async function renderEntries(profileId) {
 
 // 挂载备份确认、恢复点和公共包入口，并初始化简历选择。
 async function initDataManagement() {
-  document.getElementById('btnExportV3').addEventListener('click', async () => {
-    try { await flushSaves(); const response = await dataRequest('localapply:exportBackup', { version: 3 }); downloadJson(response.backup, 'localapply-v3-backup.json'); backupMsg('已导出兼容 v3 备份；新增类型的附加记录转为私有平面字段，完整结构请另存普通备份。'); }
+  // 兼容包明确说明申请表缺失，避免回滚时误以为已备份全部资料。
+  for (const version of [3, 4]) document.getElementById('btnExportV' + version).addEventListener('click', async () => {
+    try { await flushSaves(); const response = await dataRequest('localapply:exportBackup', { version }); downloadJson(response.backup, `localapply-v${version}-backup.json`); backupMsg(`已导出兼容 v${version} 备份；${version === 3 ? '附加记录转为私有平面字段；' : ''}不含申请追踪。请另存普通完整备份和申请追踪 JSON 后再回滚。`); }
     catch (error) { backupMsg(escapeHtml('兼容导出失败：' + error.message)); }
   });
   document.getElementById('restoreMode').addEventListener('change', () => {

@@ -8,6 +8,149 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 阶段五在两种真实存储入口验证申请管理、导出导入和整个浏览器重启。
+for (const withExtension of [true, false]) {
+  test(`阶段五管理：${withExtension ? '扩展' : 'file://'}申请、筛选、看板、备份与重启`, { timeout: 120000 }, async (t) => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'stage5-management-')); const api = await serve(); let context; let page; let url; let firstId; let exported; const errors = [];
+    // 通过真实页面 RPC 读取规范库，不用内存桩替代浏览器持久化。
+    const read = async () => (await page.evaluate(() => dataRequest('localapply:read'))).database;
+    // 每次保存都回应实际差异确认对话框，不伪造 confirmed 状态。
+    const confirmSave = async () => { page.once('dialog', (dialog) => dialog.accept()); await page.locator('#appSave').click(); await page.waitForFunction(() => !document.getElementById('appSave').disabled && document.getElementById('appStatusMessage').textContent.includes('已保存')); };
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000); url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html#applications` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href + '#applications';
+      page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true'); await page.locator('#appCount').filter({ hasText: '全部' }).waitFor();
+      await t.test('无 Key 可手动添加，取消确认不入库，保存后资料与字段保持完整', async () => {
+        const before = await read(); await page.locator('#appNew').click(); await page.locator('#appCompany').fill('合成阶段五公司'); await page.locator('#appTitle').fill('合成开发岗位'); await page.locator('#appLocation').fill('合成甲城'); await page.locator('#appSource').fill('合成平台'); await page.locator('#appEmploymentType').fill('全职'); await page.locator('#appJobId').fill('SYN-MANUAL-1'); await page.locator('#appUrl').fill(api.base + '/test-pages/phase5-job.html?token=must-not-store&utm_source=test');
+        page.once('dialog', (dialog) => dialog.dismiss()); await page.locator('#appSave').click(); assert.equal((await read()).applications.length, 0); assert.equal(await page.locator('#appTitle').inputValue(), '合成开发岗位');
+        await confirmSave(); const db = await read(); firstId = db.applications[0].applicationId; assert.equal(db.applications[0].status, 'saved'); assert.equal(db.applications[0].appliedAt, null); assert.deepEqual(db.fieldValues, before.fieldValues); assert.ok(!db.applications[0].jobUrl.includes('token=')); assert.equal(api.calls.length, 0);
+      });
+      await t.test('状态、备注、标签、待办及自定义状态写入历史，恶意文字仅当文本', async () => {
+        await page.locator('#appEditStatus').selectOption('interview'); await page.locator('#appNotes').fill('=合成备注 <img src=x onerror="window.__stage5Injected=true">'); await page.locator('#appTags').fill('重点、校招'); await page.locator('#appTodos').fill('准备合成面试\n[x] 完成合成测评'); await confirmSave(); assert.equal((await read()).applications[0].history.length, 2); assert.equal(await page.locator('#appTodoList input:checked').count(), 1);
+        await page.locator('#appEditStatus').selectOption('custom'); await page.locator('#appCustomStatus').fill('已沟通'); await confirmSave(); assert.equal((await read()).applications[0].status, 'custom:已沟通'); assert.equal(await page.evaluate(() => window.__stage5Injected), undefined); assert.equal(await page.locator('#appTimeline li').count(), 3);
+      });
+      await t.test('搜索及组合筛选、看板隐藏列、窄窗和明暗主题可用', async () => {
+        await page.locator('#appSearch').fill('重点'); await page.locator('#appStatusFilter').selectOption('custom:已沟通'); await page.locator('#appCityFilter').selectOption('合成甲城'); await page.locator('#appSourceFilter').selectOption('合成平台'); await page.locator('#appTypeFilter').selectOption('全职'); assert.equal(await page.locator('.application-record').count(), 1);
+        await page.locator('#appDateFrom').fill('2099-01-01'); assert.equal(await page.locator('.application-record').count(), 0); await page.locator('#appDateFrom').fill('');
+        await page.locator('#appBoardView').click(); await page.locator('#appColumns summary').click(); const column = page.locator('#appColumnOptions label').filter({ hasText: '已沟通' }); await column.locator('input').uncheck(); assert.equal(await page.locator('.application-record').count(), 0); await column.locator('input').check(); assert.equal(await page.locator('.application-record').count(), 1);
+        await page.locator('#appListView').click(); await page.screenshot({ path: path.join(testRoot, `stage5-applications-${withExtension ? 'extension' : 'file'}.png`), fullPage: true });
+        await page.setViewportSize({ width: 430, height: 850 }); await page.locator('#themeToggle').click(); await page.screenshot({ path: path.join(testRoot, `stage5-applications-narrow-${withExtension ? 'extension' : 'file'}.png`), fullPage: true }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)); await page.setViewportSize({ width: 1280, height: 900 });
+      });
+      await t.test('筛选导出有预览确认，CSV 含 BOM 并阻止公式，JSON 包含完整历史', async () => {
+        await page.locator('#appExportPreview').click(); assert.ok((await page.locator('#appExportSummary').textContent()).includes('1 条'));
+        let event = page.waitForEvent('download'); await page.locator('#appExportJson').click(); exported = await fs.readFile(await (await event).path()); const data = JSON.parse(exported); assert.equal(data.applications.length, 1); assert.equal(data.applications[0].history.length, 3); assert.ok(!exported.toString().includes('apiKeys'));
+        event = page.waitForEvent('download'); await page.locator('#appExportCsv').click(); const csv = await fs.readFile(await (await event).path(), 'utf8'); assert.ok(csv.startsWith('\uFEFF')); assert.ok(csv.includes('"\'=合成备注')); assert.ok(csv.includes('已沟通'));
+      });
+      await t.test('删除后可确认导入恢复，重复导入去重，完整备份包含申请', async () => {
+        await page.locator('#appExportCancel').click(); page.once('dialog', (dialog) => dialog.accept()); await page.locator('#appDelete').click(); await page.waitForFunction(() => document.getElementById('appStatusMessage').textContent.includes('已删除')); assert.equal((await read()).applications.length, 0);
+        await page.locator('#appImportFile').setInputFiles({ name: 'synthetic-applications.json', mimeType: 'application/json', buffer: exported }); await page.locator('#appImportPreview').waitFor({ state: 'visible' }); assert.equal((await read()).applications.length, 0); await page.locator('#appImportConfirm').click(); await page.waitForFunction(() => document.getElementById('appStatusMessage').textContent.includes('导入完成')); assert.equal((await read()).applications[0].applicationId, firstId);
+        await page.locator('#appImportFile').setInputFiles({ name: 'synthetic-applications-again.json', mimeType: 'application/json', buffer: exported }); await page.locator('#appImportPreview').waitFor({ state: 'visible' }); assert.ok((await page.locator('#appImportSummary').textContent()).includes('新增 0')); await page.locator('#appImportConfirm').click(); await page.locator('#appImportPreview').waitFor({ state: 'hidden' }); assert.equal((await read()).applications.length, 1);
+        const full = (await page.evaluate(() => dataRequest('localapply:exportBackup'))).backup; assert.equal(full.database.schemaVersion, 5); assert.equal(full.database.applications.length, 1);
+        // 通过真实兼容导出和恢复预览确认旧备份的申请缺失提示，预览不执行覆盖。
+        await workspacePage(page, 'privacySettings'); const compatibilityDownload = page.waitForEvent('download'); await page.locator('#btnExportV4').click(); const compatible = await fs.readFile(await (await compatibilityDownload).path()); assert.equal(JSON.parse(compatible).schemaVersion, 4); assert.ok((await page.locator('#backupMsg').textContent()).includes('不含申请追踪'));
+        await page.locator('#restoreMode').selectOption('replace'); await page.locator('#backupFile').setInputFiles({ name: 'synthetic-compatible-v4.json', mimeType: 'application/json', buffer: compatible }); await page.locator('#btnApplyRestore').waitFor({ state: 'visible' }); assert.ok((await page.locator('#restorePreview').textContent()).includes('移除档案 0、申请 1')); assert.equal((await read()).applications.length, 1); await workspacePage(page, 'applications');
+        if (withExtension) { const logs = await rpc(page, 'diagnostics:read'); for (const secret of ['合成阶段五公司', '合成备注', 'must-not-store', api.base]) assert.ok(!JSON.stringify(logs).includes(secret)); }
+      });
+      const beforeRestart = (await read()).applications; await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+      await t.test('刷新及整个浏览器重启后记录、待办、备注和历史完全一致', async () => {
+        assert.deepEqual((await read()).applications, beforeRestart); await page.reload(); await page.locator('#appCount').filter({ hasText: '全部' }).waitFor(); await page.locator('.application-open').first().click(); await page.locator('#appDetail').waitFor({ state: 'visible' }); assert.equal(await page.locator('#appNotes').inputValue(), beforeRestart[0].notes); assert.equal(await page.locator('#appTodoList input:checked').count(), 1); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
+      });
+    } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 真实点击仅发生在本地合成职位页，涵盖提交反馈、跨页面成功和卡片权限。
+test('阶段五岗位：识别、直填、提交结果确认、去重和重启', { timeout: 180000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'stage5-jobs-')); const api = await serve(); let context; let page; let options; let worker; let extensionId; let frame; const errors = [];
+  // 通过工具栏相同的后台管理器打开卡片，令牌仍由真实会话管理器创建。
+  const open = async () => { await page.bringToFront(); const loaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); await worker.evaluate(async (url) => { const tab = (await chrome.tabs.query({ active: true })).find((row) => row.url === url); await floatingPanel.open(tab.id); }, page.url()); frame = await loaded; await frame.locator('#jobScan').waitFor(); };
+  // 使用设置页读取实际持久库，不允许网页内容脚本访问。
+  const read = async () => (await rpc(options, 'localapply:read')).database;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); ({ worker, extensionId } = await extension(context)); context.on('page', (item) => item.on('pageerror', (error) => errors.push(error.message)));
+    options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true'); page = await context.newPage(); await page.goto(api.base + '/test-pages/phase5-job.html'); await open(); try { await frame.locator('#jobForm').waitFor({ state: 'visible' }); } catch { throw new Error('岗位识别卡片未就绪：' + await frame.locator('#jobStatus').textContent() + '；界面错误：' + errors.join(' / ')); }
+    await t.test('JSON-LD 只选当前岗位，不选推荐，无 Key、不上传、不自动建记录', async () => {
+      assert.equal(await frame.locator('#jobCompany').inputValue(), '合成科技有限公司'); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成 AI 开发工程师'); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成甲城'); assert.equal((await read()).applications.length, 0); assert.equal(await page.evaluate(() => __stage5Submissions), 0); assert.equal(api.calls.length, 0); assert.equal(await frame.locator('.panel-tabs button').count(), 2);
+    });
+    await t.test('取消不保存，确认收藏后重复操作不会创建第二条申请', async () => {
+      page.once('dialog', (dialog) => dialog.dismiss()); await frame.locator('#jobSave').click(); assert.equal((await read()).applications.length, 0);
+      page.once('dialog', (dialog) => dialog.accept()); await frame.locator('#jobSave').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('已保存')); assert.equal((await read()).applications[0].status, 'saved');
+      page.once('dialog', (dialog) => dialog.accept()); await frame.locator('#jobSave').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('已复用')); assert.equal((await read()).applications.length, 1);
+    });
+    await t.test('一键填写只改变表单，不提交、不自动标记已投递', async () => {
+      const db = await read(); for (const [fieldId, value] of [['builtin.name', '合成阶段五姓名'], ['builtin.phone', '13800000000'], ['builtin.email', 'stage5@example.test']]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId: db.activeProfileId, fieldId, value } } });
+      await frame.locator('#smartFillAll').click(); await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('填写完成')); assert.equal(await page.locator('#syntheticName').inputValue(), '合成阶段五姓名'); assert.equal(await page.evaluate(() => __stage5Submissions), 0); assert.equal((await read()).applications[0].status, 'saved');
+    });
+    await t.test('用户实际提交失败或没有结果时，不能标记为已投递', async () => {
+      await page.locator('#testOutcome').selectOption('failed'); await page.locator('#jobSubmit').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('失败')); await frame.locator('#jobScan').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('投递失败')); assert.equal(await frame.locator('#jobSuccess').isVisible(), false);
+      await page.locator('#testOutcome').selectOption('cancel'); await page.locator('#jobSubmit').click(); assert.equal((await read()).applications[0].status, 'saved'); assert.equal(await page.evaluate(() => __stage5Submissions), 2);
+    });
+    await t.test('成功反馈提出确认，取消仍收藏，明确确认后同一条记录才变为已投递', async () => {
+      await page.locator('#testOutcome').selectOption('success'); await page.locator('#jobSubmit').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('投递成功')); assert.equal((await read()).applications[0].status, 'saved');
+      await frame.locator('#jobScan').click(); await frame.locator('#jobSuccess').waitFor({ state: 'visible' }); page.once('dialog', (dialog) => dialog.dismiss()); await frame.locator('#jobConfirmApplied').click(); assert.equal((await read()).applications[0].status, 'saved');
+      page.once('dialog', (dialog) => dialog.accept()); await frame.locator('#jobConfirmApplied').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('已确认记录')); const row = (await read()).applications[0]; assert.equal(row.status, 'applied'); assert.ok(row.appliedAt); assert.equal(row.history.at(-1).status, 'applied'); assert.equal((await read()).applications.length, 1);
+      await frame.locator('#jobScan').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('已有第')); assert.equal(await frame.locator('#jobSuccess').isVisible(), false);
+      await page.screenshot({ path: path.join(testRoot, 'stage5-job-confirmed.png'), fullPage: true });
+    });
+    await t.test('显式新轮次可再次申请，跳转成功页后仍使用原岗位候选', async () => {
+      await frame.locator('#jobNewRound').check(); page.once('dialog', (dialog) => dialog.accept()); await frame.locator('#jobSave').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('已保存')); assert.equal((await read()).applications.length, 2);
+      await page.locator('#testOutcome').selectOption('cancel'); await page.locator('#jobSubmit').click(); await page.locator('#testOutcome').selectOption('navigate'); await page.locator('#jobSubmit').click(); await page.waitForURL(api.base + '/test-pages/phase5-success.html'); await open(); await frame.locator('#jobSuccess').waitFor({ state: 'visible' }); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成 AI 开发工程师');
+      assert.equal((await read()).applications.find((row) => row.round === 2).status, 'saved'); page.once('dialog', (dialog) => dialog.accept()); await frame.locator('#jobConfirmApplied').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('已确认记录')); assert.ok((await read()).applications.every((row) => row.status === 'applied'));
+    });
+    await t.test('内容脚本不能借岗位入口读库，直接打开成功页也不会产生投递建议', async () => {
+      const denied = await worker.evaluate(async (url) => { const tab = (await chrome.tabs.query({})).find((item) => item.url === url); const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: async () => chrome.runtime.sendMessage({ type: 'jobs:scan' }) }); return result.result; }, page.url()); assert.equal(denied.ok, false);
+      await frame.locator('#panelClose').click(); const direct = await context.newPage(); await direct.goto(api.base + '/test-pages/phase5-success.html'); const previous = page; page = direct; await open(); await frame.waitForFunction(() => !document.getElementById('jobScan').disabled); assert.equal(await frame.locator('#jobSuccess').isVisible(), false); await direct.close(); page = previous; assert.equal((await read()).applications.length, 2);
+    });
+    const beforeRestart = (await read()).applications; await context.close(); context = await launch(profile); context.setDefaultTimeout(10000); ({ worker, extensionId } = await extension(context)); options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html#applications`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    await t.test('真实进程重启保留岗位和事件，临时成功会话不冒充新申请', async () => {
+      assert.deepEqual((await read()).applications, beforeRestart); page = await context.newPage(); await page.goto(api.base + '/test-pages/phase5-job.html'); await open(); await frame.locator('#jobForm').waitFor({ state: 'visible' }); assert.equal(await frame.locator('#jobSuccess').isVisible(), false); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+// 使用损坏、歧义及缺失元数据验证保守回退，所有页面修改只作用于合成夹具。
+test('阶段五岗位边界：DOM回退、标题、缺失信息及异步成功', { timeout: 60000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'stage5-job-boundaries-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context); const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/phase5-job.html'); const ready = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+    const tabId = await worker.evaluate(async (url) => { const tab = (await chrome.tabs.query({})).find((item) => item.url === url); await floatingPanel.open(tab.id); return tab.id; }, page.url()); let frame = await ready; await frame.locator('#jobForm').waitFor({ state: 'visible' });
+    // 直接调用生产的可信内容脚本消息，只检查候选，不写个人资料。
+    const inspect = () => worker.evaluate((id) => chrome.tabs.sendMessage(id, { type: 'jobs:inspect' }, { frameId: 0 }), tabId);
+    await t.test('损坏及多个不相关 JSON-LD 回退详情区，不读推荐岗位或表单值', async () => {
+      await page.evaluate(() => { const script = document.querySelector('script[type="application/ld+json"]'); script.textContent = '{broken'; const other = document.createElement('script'); other.type = 'application/ld+json'; other.textContent = JSON.stringify([{ '@type': 'JobPosting', title: '错误推荐甲', url: '/jobs/other-a' }, { '@type': 'JobPosting', title: '错误推荐乙', url: '/jobs/other-b' }]); document.head.append(other); });
+      const view = await inspect(); assert.equal(view.ok, true); assert.equal(view.candidate.companyName, '合成科技有限公司'); assert.equal(view.candidate.jobTitle, '合成 AI 开发工程师'); assert.equal(view.candidate.jobId, '');
+      const privacy = await worker.evaluate(async (id) => { const [result] = await chrome.scripting.executeScript({ target: { tabId: id }, func: () => { let reads = 0; for (const input of document.querySelectorAll('input')) Object.defineProperty(input, 'value', { configurable: true, get() { reads++; throw new Error('禁止读取合成私人值'); } }); const result = LocalApplyJobRecognizer.inspect(); return { reads, title: result.candidate.jobTitle }; } }); return result.result; }, tabId); assert.equal(privacy.reads, 0); assert.equal(privacy.title, view.candidate.jobTitle);
+    });
+    await t.test('明确岗位 URL 的页面标题可作为末级候选，跟踪参数不入库', async () => {
+      // URL 变化必须撤销旧卡片授权，测试随后重新打开，不沿用已失效的 iframe。
+      await worker.evaluate((id) => floatingPanel.close(id), tabId);
+      await page.evaluate(() => { document.querySelector('main h1').remove(); document.title = '合成标题工程师 | 合成招聘'; history.pushState({}, '', '/jobs/SYN-TITLE?token=synthetic-hidden&utm_source=test'); });
+      const view = await inspect(); assert.equal(view.candidate.jobTitle, '合成标题工程师'); assert.equal(view.candidate.jobId, 'SYN-TITLE'); assert.equal(view.candidate.jobUrl, api.base + '/jobs/SYN-TITLE');
+      const reopened = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); await worker.evaluate((id) => floatingPanel.open(id), tabId); frame = await reopened; await frame.locator('#jobForm').waitFor({ state: 'visible' });
+    });
+    await t.test('缺少公司时可在卡片补全并确认收藏，未补全不能保存', async () => {
+      await page.locator('[data-company]').evaluate((element) => element.remove()); await frame.locator('#jobScan').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('不完整')); assert.equal(await frame.locator('#jobForm').isVisible(), true); await frame.locator('#jobSave').click(); assert.equal((await rpc(options, 'localapply:read')).database.applications.length, 0);
+      await frame.locator('#jobCompany').fill('合成手动补全公司'); page.once('dialog', (dialog) => dialog.accept()); await frame.locator('#jobSave').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('已保存')); assert.equal((await rpc(options, 'localapply:read')).database.applications[0].status, 'saved');
+      await page.evaluate(() => { const company = document.createElement('p'); company.dataset.company = ''; company.textContent = '合成手动补全公司'; document.querySelector('main').prepend(company); });
+    });
+    await t.test('异步成功只提示确认，提交中和取消确认均不改成已投递', async () => {
+      // 故障上下文仅来自本地合成页面，不输出真实资料或凭据。
+      await worker.evaluate(() => { chrome.runtime.onMessage.addListener((message, sender) => { if (message.type === 'jobs:submitted') globalThis.__stage5Sender = { url: sender.url, tabUrl: sender.tab?.url }; }); });
+      await page.locator('#testOutcome').selectOption('async'); await page.locator('#jobSubmit').click(); assert.equal((await rpc(options, 'localapply:read')).database.applications[0].status, 'saved');
+      try { await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('投递成功')); } catch { throw new Error('异步成功未提示：' + JSON.stringify(await worker.evaluate(async () => ({ sender: globalThis.__stage5Sender, sessions: await chrome.storage.session.get('localapply.jobSessions') })))); }
+      await frame.locator('#jobScan').click(); await frame.locator('#jobSuccess').waitFor({ state: 'visible' }); page.once('dialog', (dialog) => dialog.dismiss()); await frame.locator('#jobConfirmApplied').click(); assert.equal((await rpc(options, 'localapply:read')).database.applications[0].status, 'saved'); assert.equal(await page.evaluate(() => __stage5Submissions), 1); assert.equal(api.calls.length, 0);
+    });
+    await t.test('卡片关闭后新成功显示右下角提示，点击才核对，不自动写入', async () => {
+      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').style.display === 'none'); await page.locator('#applicationResult').evaluate((element) => { element.textContent = ''; });
+      await options.waitForFunction(async () => (await chrome.storage.session.get('localapply.jobSessions'))['localapply.jobSessions']?.[0]?.feedback === 'unknown');
+      await page.locator('#testOutcome').selectOption('success'); await page.locator('#jobSubmit').click(); await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
+      const cdp = await context.newCDPSession(page); const tree = await cdp.send('Accessibility.getFullAXTree'); assert.ok(tree.nodes.some((node) => node.name?.value?.includes('检测到投递成功，点击核对岗位'))); await cdp.detach();
+      assert.equal((await rpc(options, 'localapply:read')).database.applications[0].status, 'saved'); await page.screenshot({ path: path.join(testRoot, 'stage5-job-notice.png'), fullPage: true });
+      const opened = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); const box = await page.locator('#wsa-floatbar-host').boundingBox(); await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2); frame = await opened; await frame.locator('#jobSuccess').waitFor({ state: 'visible' }); assert.equal((await rpc(options, 'localapply:read')).database.applications[0].status, 'saved');
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 旧经历命令仍用于备份和历史兼容夹具；新的简历编辑器不再提供经历模块入口。
 async function addResumeEntry(page, kind, title) {
   return page.evaluate(async ({ kind, title }) => {
@@ -39,6 +182,27 @@ test('新版阶段三：复合控件误识别回归', { timeout: 60000 }, async 
     if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve));
     await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
   }
+});
+
+// 模拟旧页首次补注入，强制清除依赖后验证旧侧栏仍能建立完整的扫描器。
+test('旧侧栏补注入：复合适配器在扫描器之前恢复', async () => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'inject-recovery-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); const { worker, extensionId } = await extension(context);
+    const sidebar = await context.newPage(); await sidebar.goto(`chrome-extension://${extensionId}/sidepanel/sidepanel.html`); await sidebar.locator('#profileSel option').first().waitFor({ state: 'attached' });
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/phase3-composites.html');
+    const tabId = await worker.evaluate(async (url) => {
+      const tab = (await chrome.tabs.query({})).find((item) => item.url === url);
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => { globalThis.LocalApplyFieldAdapters = undefined; globalThis.LocalApplyPageScanner = undefined; } });
+      return tab.id;
+    }, page.url());
+    assert.equal(await sidebar.evaluate((id) => injectContentScripts(id), tabId), true);
+    const view = await rpc(sidebar, 'learning:scanPage', { tabId, confirmed: true });
+    assert.ok(view.rows.some((row) => row.field.label === '毕业时间'));
+    assert.ok(!view.rows.some((row) => ['月', '+86', '同步更新在线简历'].includes(row.field.label)));
+    assert.equal(api.calls.length, 0);
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true }); }
 });
 
 // 新版阶段三增量验收复用真实后台、存储和填写器，模型只连接 loopback Mock。
@@ -1502,7 +1666,7 @@ for (const withExtension of [true, false]) {
       const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
       const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url);
       await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
-      assert.deepEqual(await page.locator('.workspace-sidebar nav a').allTextContents(), ['导入简历','AI 与模型','我的简历','字段库','数据与备份','诊断与关于']);
+      assert.deepEqual(await page.locator('.workspace-sidebar nav a').allTextContents(), ['导入简历','AI 与模型','我的简历','申请追踪','字段库','数据与备份','诊断与关于']);
       assert.equal(await page.locator('.workspace-page:visible').count(), 1); assert.equal(await page.locator('#pdfCard').isVisible(), true);
       assert.equal(await page.locator('#workspaceMode').count(), 0); assert.equal(await page.locator('.workspace-sidebar small').count(), 0);
       assert.equal(await page.locator('#workspaceOverview').isVisible(), false); assert.equal(await page.locator('#provider').isVisible(), false);
@@ -1859,7 +2023,7 @@ for (const withExtension of [true, false]) {
       await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
       page = await context.newPage(); await page.goto(url); await workspacePage(page, 'resumeCenter');
       const restarted = (await page.evaluate(() => dataRequest('localapply:read'))).database;
-      assert.equal(restarted.schemaVersion, 4); assert.ok(!restarted.entries.some((entry) => entry.profileId === seeded.profileId));
+      assert.equal(restarted.schemaVersion, 5); assert.ok(!restarted.entries.some((entry) => entry.profileId === seeded.profileId));
       assert.equal(await page.getByLabel('简历中心 · 毕业院校', { exact: true }).inputValue(), '合成更新基础学院');
       assert.equal(await page.getByLabel('简历中心 · 合成研究成果', { exact: true }).inputValue(), '合成更新成果');
       assert.equal(await page.locator('#basicFields .entry-card,[data-add-entry-kind]').count(), 0); assert.deepEqual(errors, []);
@@ -1967,7 +2131,7 @@ for (const withExtension of [true, false]) {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       await page.screenshot({ path: path.join(testRoot, `reference-catalog-narrow-${mode}.png`) });
       const backup = (await page.evaluate(() => dataRequest('localapply:exportBackup'))).backup;
-      assert.equal(backup.database.schemaVersion, 4);
+      assert.equal(backup.database.schemaVersion, 5);
       await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
       page = await context.newPage(); await page.goto(url); await workspacePage(page, 'resumeCenter');
       assert.equal(await field('paperName').count(), 0, '用户移除的字段在整个浏览器重启后不再自动补回');
@@ -2180,7 +2344,7 @@ for (const withExtension of [true, false]) {
       await page.reload(); await workspacePage(page, 'resumeCenter');
       // 数据库、正文、目录和字段库同时检查，避免仅靠隐藏旧模块伪装删除。
       const check = async () => {
-        const database = (await page.evaluate(() => dataRequest('localapply:read'))).database; assert.equal(database.schemaVersion, 4); assert.equal(database.fieldDefinitions.length, 155);
+        const database = (await page.evaluate(() => dataRequest('localapply:read'))).database; assert.equal(database.schemaVersion, 5); assert.equal(database.fieldDefinitions.length, 155);
         assert.ok(!database.fieldDefinitions.some((field) => field.fieldId === 'resume.languages')); assert.ok(!database.fieldValues.some((row) => row.value === '合成旧语言证书'));
         assert.equal(await page.locator('#basicFields .center-field').count(), 154); assert.equal(await page.locator('#basicFields > .resume-group').count(), 12);
         for (const name of ['技能与其他', '开放题素材', '政治与个人情况', '语言与技能证书', '家庭与紧急联系', '补充声明', '填写偏好']) assert.equal(await page.locator('#resumeToc').getByRole('button', { name, exact: true }).count(), 0);
@@ -2537,7 +2701,7 @@ for (const withExtension of [true, false]) {
           assert.equal(await second.locator(`[data-field-id="builtin.${key}"] input`).inputValue(), ''); await second.locator(`[data-field-id="builtin.${key}"] input`).fill('合成第二条' + name); await second.locator(`[data-field-id="builtin.${key}"] input`).blur(); await page.evaluate(() => resumeSaveQueue);
           const revision = (await read()).revision; await section.locator('.resume-primary-record > summary').click(); assert.equal(await section.locator(`.resume-primary-record [data-field-id="builtin.${key}"] input`).isVisible(), false); assert.equal(await second.locator(`[data-field-id="builtin.${key}"] input`).isVisible(), true); await section.locator('.resume-primary-record > summary').click(); assert.equal((await read()).revision, revision);
         }
-        const db = await read(); assert.equal(db.schemaVersion, 4); assert.equal(db.entries.length, 8); assert.deepEqual(db.fieldDefinitions, initial.fieldDefinitions); assert.equal(await group('英语能力').locator('[data-module-action="add"]').count(), 0); assert.equal(api.calls.length, 0);
+        const db = await read(); assert.equal(db.schemaVersion, 5); assert.equal(db.entries.length, 8); assert.deepEqual(db.fieldDefinitions, initial.fieldDefinitions); assert.equal(await group('英语能力').locator('[data-module-action="add"]').count(), 0); assert.equal(api.calls.length, 0);
       });
       await t.test('自定义字段加入或移除共享模板后同时作用所有记录，值仍相互独立', async () => {
         await workspacePage(page, 'fieldLibrary'); await page.locator('#fieldCreate > summary').click(); await page.locator('#fieldLabel').fill('合成共享辅修'); await page.locator('#fieldGroup').fill('教育背景'); await page.locator('#fieldSave').click(); await page.waitForFunction(() => document.getElementById('fieldStatus').textContent.includes('字段定义已保存'));
@@ -2566,13 +2730,13 @@ for (const withExtension of [true, false]) {
       await t.test('简历隔离、v4/v3 备份往返及整个浏览器重启后记录和值保留', async () => {
         await page.locator('#newProfileName').fill('合成另一份简历'); await page.locator('#createResumeProfile').click(); await page.waitForFunction((id) => document.getElementById('entryProfile').value !== id && !document.getElementById('entryProfile').disabled && document.querySelectorAll('.resume-group[data-group="获奖经历"] .resume-record').length === 1, profileId); assert.equal(await group('获奖经历').locator('.resume-record').count(), 1); await page.locator('#entryProfile').selectOption(profileId); await page.waitForFunction(() => document.querySelectorAll('.resume-group[data-group="获奖经历"] .resume-record').length === 3);
         const before = await read(); await workspacePage(page, 'privacySettings');
-        const fullEvent = page.waitForEvent('download'); await page.locator('#btnBackup').click(); const fullBuffer = await fs.readFile(await (await fullEvent).path()); const full = JSON.parse(fullBuffer); assert.equal(full.schemaVersion, 4);
+        const fullEvent = page.waitForEvent('download'); await page.locator('#btnBackup').click(); const fullBuffer = await fs.readFile(await (await fullEvent).path()); const full = JSON.parse(fullBuffer); assert.equal(full.schemaVersion, 5);
         const compatEvent = page.waitForEvent('download'); await page.locator('#btnExportV3').click(); const compatBuffer = await fs.readFile(await (await compatEvent).path()); const compatible = JSON.parse(compatBuffer); assert.equal(compatible.schemaVersion, 3); assert.ok(compatible.database.entries.every((entry) => ['education','internship','employment','project'].includes(entry.kind))); assert.ok(!fullBuffer.toString().includes('synthetic-modules-key')); assert.ok(!compatBuffer.toString().includes('synthetic-modules-key'));
         // 两种备份都经真实预览和确认导入；兼容格式保留内容，完整格式恢复多记录结构。
         for (const [name, buffer] of [['synthetic-v3.json',compatBuffer], ['synthetic-v4.json',fullBuffer]]) {
-          await page.locator('#restoreMode').selectOption('replace'); await page.locator('#backupFile').setInputFiles({ name, mimeType: 'application/json', buffer }); await page.locator('#btnApplyRestore').waitFor({ state: 'visible' }); await page.locator('#btnApplyRestore').click(); await page.waitForFunction(() => document.getElementById('restorePreview').textContent.includes('导入完成')); assert.equal((await read()).schemaVersion, 4);
+          await page.locator('#restoreMode').selectOption('replace'); await page.locator('#backupFile').setInputFiles({ name, mimeType: 'application/json', buffer }); await page.locator('#btnApplyRestore').waitFor({ state: 'visible' }); await page.locator('#btnApplyRestore').click(); await page.waitForFunction(() => document.getElementById('restorePreview').textContent.includes('导入完成')); assert.equal((await read()).schemaVersion, 5);
         }
-        assert.deepEqual((await read()).fieldValues, before.fieldValues); assert.deepEqual((await read()).entries, before.entries); await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter'); const restarted = await read(); assert.equal(restarted.schemaVersion, 4); assert.deepEqual(restarted.fieldValues, before.fieldValues); assert.deepEqual(restarted.entries, before.entries); assert.equal(await group('获奖经历').locator('.resume-record').count(), 3); assert.equal(await group('获奖经历').locator('.resume-record[open]').count(), 1);
+        assert.deepEqual((await read()).fieldValues, before.fieldValues); assert.deepEqual((await read()).entries, before.entries); await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(url); await workspacePage(page, 'resumeCenter'); const restarted = await read(); assert.equal(restarted.schemaVersion, 5); assert.deepEqual(restarted.fieldValues, before.fieldValues); assert.deepEqual(restarted.entries, before.entries); assert.equal(await group('获奖经历').locator('.resume-record').count(), 3); assert.equal(await group('获奖经历').locator('.resume-record[open]').count(), 1);
         const target = restarted.entries.find((entry) => entry.kind === 'education'); const deepLink = new URL(url); deepLink.searchParams.set('profile', profileId); deepLink.searchParams.set('section', 'entry:' + target.entryId); deepLink.hash = 'resumeCenter'; await page.goto(deepLink.href); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true'); assert.notEqual(await page.locator(`[data-entry-id="${target.entryId}"]`).getAttribute('open'), null); assert.equal(await page.locator(`#resumeToc button[aria-current="location"]`).textContent(), '教育背景'); assert.equal(api.calls.length, 1); assert.deepEqual(errors, []);
       });
     } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }

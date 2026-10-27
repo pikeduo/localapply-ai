@@ -41,6 +41,6 @@
   const observer = new MutationObserver((records) => { if (records.some((record) => !record.target.closest?.('[id^=wsa-]'))) schedule(); });
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden','style','class','aria-hidden','disabled','type','placeholder','aria-label','aria-labelledby','autocomplete','name','id','role','contenteditable'] });
   window.addEventListener('popstate', schedule); window.addEventListener('hashchange', schedule);
-  setInterval(() => { if (lastUrl !== location.href) { lastUrl = location.href; lastSignature = ''; schedule(); global.WangshenFloatbar?.close(false); } }, 1000);
+  setInterval(() => { if (lastUrl !== location.href) { lastUrl = location.href; lastSignature = ''; schedule(); global.WangshenFloatbar?.onNavigation(); } }, 1000);
   global.LocalApplyPagePresence = { inspect, get: () => current }; schedule();
 })(globalThis);

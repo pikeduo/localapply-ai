@@ -11,7 +11,7 @@ const { webcrypto } = require('node:crypto');
 function fixture(initial = {}) {
   const disk = structuredClone(initial);
   const context = vm.createContext({ crypto: webcrypto, console, URL, TextEncoder, TextDecoder, btoa, atob });
-  for (const name of ['data/templates.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
+  for (const name of ['data/templates.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/applications.js', 'data/local-store.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
   let failCountdown = null;
   const storage = {
     get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))),
@@ -64,7 +64,7 @@ async function oldCatalogFixture() {
   db.fieldValues = db.fieldValues.filter((row) => !row.fieldId.startsWith('builtin.') || retained.has(row.fieldId));
   db.bindings = db.bindings.filter((binding) => binding.profileId !== 'p1' || binding.fieldId !== 'builtin.name');
   db.fieldValues = db.fieldValues.filter((row) => row.profileId !== 'p1' || row.fieldId !== 'builtin.name');
-  db.schemaVersion = 3; // 明确构造历史版本，不能用新库冒充迁移夹具。
+  db.schemaVersion = 3; delete db.applications; // 明确构造历史版本，不能用新库冒充迁移夹具。
   return { env: fixture({ [seed.store.DB_KEY]: JSON.parse(JSON.stringify(db)), [seed.store.API_KEY]: seed.disk[seed.store.API_KEY] }), before: JSON.parse(JSON.stringify(db)) };
 }
 
@@ -115,7 +115,7 @@ test('离线地区数据提供完整三级候选，保留原许可证且不包�
 
 test('旧 v3 目录只补新空字段，保留旧值、已删除字段、私有定义及全部档案', async () => {
   const { env, before } = await oldCatalogFixture(); const db = await env.repo.read();
-  assert.equal(db.schemaVersion, 4); assert.equal(db.revision, before.revision + 1);
+  assert.equal(db.schemaVersion, 5); assert.equal(db.revision, before.revision + 1);
   for (const old of before.fieldValues) assert.deepEqual(JSON.parse(JSON.stringify(db.fieldValues.find((row) => row.profileId === old.profileId && row.fieldId === old.fieldId && row.entryId === old.entryId))), old);
   assert.deepEqual(JSON.parse(JSON.stringify(db.profiles)), before.profiles);
   assert.equal(value(db, 'p1', 'builtin.birthDate'), '2000.02（原有文本）'); assert.equal(value(db, 'p1', 'builtin.ethnic'), '汉');
@@ -298,7 +298,7 @@ test('迁移写失败保留原数据，重新初始化可恢复', async () => {
   const before = JSON.stringify(env.disk.wangshenAutofill); env.fail();
   await assert.rejects(env.repo.initialize(), /模拟磁盘/);
   assert.equal(JSON.stringify(env.disk.wangshenAutofill), before);
-  assert.equal((await env.restart().initialize()).schemaVersion, 4);
+  assert.equal((await env.restart().initialize()).schemaVersion, 5);
 });
 
 test('完整备份往返恢复重复经历、自定义字段和映射；默认排除 Key', async () => {
@@ -537,19 +537,19 @@ test('简历来源校验、确认导入、重复文件去重、档案隔离及�
   assert.equal((await env.repo.read()).revision, revision);
 });
 
-test('Schema v2 数据/备份/恢复点升级到 v4，失败不改原版本，未知版本拒绝', async () => {
+test('Schema v2 数据/备份/恢复点升级到 v5，失败不改原版本，未知版本拒绝', async () => {
   const seed = fixture(); await seed.repo.initialize();
-  const v2 = structuredClone(seed.disk); v2['localapply.database'].schemaVersion = 2;
+  const v2 = structuredClone(seed.disk); v2['localapply.database'].schemaVersion = 2; delete v2['localapply.database'].applications;
   const env = fixture(v2); env.fail();
   await assert.rejects(env.repo.read(), /模拟磁盘/);
   assert.equal(env.disk['localapply.database'].schemaVersion, 2);
-  const db = await env.repo.read(); assert.equal(db.schemaVersion, 4); assert.equal(db.revision, 1);
+  const db = await env.repo.read(); assert.equal(db.schemaVersion, 5); assert.equal(db.revision, 1);
   assert.equal((await env.restart().read()).revision, 1);
-  const backup = await seed.repo.exportBackup(); backup.schemaVersion = backup.database.schemaVersion = 2;
+  const backup = await seed.repo.exportBackup(); backup.schemaVersion = backup.database.schemaVersion = 2; delete backup.database.applications;
   const preview = await env.repo.previewImport(backup, 'replace');
   await command(env.repo, 'importBackup', { backup, mode: 'replace' }, preview.revision);
-  env.disk['localapply.recovery'].schemaVersion = 2;
-  await command(env.repo, 'restoreRecovery', {}); assert.equal((await env.repo.read()).schemaVersion, 4);
+  env.disk['localapply.recovery'].schemaVersion = 2; delete env.disk['localapply.recovery'].applications;
+  await command(env.repo, 'restoreRecovery', {}); assert.equal((await env.repo.read()).schemaVersion, 5);
   const future = fixture({ ...v2, 'localapply.database': { ...v2['localapply.database'], schemaVersion: 100 } });
   await assert.rejects(future.repo.read(), /版本/); assert.equal(future.disk['localapply.database'].schemaVersion, 100);
 });
@@ -719,7 +719,7 @@ async function obsoleteCatalogFixture() {
 
 test('目录 v2 删除六个旧模块及字段引用，保留参考字段、删除选择与恢复点', async () => {
   const { env, before } = await obsoleteCatalogFixture(); const db = await env.repo.read();
-  assert.equal(db.fieldDefinitions.length, 155); assert.equal(db.schemaVersion, 4); assert.equal(db.revision, before.revision + 1);
+  assert.equal(db.fieldDefinitions.length, 155); assert.equal(db.schemaVersion, 5); assert.equal(db.revision, before.revision + 1);
   assert.equal(db.mappingRules.length, 0); assert.ok(db.fieldDefinitions.every((field) => !env.templates.REMOVED_PROFILE_GROUPS.includes(field.group)));
   assert.equal(value(db, 'p1', 'builtin.name'), '合成保留姓名'); assert.ok(!db.fieldValues.some((row) => row.value === '合成旧分类内容'));
   assert.ok(!db.bindings.some((row) => row.profileId === 'p1' && row.fieldId === 'builtin.paperName'), '新版本不能重新补回已移除的参考字段');
@@ -865,7 +865,7 @@ test('目录导入原子写回模块、保留多段及类型，备份重启和�
   const rows = env.catalog.analyze(raw, { type: 'pdf', mode: 'vision', pages: ['合成图'] }, catalog).rows; const payload = { profileId: 'p1', fingerprint: 'f'.repeat(64), overwrite: true, catalog, rows };
   const out = await command(env.repo, 'autoImportResume', payload, before.revision); assert.equal(out.result.saved, 7); assert.equal(out.result.overwritten, 1); assert.equal(out.result.details.find((row) => row.fieldId === 'builtin.school' && row.index === 0).status, 'overwritten');
   const db = await env.restart().read(); assert.equal(value(db, 'p1', 'builtin.school'), '合成第一学校'); assert.equal(value(db, 'p1', 'builtin.phone'), '13900000000'); assert.equal(value(db, 'p1', 'builtin.employmentCompany'), '合成工作单位'); assert.equal(value(db, 'p1', 'builtin.currentSalary'), 0); assert.equal(db.entries.length, 1); const entryId = db.entries[0].entryId; assert.equal(value(db, 'p1', 'builtin.school', entryId), '合成第二学校'); assert.equal(value(db, 'p1', 'builtin.major', entryId), '合成第二专业'); assert.ok(!db.fieldValues.some((row) => row.profileId === other && row.value === '合成第一学校')); assert.deepEqual(db.fieldDefinitions, before.fieldDefinitions);
-  const backup = env.store.parseBackup(await env.repo.exportBackup()); assert.deepEqual(backup.fieldValues, db.fieldValues); assert.equal(db.schemaVersion, 4);
+  const backup = env.store.parseBackup(await env.repo.exportBackup()); assert.deepEqual(backup.fieldValues, db.fieldValues); assert.equal(db.schemaVersion, 5);
   await command(env.repo, 'autoImportResume', payload, db.revision); assert.equal((await env.repo.read()).entries.length, 1); await command(env.repo, 'restoreRecovery', {}); assert.deepEqual((await env.repo.read()).fieldValues, db.fieldValues);
   const old = (await command(env.repo, 'createEntry', { profileId: 'p1', kind: 'education', title: '合成旧记录' })).result; await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.school', entryId: old, value: '合成待清理学校' }); const latest = await env.repo.read();
   const cleared = await command(env.repo, 'clearResumeEntries', { profileId: 'p1', confirmed: true }, latest.revision); assert.equal(cleared.result.entries, 1); assert.equal((await env.repo.read()).entries[0].entryId, entryId); assert.equal(value(await env.repo.read(), 'p1', 'builtin.school', entryId), '合成第二学校');
@@ -890,9 +890,9 @@ test('目录自动导入恢复点或主库写入失败均保留原库', async ()
 // v3→v4 只扩展模块类型，必须在单次落盘中保留旧恢复点；失败不得动资料或凭据。
 test('模块 Schema v4 原子迁移 v3 数据、备份及恢复点，不改旧字段/值/凭据', async () => {
   const seed = fixture(); await seed.repo.initialize(); await command(seed.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.name', value: '合成升级保留' }); await seed.repo.vaultCommand('setKey', { providerId: 'zhipu', key: 'synthetic-schema-key', revision: 0 });
-  const disk = structuredClone(seed.disk); disk[seed.store.DB_KEY].schemaVersion = 3; const old = structuredClone(disk[seed.store.DB_KEY]); const env = fixture(disk); env.fail(); await assert.rejects(env.repo.read(), /模拟磁盘/); assert.deepEqual(env.disk, disk);
-  const db = await env.restart().read(); assert.equal(db.schemaVersion, 4); assert.equal(db.revision, old.revision + 1); for (const table of ['profiles','fieldDefinitions','fieldValues','entries','bindings','mappingRules']) assert.deepEqual(JSON.parse(JSON.stringify(db[table])), old[table]); assert.deepEqual(env.disk[env.store.RECOVERY_KEY], old); assert.deepEqual(env.disk[env.store.DEVICE_KEY], disk[seed.store.DEVICE_KEY]); assert.equal((await env.restart().read()).revision, db.revision);
-  const oldBackup = { kind: 'localapply-ai-backup', formatVersion: 1, schemaVersion: 3, exportedAt: new Date().toISOString(), database: old }; assert.equal(env.store.parseBackup(oldBackup).schemaVersion, 4); await command(env.repo, 'restoreRecovery', {}); assert.equal(value(await env.repo.read(), 'p1', 'builtin.name'), '合成升级保留'); assert.equal((await env.repo.readAiSettings()).apiKeys.zhipu, 'synthetic-schema-key');
+  const disk = structuredClone(seed.disk); disk[seed.store.DB_KEY].schemaVersion = 3; delete disk[seed.store.DB_KEY].applications; const old = structuredClone(disk[seed.store.DB_KEY]); const env = fixture(disk); env.fail(); await assert.rejects(env.repo.read(), /模拟磁盘/); assert.deepEqual(env.disk, disk);
+  const db = await env.restart().read(); assert.equal(db.schemaVersion, 5); assert.equal(db.revision, old.revision + 1); for (const table of ['profiles','fieldDefinitions','fieldValues','entries','bindings','mappingRules']) assert.deepEqual(JSON.parse(JSON.stringify(db[table])), old[table]); assert.deepEqual(env.disk[env.store.RECOVERY_KEY], old); assert.deepEqual(env.disk[env.store.DEVICE_KEY], disk[seed.store.DEVICE_KEY]); assert.equal((await env.restart().read()).revision, db.revision);
+  const oldBackup = { kind: 'localapply-ai-backup', formatVersion: 1, schemaVersion: 3, exportedAt: new Date().toISOString(), database: old }; assert.equal(env.store.parseBackup(oldBackup).schemaVersion, 5); await command(env.repo, 'restoreRecovery', {}); assert.equal(value(await env.repo.read(), 'p1', 'builtin.name'), '合成升级保留'); assert.equal((await env.repo.readAiSettings()).apiKeys.zhipu, 'synthetic-schema-key');
 });
 
 // 所有可重复模块共用定义；新增空记录不创建字段或复制其他记录的值。
@@ -928,7 +928,7 @@ test('v4 新模块兼容导出 v3 保留值/证据/映射，可再次导入且�
   const env = fixture(); let db = await env.repo.read(); const entryId = (await command(env.repo, 'addModuleRecord', { profileId: 'p1', group: '获奖经历' }, db.revision)).result;
   await command(env.repo, 'setValue', { profileId: 'p1', fieldId: 'builtin.awardName', entryId, value: '合成回滚奖项' }); await command(env.repo, 'saveMapping', { profileId: 'p1', fieldId: 'builtin.awardName', entryId, origin: 'https://example.test', path: '/apply', label: '合成奖项' }); db = await env.repo.read();
   const backup = await env.repo.exportBackup(3); assert.equal(backup.schemaVersion, 3); env.store.validate(backup.database, 3); assert.ok(backup.database.entries.every((entry) => ['education','internship','employment','project'].includes(entry.kind))); const row = backup.database.fieldValues.find((row) => row.value === '合成回滚奖项'); assert.equal(row.entryId, null); assert.ok(row.fieldId.startsWith('compat.')); assert.ok(backup.database.bindings.some((binding) => binding.profileId === 'p1' && binding.fieldId === row.fieldId)); assert.ok(!backup.database.publicFieldIds.includes(row.fieldId)); assert.equal(backup.database.mappingRules[0].fieldId, row.fieldId); assert.equal(backup.database.mappingRules[0].entryId, null);
-  assert.deepEqual(await env.repo.read(), db); assert.equal(env.store.parseBackup(backup).schemaVersion, 4); const plan = await env.repo.previewImport(backup, 'replace'); await command(env.repo, 'importBackup', { backup, mode: 'replace' }, plan.revision); assert.ok((await env.repo.read()).fieldValues.some((row) => row.value === '合成回滚奖项')); await assert.rejects(env.repo.exportBackup(99));
+  assert.deepEqual(await env.repo.read(), db); assert.equal(env.store.parseBackup(backup).schemaVersion, 5); const plan = await env.repo.previewImport(backup, 'replace'); await command(env.repo, 'importBackup', { backup, mode: 'replace' }, plan.revision); assert.ok((await env.repo.read()).fieldValues.some((row) => row.value === '合成回滚奖项')); await assert.rejects(env.repo.exportBackup(99));
 });
 
 // 删除附加条目需明确确认，级联仅影响该记录；恢复点和落盘失败均有独立验证。
@@ -994,5 +994,5 @@ test('模块最后一条删除清除值和证据，空模板重复操作保留�
 
 // v3 数据不得偷渡 v4 类型；只有经过已知版本校验和原子升级后才能使用新增模块。
 test('伪装 v3 的新增模块及未知版本在写入前拒绝', async () => {
-  const seed = fixture(); const db = await seed.repo.read(); db.schemaVersion = 3; db.entries.push({ entryId: 'catalog.invalid', profileId: 'p1', kind: 'award', title: '', order: 1 }); const env = fixture({ [seed.store.DB_KEY]: db }); await assert.rejects(env.repo.read(), /类型/); assert.deepEqual(env.disk[seed.store.DB_KEY], JSON.parse(JSON.stringify(db)));
+  const seed = fixture(); const db = await seed.repo.read(); db.schemaVersion = 3; delete db.applications; db.entries.push({ entryId: 'catalog.invalid', profileId: 'p1', kind: 'award', title: '', order: 1 }); const env = fixture({ [seed.store.DB_KEY]: db }); await assert.rejects(env.repo.read(), /类型/); assert.deepEqual(env.disk[seed.store.DB_KEY], JSON.parse(JSON.stringify(db)));
 });
