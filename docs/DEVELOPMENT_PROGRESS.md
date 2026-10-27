@@ -1,6 +1,6 @@
 # localapply-ai｜开发进度与阶段验收记录
 
-> **文档版本：** v2.24
+> **文档版本：** v2.25
 > **更新日期：** 2026-10-27
 > **对应计划：** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) **v2.0**（2026-10-25 起采用新版任务和阶段编号）
 > **项目：** `localapply-ai`（基于 [`xiaoxiaobaijiangjun/wangshen-autofill`](https://github.com/xiaoxiaobaijiangjun/wangshen-autofill) Fork）  
@@ -460,6 +460,15 @@ Schema **v4 → v5** 只新增 `applications`；原字段/值/经历/映射和�
 
 测试：`npm test` **172/172**，0 失败/跳过（9.50 秒，`.browser-tests/stage5-unit-final.log`）；`node --test --test-reporter=tap --test-timeout=120000 --test-name-pattern='阶段五' tests/browser.test.cjs` **29/29**，0 失败/跳过（18.94 秒，`stage5-target-verified.log`）。最终 `npm run test:e2e` **207/207**，0 失败/跳过（490.48 秒，`stage5-e2e-final.log`）；包含原 177 项、补注入专项 1 项及阶段五 29 项。数据结构、文件、截图、历史失败及回滚步骤见 [阶段五验收](./阶段5岗位识别与申请追踪验收.md)。不新增依赖、不提交推送；真实 ATS/API、Edge 未抽检，不进入阶段六。
 
+#### 已投职位看板整理（2026-10-27）
+
+- 静态参考用户提供的 `docs/application-tracker.html`，按职位范围、主筛选、状态看板和右侧详情抽屉分层；默认看板，保留列表和状态列显隐。导入导出/刷新收进“更多操作”，平台/城市/归档收进“更多筛选”。不执行参考脚本、不复制其中个人记录、不请求企业图片。
+- 全部/进行中/已结束/已归档与导出共用筛选结果；收到 Offer、未通过、结束/撤回归为已结束，自定义状态归为进行中，归档单独筛选。范围变化清理勾选与旧导出预览，支持重置。
+- 原生模态抽屉保留差异确认、revision 校验、关闭草稿保护和内部错误反馈；修复看板重绘后原焦点丢失，删除后返回新增入口。没有修改 Schema v5、已有记录、凭据或投递流程；不进入阶段六。
+- 实际验证：`node --test tests/applications.test.cjs tests/baseline.test.cjs` **55/55**；`node --test --test-timeout=120000 --test-name-pattern='已投职位工作台|阶段五管理|工作台模块导航|阶段五岗位' tests/browser.test.cjs` **41/41**，均 0 失败/跳过。两种存储入口覆盖组合筛选、导出导入、草稿/焦点、窄屏暗色及整进程重启；不是完整浏览器回归。
+- 首轮新增夹具漏传预览 revision，被正常拒绝并引发后续空数据断言失败；补齐后发现抽屉关闭焦点断言失败，已修复并按上述命令复验。保留既有用例，仅按新界面的正常关闭/展开菜单更新交互，不强点隐藏控件。
+- 已检查合成资料截图：`.browser-tests/applications-board-extension.png`、`applications-drawer-extension.png`、`applications-mobile-extension.png`；file:// 对应产物使用 `-file` 后缀。真实 ATS、真实资料和 Edge 未抽检。
+
 ### 阶段 6｜复杂网申适配（旧阶段 5）
 
 - [ ] 增强北森、Moka、飞书等常见控件的模拟适配（搜索下拉、日期、多段经历、分步表单）。
@@ -629,5 +638,6 @@ Schema **v4 → v5** 只新增 `applications`；原字段/值/经历/映射和�
 | 2026-10-26 | v2.22 | 每条经历标题常驻删除，含首条/收起；首条接替、最后空模板与恢复点保护；基础 153、定向浏览器 18 项通过 | 本文件多记录删除入口补齐；record-delete 日志与截图 |
 | 2026-10-27 | v2.23 | 修复单行框被多行描述撑高，清理旧语言证书模块及引用；目录 v3，Schema v4 不变 | 定向数据/投影 76、浏览器 4 项通过；field-layout 日志与截图 |
 | 2026-10-27 | v2.24 | 开发前集中回归修复注入竞态；完成 S5-01～S5-07 岗位识别、确认投递、申请管理与 JSON/CSV、Schema v5 迁移回滚，停止于阶段五 | 基础 172/172、完整浏览器 207/207，0 失败/跳过；阶段五报告与截图，全部历史记录保留 |
+| 2026-10-27 | v2.25 | 参考上传 HTML 整理已投职位看板、范围筛选、次级工具菜单和详情抽屉，保留阶段五数据及原业务 | 定向基础 55/55、浏览器 41/41；明暗窄屏截图，未重复完整回归 |
 
 > **维护要求：** Codex 每次完成一个功能块、修复阻断性缺陷或结束阶段时，都应更新本文件。**以真实代码和实际运行记录为准，绝不虚构已完成项目或测试结果。**

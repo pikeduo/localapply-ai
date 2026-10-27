@@ -27,21 +27,24 @@ for (const withExtension of [true, false]) {
       await t.test('状态、备注、标签、待办及自定义状态写入历史，恶意文字仅当文本', async () => {
         await page.locator('#appEditStatus').selectOption('interview'); await page.locator('#appNotes').fill('=合成备注 <img src=x onerror="window.__stage5Injected=true">'); await page.locator('#appTags').fill('重点、校招'); await page.locator('#appTodos').fill('准备合成面试\n[x] 完成合成测评'); await confirmSave(); assert.equal((await read()).applications[0].history.length, 2); assert.equal(await page.locator('#appTodoList input:checked').count(), 1);
         await page.locator('#appEditStatus').selectOption('custom'); await page.locator('#appCustomStatus').fill('已沟通'); await confirmSave(); assert.equal((await read()).applications[0].status, 'custom:已沟通'); assert.equal(await page.evaluate(() => window.__stage5Injected), undefined); assert.equal(await page.locator('#appTimeline li').count(), 3);
+        // 详情已改为模态抽屉，先正常关闭再操作背景筛选，避免绕过原生焦点边界。
+        await page.locator('#appClose').click();
       });
       await t.test('搜索及组合筛选、看板隐藏列、窄窗和明暗主题可用', async () => {
-        await page.locator('#appSearch').fill('重点'); await page.locator('#appStatusFilter').selectOption('custom:已沟通'); await page.locator('#appCityFilter').selectOption('合成甲城'); await page.locator('#appSourceFilter').selectOption('合成平台'); await page.locator('#appTypeFilter').selectOption('全职'); assert.equal(await page.locator('.application-record').count(), 1);
+        await page.locator('#appMoreFilters > summary').click(); await page.locator('#appSearch').fill('重点'); await page.locator('#appStatusFilter').selectOption('custom:已沟通'); await page.locator('#appCityFilter').selectOption('合成甲城'); await page.locator('#appSourceFilter').selectOption('合成平台'); await page.locator('#appTypeFilter').selectOption('全职'); assert.equal(await page.locator('.application-record').count(), 1);
         await page.locator('#appDateFrom').fill('2099-01-01'); assert.equal(await page.locator('.application-record').count(), 0); await page.locator('#appDateFrom').fill('');
         await page.locator('#appBoardView').click(); await page.locator('#appColumns summary').click(); const column = page.locator('#appColumnOptions label').filter({ hasText: '已沟通' }); await column.locator('input').uncheck(); assert.equal(await page.locator('.application-record').count(), 0); await column.locator('input').check(); assert.equal(await page.locator('.application-record').count(), 1);
         await page.locator('#appListView').click(); await page.screenshot({ path: path.join(testRoot, `stage5-applications-${withExtension ? 'extension' : 'file'}.png`), fullPage: true });
         await page.setViewportSize({ width: 430, height: 850 }); await page.locator('#themeToggle').click(); await page.screenshot({ path: path.join(testRoot, `stage5-applications-narrow-${withExtension ? 'extension' : 'file'}.png`), fullPage: true }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)); await page.setViewportSize({ width: 1280, height: 900 });
       });
       await t.test('筛选导出有预览确认，CSV 含 BOM 并阻止公式，JSON 包含完整历史', async () => {
-        await page.locator('#appExportPreview').click(); assert.ok((await page.locator('#appExportSummary').textContent()).includes('1 条'));
+        await page.locator('#appDataTools > summary').click(); await page.locator('#appExportPreview').click(); assert.ok((await page.locator('#appExportSummary').textContent()).includes('1 条'));
         let event = page.waitForEvent('download'); await page.locator('#appExportJson').click(); exported = await fs.readFile(await (await event).path()); const data = JSON.parse(exported); assert.equal(data.applications.length, 1); assert.equal(data.applications[0].history.length, 3); assert.ok(!exported.toString().includes('apiKeys'));
         event = page.waitForEvent('download'); await page.locator('#appExportCsv').click(); const csv = await fs.readFile(await (await event).path(), 'utf8'); assert.ok(csv.startsWith('\uFEFF')); assert.ok(csv.includes('"\'=合成备注')); assert.ok(csv.includes('已沟通'));
       });
       await t.test('删除后可确认导入恢复，重复导入去重，完整备份包含申请', async () => {
-        await page.locator('#appExportCancel').click(); page.once('dialog', (dialog) => dialog.accept()); await page.locator('#appDelete').click(); await page.waitForFunction(() => document.getElementById('appStatusMessage').textContent.includes('已删除')); assert.equal((await read()).applications.length, 0);
+        await page.locator('#appExportCancel').click(); await page.locator('.application-open').first().click(); page.once('dialog', (dialog) => dialog.accept()); await page.locator('#appDelete').click(); await page.waitForFunction(() => document.getElementById('appStatusMessage').textContent.includes('已删除')); assert.equal((await read()).applications.length, 0);
+        assert.equal(await page.evaluate(() => document.activeElement.id), 'appNew');
         await page.locator('#appImportFile').setInputFiles({ name: 'synthetic-applications.json', mimeType: 'application/json', buffer: exported }); await page.locator('#appImportPreview').waitFor({ state: 'visible' }); assert.equal((await read()).applications.length, 0); await page.locator('#appImportConfirm').click(); await page.waitForFunction(() => document.getElementById('appStatusMessage').textContent.includes('导入完成')); assert.equal((await read()).applications[0].applicationId, firstId);
         await page.locator('#appImportFile').setInputFiles({ name: 'synthetic-applications-again.json', mimeType: 'application/json', buffer: exported }); await page.locator('#appImportPreview').waitFor({ state: 'visible' }); assert.ok((await page.locator('#appImportSummary').textContent()).includes('新增 0')); await page.locator('#appImportConfirm').click(); await page.locator('#appImportPreview').waitFor({ state: 'hidden' }); assert.equal((await read()).applications.length, 1);
         const full = (await page.evaluate(() => dataRequest('localapply:exportBackup'))).backup; assert.equal(full.database.schemaVersion, 5); assert.equal(full.database.applications.length, 1);
@@ -55,6 +58,48 @@ for (const withExtension of [true, false]) {
         assert.deepEqual((await read()).applications, beforeRestart); await page.reload(); await page.locator('#appCount').filter({ hasText: '全部' }).waitFor(); await page.locator('.application-open').first().click(); await page.locator('#appDetail').waitFor({ state: 'visible' }); assert.equal(await page.locator('#appNotes').inputValue(), beforeRestart[0].notes); assert.equal(await page.locator('#appTodoList input:checked').count(), 1); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
       });
     } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+}
+
+// 参考看板布局使用合成岗位验证范围、菜单和抽屉，不执行参考 HTML 或请求企业图片。
+for (const withExtension of [true, false]) {
+  test(`已投职位工作台：${withExtension ? '扩展' : 'file://'}范围、导出选择、抽屉和响应布局`, { timeout: 90000 }, async (t) => {
+    const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'application-workspace-')); let context; const errors = [];
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000); const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message));
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html#applications` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href + '#applications';
+      await page.setViewportSize({ width: 1920, height: 1080 }); await page.goto(url); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+      await t.test('空库显示清晰入口，合成岗位按状态列呈现，不加载外部标志', async () => {
+        assert.equal(await page.locator('.application-empty strong').textContent(), '从第一个职位开始'); assert.equal(await page.locator('#appBoardView').getAttribute('aria-pressed'), 'true');
+        await page.evaluate(async () => {
+          const statuses = ['saved', 'applied', 'screening', 'assessment', 'interview', 'offer', 'rejected', 'closed', 'applied', 'custom:待沟通'];
+          for (const [index, status] of statuses.entries()) await dataCommand('saveApplication', { newRound: false, confirmed: true, record: { companyName: '合成云帆科技 ' + (index + 1), jobTitle: ['应用开发工程师', '产品工程师', '测试工程师'][index % 3], location: index % 2 ? '合成乙城' : '合成甲城', jobSource: '合成招聘平台', employmentType: '全职', status, appliedAt: status === 'saved' ? null : '2026-10-20T00:00:00.000Z', archived: index === 8 } }, (await dataRequest('localapply:read')).database.revision);
+        });
+        await page.locator('#appDataTools > summary').click(); await page.locator('#appRefresh').click(); await page.waitForFunction(() => document.getElementById('appTotal').textContent === '10');
+        await page.locator('#appDataTools > summary').click(); assert.equal(await page.locator('.application-record').count(), 10); assert.equal(await page.locator('.application-company-mark').count(), 10); assert.equal(await page.locator('#appRecords img').count(), 0);
+        await page.screenshot({ path: path.join(testRoot, `applications-board-${withExtension ? 'extension' : 'file'}.png`), fullPage: true });
+      });
+      await t.test('范围切换与筛选导出一致，旧选择和预览及时失效', async () => {
+        for (const [scope, count] of [['ongoing',6], ['ended',3], ['archived',1], ['all',10]]) { await page.locator(`[data-app-scope="${scope}"]`).click(); assert.equal(await page.locator('.application-record').count(), count); assert.equal(await page.locator(`[data-app-scope="${scope}"]`).getAttribute('aria-pressed'), 'true'); }
+        await page.locator('.application-export-check').first().check(); await page.locator('#appDataTools > summary').click(); await page.locator('#appExportPreview').click(); assert.ok((await page.locator('#appExportSummary').textContent()).includes('1 条'));
+        await page.locator('[data-app-scope="ended"]').click(); assert.equal(await page.locator('#appExportPanel').isVisible(), false); await page.locator('#appDataTools > summary').click(); await page.locator('#appExportPreview').click(); assert.ok((await page.locator('#appExportSummary').textContent()).includes('3 条')); await page.locator('#appExportCancel').click();
+        await page.locator('#appMoreFilters > summary').click(); await page.locator('#appResetFilters').click(); assert.equal(await page.locator('.application-record').count(), 10); assert.equal(await page.locator('#appArchiveFilter').inputValue(), 'all'); await page.locator('#appMoreFilters > summary').click();
+      });
+      await t.test('抽屉取消关闭保留草稿，确认放弃不写库且恢复焦点', async () => {
+        const before = (await page.evaluate(() => dataRequest('localapply:read'))).database;
+        await page.locator('.application-open').first().click(); assert.equal(await page.locator('#appDetail').evaluate((element) => element.matches(':modal')), true); assert.equal(await page.locator('#appCompany').evaluate((element) => document.activeElement === element), true);
+        await page.locator('#appNotes').fill('合成未保存草稿'); page.once('dialog', (dialog) => dialog.dismiss()); await page.keyboard.press('Escape'); assert.equal(await page.locator('#appDetail').isVisible(), true); assert.equal(await page.locator('#appNotes').inputValue(), '合成未保存草稿');
+        page.once('dialog', (dialog) => dialog.accept()); await page.keyboard.press('Escape'); assert.equal(await page.locator('#appDetail').isVisible(), false); assert.equal(await page.evaluate(() => document.activeElement.classList.contains('application-open')), true);
+        assert.deepEqual((await page.evaluate(() => dataRequest('localapply:read'))).database.applications, before.applications);
+        await page.locator('.application-open').first().click(); await page.screenshot({ path: path.join(testRoot, `applications-drawer-${withExtension ? 'extension' : 'file'}.png`), fullPage: true }); await page.locator('#appDetailDismiss').click();
+      });
+      await t.test('窄屏只在看板内部滚动，暗色、列表和抽屉均可操作', async () => {
+        await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#themeToggle').click(); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
+        await page.locator('#appRecords').evaluate((element) => { element.scrollLeft = 500; }); assert.ok(await page.locator('#appRecords').evaluate((element) => element.scrollLeft > 0));
+        await page.locator('#appListView').click(); assert.equal(await page.locator('.application-record').count(), 10); await page.screenshot({ path: path.join(testRoot, `applications-mobile-${withExtension ? 'extension' : 'file'}.png`), fullPage: true });
+        await page.locator('.application-open').first().click(); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true); await page.locator('#appDetailDismiss').click(); assert.deepEqual(errors, []);
+      });
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
   });
 }
 

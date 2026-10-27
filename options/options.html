@@ -170,23 +170,25 @@
     </section>
 
     <section class="workspace-page" data-workspace-page="applications" hidden>
-      <section class="card" id="applications">
-        <div class="application-toolbar"><div><h2>我的申请</h2><p class="muted">填写完成不会自动标记为已投递。可在职位页的悬浮卡片识别岗位，也可在这里手动添加。</p></div><button id="appNew" class="btn" type="button">添加申请</button><button id="appRefresh" class="btn ghost" type="button">刷新记录</button></div>
+      <section class="card application-workspace" id="applications" aria-label="已投职位管理">
+        <!-- 职位范围和新增入口优先展示，数据工具收进次级菜单，避免与筛选混排。 -->
+        <header class="application-commandbar">
+          <div class="application-scopes"><div class="application-total"><strong id="appTotal">0</strong><span>个职位</span></div><nav id="appScopes" aria-label="职位范围"><button type="button" data-app-scope="all" aria-pressed="true">全部</button><button type="button" data-app-scope="ongoing" aria-pressed="false">进行中</button><button type="button" data-app-scope="ended" aria-pressed="false">已结束</button><button type="button" data-app-scope="archived" aria-pressed="false">已归档</button></nav></div>
+          <div class="application-toolbar"><button id="appNew" class="btn" type="button"><span aria-hidden="true">＋</span>添加职位</button><details id="appDataTools" class="application-data-tools"><summary>更多操作</summary><div class="application-data-menu"><button id="appRefresh" class="btn ghost" type="button">刷新记录</button><button id="appExportPreview" class="btn ghost" type="button">预览并导出</button><button id="appImport" class="btn ghost" type="button">导入职位 JSON</button></div></details><input id="appImportFile" type="file" accept=".json,application/json" hidden /></div>
+        </header>
         <div class="application-filters">
-          <label>搜索<input id="appSearch" type="search" placeholder="公司、岗位、地点、备注或标签" /></label>
-          <label>状态<select id="appStatusFilter"><option value="">全部状态</option></select></label>
-          <label>平台<select id="appSourceFilter"><option value="">全部平台</option></select></label>
-          <label>城市<select id="appCityFilter"><option value="">全部城市</option></select></label>
+          <label class="application-search">搜索职位<input id="appSearch" type="search" placeholder="搜索职位、公司、地点或标签" /></label>
+          <div class="application-date-filter" role="group" aria-label="投递日期筛选"><span>投递日期</span><div><input id="appDateFrom" type="date" aria-label="投递开始日期" /><span>至</span><input id="appDateTo" type="date" aria-label="投递结束日期" /></div></div>
           <label>职位类型<select id="appTypeFilter"><option value="">全部类型</option></select></label>
-          <label>开始日期<input id="appDateFrom" type="date" /></label><label>结束日期<input id="appDateTo" type="date" /></label>
-          <label>归档<select id="appArchiveFilter"><option value="">未归档</option><option value="archived">已归档</option><option value="all">全部记录</option></select></label>
+          <label>申请状态<select id="appStatusFilter"><option value="">全部状态</option></select></label>
         </div>
-        <div class="application-toolbar"><button id="appListView" class="btn ghost" aria-pressed="true" type="button">列表</button><button id="appBoardView" class="btn ghost" aria-pressed="false" type="button">看板</button><span id="appCount" class="muted" role="status"></span><button id="appExportPreview" class="btn plain" type="button">预览并导出</button><button id="appImport" class="btn ghost" type="button">导入申请 JSON</button><input id="appImportFile" type="file" accept=".json,application/json" hidden /></div>
-        <details id="appColumns" hidden><summary>选择看板显示的状态列</summary><div id="appColumnOptions" class="application-toolbar"></div></details>
+        <details id="appMoreFilters" class="application-more-filters"><summary>更多筛选</summary><div class="application-extra-filters"><label>招聘平台<select id="appSourceFilter"><option value="">全部平台</option></select></label><label>工作城市<select id="appCityFilter"><option value="">全部城市</option></select></label><label>归档范围<select id="appArchiveFilter"><option value="all">全部记录</option><option value="">未归档</option><option value="archived">已归档</option></select></label><button id="appResetFilters" class="btn ghost" type="button">重置筛选</button></div></details>
+        <div class="application-manage-row"><div><strong>管理职位</strong><span id="appCount" class="muted" role="status"></span></div><div class="application-display-tools"><details id="appColumns"><summary>显示阶段</summary><div id="appColumnOptions"></div></details><div class="application-view-switch" role="group" aria-label="职位显示方式"><button id="appBoardView" aria-pressed="true" type="button">看板</button><button id="appListView" aria-pressed="false" type="button">列表</button></div></div></div>
         <p id="appStatusMessage" class="muted" role="status"></p><div id="appImportPreview" class="application-transfer" hidden><p id="appImportSummary"></p><button id="appImportConfirm" class="btn" type="button">确认合并导入</button><button id="appImportCancel" class="btn ghost" type="button">取消</button></div>
         <div id="appExportPanel" class="application-transfer" hidden><h3>导出当前筛选结果</h3><p id="appExportSummary"></p><p class="muted">JSON 包含完整申请、时间线及待办；CSV 包含岗位、状态、日期、标签和备注。可能包含你的私人备注，请确认保存位置。两者均不含简历正文或 API Key。</p><button id="appExportJson" class="btn" type="button">确认导出 JSON</button><button id="appExportCsv" class="btn plain" type="button">确认导出 CSV</button><button id="appExportCancel" class="btn ghost" type="button">取消</button></div>
         <div class="application-layout"><div id="appRecords" class="application-records"></div>
-          <aside id="appDetail" class="application-detail" hidden aria-label="申请详情"><h3 id="appDetailTitle">添加申请</h3><form id="appForm">
+          <!-- 原生对话框提供抽屉焦点边界，编辑期间不会挤压看板列宽。 -->
+          <dialog id="appDetail" class="application-detail" hidden aria-labelledby="appDetailTitle"><header class="application-detail-header"><div><span class="application-eyebrow">职位档案</span><h3 id="appDetailTitle">添加职位</h3></div><button id="appDetailDismiss" class="application-dismiss" type="button" aria-label="关闭职位详情">×</button></header><p id="appDetailMessage" role="status" class="muted"></p><form id="appForm">
             <div class="application-form-grid"><label>公司名称<input id="appCompany" type="text" maxlength="500" required /></label><label>职位名称<input id="appTitle" type="text" maxlength="500" required /></label>
             <label>工作地点<input id="appLocation" type="text" maxlength="500" /></label><label>招聘平台<input id="appSource" type="text" maxlength="500" /></label><label>职位类型<input id="appEmploymentType" type="text" maxlength="500" /></label><label>职位 ID<input id="appJobId" type="text" maxlength="500" /></label></div>
             <label>职位链接<input id="appUrl" type="url" maxlength="4000" placeholder="https://…（可留空）" /></label>
@@ -194,7 +196,7 @@
             <label>职位摘要<textarea id="appSummary" rows="3" maxlength="6000"></textarea></label><label>备注<textarea id="appNotes" rows="3" maxlength="10000"></textarea></label><label>标签<input id="appTags" type="text" placeholder="多个标签用顿号或逗号分隔" /></label><label>待办事项<textarea id="appTodos" rows="3" placeholder="每行一项，已完成的项使用 [x] 开头"></textarea></label><div id="appTodoList"></div>
             <label class="application-check"><input id="appArchived" type="checkbox" />归档此记录</label><label class="application-check" id="appNewRoundLabel" hidden><input id="appNewRound" type="checkbox" />为同一岗位创建新一轮申请</label>
             <div class="application-toolbar"><button id="appSave" class="btn" type="submit">确认保存</button><button id="appClose" class="btn ghost" type="button">关闭详情</button><button id="appDelete" class="btn ghost danger" type="button" hidden>删除记录</button></div>
-          </form><h4>申请时间线</h4><ol id="appTimeline" class="application-timeline"></ol></aside>
+          </form><h4>申请时间线</h4><ol id="appTimeline" class="application-timeline"></ol></dialog>
         </div>
       </section>
     </section>

@@ -1,18 +1,22 @@
-// 申请追踪工作台复用规范仓库；列表、详情和导出都只处理本地岗位记录。
+// 已投职位工作台复用规范仓库；看板、详情和导出共用本地岗位记录。
 (function (global) {
   'use strict';
   const A = global.LocalApplyApplications; const $ = (id) => document.getElementById(id);
   const INPUTS = { companyName: 'appCompany', jobTitle: 'appTitle', jobUrl: 'appUrl', jobId: 'appJobId', jobSource: 'appSource', location: 'appLocation', employmentType: 'appEmploymentType', summary: 'appSummary', notes: 'appNotes' };
-  let database; let editing = null; let editingRevision; let dirty = false; let board = false; let pendingImport = null; let pendingExport = null; let initialized = false; let refreshing = 0;
+  let database; let editing = null; let editingRevision; let editorReturnId = null; let dirty = false; let board = true; let scope = 'all'; let pendingImport = null; let pendingExport = null; let initialized = false; let refreshing = 0;
   const selected = new Set(); const hiddenColumns = new Set();
+  const endedStatuses = new Set(['offer', 'rejected', 'closed']); // 已结束仅按明确状态归类，自定义状态保留在进行中。
   // 所有外部文字使用 textContent，不把职位摘要、备注或导入内容拼成 HTML。
   function node(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
-  // 状态文字只留在当前界面，日志由后台以固定操作名记录。
-  function message(value, error = false) { $('appStatusMessage').textContent = value; $('appStatusMessage').className = error ? 'err' : 'muted'; }
+  // 正文和抽屉同步反馈结果，避免错误被模态背景遮挡；日志仍只由后台记录固定操作名。
+  function message(value, error = false) { for (const id of ['appStatusMessage', 'appDetailMessage']) { $(id).textContent = value; $(id).className = error ? 'err' : 'muted'; } }
   // 筛选器不包含个人简历值，所有显示方式与导出共用同一规则。
   function query() { return { search: $('appSearch').value, status: $('appStatusFilter').value, source: $('appSourceFilter').value, city: $('appCityFilter').value, type: $('appTypeFilter').value, from: $('appDateFrom').value, to: $('appDateTo').value, archived: $('appArchiveFilter').value }; }
-  // 日期范围有误时直接报告，避免导出意外为空而误以为没有记录。
-  function rows() { const filter = query(); if (filter.from && filter.to && filter.from > filter.to) throw new Error('开始日期不能晚于结束日期'); return A.filter(database?.applications || [], filter); }
+  // 范围标签与现有组合筛选、导出共用结果；日期有误时保留错误提示，不产生导出。
+  function rows() {
+    const filter = query(); if (filter.from && filter.to && filter.from > filter.to) throw new Error('开始日期不能晚于结束日期');
+    return A.filter(database?.applications || [], filter).filter((row) => scope === 'ongoing' ? !row.archived && !endedStatuses.has(row.status) : scope === 'ended' ? !row.archived && endedStatuses.has(row.status) : true);
+  }
   // 选择列表始终显示全部当前候选，并保留仍有效的筛选值。
   function options(id, title, values, label = (value) => value) { const previous = $(id).value; $(id).replaceChildren(new Option(title, ''), ...[...new Set(values.filter(Boolean))].map((value) => new Option(label(value), value))); if ([...$(id).options].some((option) => option.value === previous)) $(id).value = previous; }
   // 后台重读不会覆盖详情草稿；旧版本保存由仓库明确拒绝。
@@ -24,13 +28,16 @@
   }
   // 批量导出只使用当前筛选结果中显式勾选的项；未选择时导出当前筛选结果。
   function exportRows() { const visible = rows(); return selected.size ? visible.filter((row) => selected.has(row.applicationId)) : visible; }
-  // 每条卡片独立选择和打开，键盘可直接访问详情按钮。
+  // 卡片优先展示职位、公司和日期，企业标记仅用本地首字，不请求外部标志或图片。
   function card(record) {
     const box = node('article', '', 'application-record'); box.dataset.applicationId = record.applicationId;
-    const check = node('input'); check.type = 'checkbox'; check.checked = selected.has(record.applicationId); check.setAttribute('aria-label', '选择导出 · ' + record.companyName + ' · ' + record.jobTitle);
+    const check = node('input', '', 'application-export-check'); check.type = 'checkbox'; check.checked = selected.has(record.applicationId); check.setAttribute('aria-label', '选择导出 · ' + record.companyName + ' · ' + record.jobTitle); check.title = '选择此职位用于导出';
     check.addEventListener('change', () => { if (check.checked) selected.add(record.applicationId); else selected.delete(record.applicationId); invalidateExport(); });
     const open = node('button', '', 'application-open'); open.type = 'button'; open.append(node('strong', record.jobTitle), node('span', record.companyName)); open.addEventListener('click', () => openEditor(record.applicationId).catch((error) => message(error.message, true)));
-    const top = node('div', '', 'application-toolbar'); top.append(check, open); box.append(top, node('span', A.statusLabel(record.status), 'application-status'), node('p', [record.location, record.jobSource, record.employmentType].filter(Boolean).join(' · '), 'muted'), node('small', '第 ' + record.round + ' 轮 · ' + new Date(record.updatedAt).toLocaleDateString('zh-CN')));
+    const mark = node('span', Array.from(record.companyName.trim())[0] || '企', 'application-company-mark'); mark.setAttribute('aria-hidden', 'true');
+    const top = node('div', '', 'application-card-main'); top.append(mark, open, check);
+    const footer = node('div', '', 'application-card-footer'); footer.append(node('span', (record.appliedAt ? '投递于 ' : '保存于 ') + new Date(record.appliedAt || record.createdAt).toLocaleDateString('zh-CN')), node('span', '第 ' + record.round + ' 轮'));
+    box.append(top, node('span', A.statusLabel(record.status), 'application-status'), node('p', [record.location || '地点待补充', record.jobSource, record.employmentType].filter(Boolean).join(' · '), 'application-card-meta'), footer);
     if (record.tags.length) box.append(node('p', record.tags.join(' · '), 'application-tags')); return box;
   }
   // 列表和看板使用同一记录集合；隐藏列只影响显示，不修改申请数据。
@@ -39,30 +46,48 @@
     try { visible = rows(); } catch (error) { message(error.message, true); return; }
     const root = $('appRecords'); root.replaceChildren(); root.className = board ? 'application-records application-board' : 'application-records';
     $('appCount').textContent = `当前 ${visible.length} 条 / 全部 ${database.applications.length} 条`; $('appColumns').hidden = !board;
+    $('appTotal').textContent = String(database.applications.length);
+    $('appScopes').querySelectorAll('button').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.appScope === scope)));
     $('appListView').setAttribute('aria-pressed', String(!board)); $('appBoardView').setAttribute('aria-pressed', String(board));
     if (!board) root.append(...visible.map(card));
     else {
-      const statuses = [...new Set([...Object.keys(A.STATUSES), ...database.applications.map((row) => row.status)])]; $('appColumnOptions').replaceChildren();
+      const statuses = [...new Set([...Object.keys(A.STATUSES), ...database.applications.map((row) => row.status)])].filter((status) => scope === 'ongoing' ? !endedStatuses.has(status) : scope === 'ended' ? endedStatuses.has(status) : true); $('appColumnOptions').replaceChildren();
       for (const status of statuses) {
         const label = node('label', '', 'application-check'); const check = node('input'); check.type = 'checkbox'; check.checked = !hiddenColumns.has(status); check.addEventListener('change', () => { if (check.checked) hiddenColumns.delete(status); else hiddenColumns.add(status); render(); }); label.append(check, document.createTextNode(A.statusLabel(status))); $('appColumnOptions').append(label);
         if (hiddenColumns.has(status)) continue;
-        const items = visible.filter((row) => row.status === status); const column = node('section', '', 'application-column'); column.append(node('h3', A.statusLabel(status) + ' · ' + items.length), ...items.map(card)); if (!items.length) column.append(node('p', '暂无记录', 'muted')); root.append(column);
+        const items = visible.filter((row) => row.status === status); const column = node('section', '', 'application-column'); column.dataset.status = status;
+        const title = node('h3', A.statusLabel(status)); title.append(node('span', String(items.length)));
+        const body = node('div', '', 'application-column-body'); body.append(...items.map(card)); if (!items.length) body.append(node('p', '暂无职位', 'application-column-empty')); column.append(title, body); root.append(column);
       }
+      root.style.setProperty('--application-columns', String(Math.max(1, root.childElementCount)));
+      $('appColumns').querySelector('summary').textContent = '显示阶段（' + root.childElementCount + '）';
     }
-    if (!visible.length) root.append(node('p', '暂无符合条件的申请。可添加记录，或调整筛选条件。', 'muted'));
+    if (!visible.length || (board && !root.childElementCount)) {
+      const empty = node('div', '', 'application-empty'); empty.append(node('strong', !database.applications.length ? '从第一个职位开始' : '暂无符合条件的职位'), node('span', !database.applications.length ? '点击右上角“添加职位”，或从招聘页面保存岗位。' : board && visible.length ? '可在“显示阶段”中重新勾选状态列。' : '试试切换职位范围，或调整搜索与筛选条件。'));
+      root.className = 'application-records'; root.replaceChildren(empty);
+    }
   }
   // 显式关闭或切换详情前保护未保存草稿，切工作台模块不会清空表单。
   function canDiscard() { return !dirty || confirm('申请详情有未保存的修改，确认放弃这些修改？'); }
+  // 看板刷新会替换原按钮，关闭抽屉后按记录 ID 找回焦点；删除后的缺失目标回到新增入口。
+  function hideEditor() {
+    dirty = false; $('appDetail').close(); $('appDetail').hidden = true;
+    const target = editorReturnId && [...$('appRecords').querySelectorAll('.application-record')].find((box) => box.dataset.applicationId === editorReturnId)?.querySelector('.application-open');
+    (target || $('appNew')).focus({ preventScroll: true });
+  }
+  // 按钮、Esc 及背景点击都经过同一草稿保护，取消时保留完整表单。
+  function closeEditor() { if (canDiscard()) hideEditor(); }
   // 详情始终绑定打开时的 revision，防止另一页面覆盖当前编辑。
   async function openEditor(applicationId = null) {
-    if (!canDiscard()) return; await refresh(); editing = applicationId ? database.applications.find((row) => row.applicationId === applicationId) : null;
+    if (!canDiscard()) return; if (!$('appDetail').open) editorReturnId = applicationId; await refresh(); editing = applicationId ? database.applications.find((row) => row.applicationId === applicationId) : null;
     if (applicationId && !editing) throw new Error('记录已删除，请刷新'); editingRevision = database.revision;
+    $('appDetailMessage').textContent = '';
     for (const [key, id] of Object.entries(INPUTS)) $(id).value = editing?.[key] || '';
     $('appEditStatus').replaceChildren(...Object.keys(A.STATUSES).map((status) => new Option(A.statusLabel(status), status)), new Option('自定义状态…', 'custom'));
     $('appEditStatus').value = editing?.status.startsWith('custom:') ? 'custom' : editing?.status || 'saved'; $('appCustomStatus').value = editing?.status.startsWith('custom:') ? A.statusLabel(editing.status) : ''; updateCustomStatus();
     $('appAppliedDate').value = editing?.appliedAt?.slice(0, 10) || ''; $('appTags').value = editing?.tags.join('、') || ''; $('appTodos').value = (editing?.todos || []).map((todo) => (todo.done ? '[x] ' : '') + todo.text).join('\n');
     $('appArchived').checked = editing?.archived || false; $('appNewRound').checked = false; $('appNewRoundLabel').hidden = false; $('appDelete').hidden = !editing;
-    $('appDetailTitle').textContent = editing ? '申请详情 · 第 ' + editing.round + ' 轮' : '添加申请'; $('appDetail').hidden = false; $('appTimeline').replaceChildren(...(editing?.history || []).map((event) => node('li', new Date(event.at).toLocaleString('zh-CN') + ' · ' + A.statusLabel(event.status) + ' · ' + event.note)));
+    $('appDetailTitle').textContent = editing ? '职位详情 · 第 ' + editing.round + ' 轮' : '添加职位'; $('appDetail').hidden = false; if (!$('appDetail').open) $('appDetail').showModal(); $('appTimeline').replaceChildren(...(editing?.history || []).map((event) => node('li', new Date(event.at).toLocaleString('zh-CN') + ' · ' + A.statusLabel(event.status) + ' · ' + event.note)));
     renderTodos(); dirty = false; $('appCompany').focus();
   }
   // 自定义状态只在用户选择后启用，不把自由输入当作网页自动推断结果。
@@ -97,21 +122,31 @@
   function invalidateExport() { pendingExport = null; $('appExportPanel').hidden = true; }
   // 导出只在明确按钮点击后创建临时 URL，随后及时释放。
   function download(content, type, name) { const url = URL.createObjectURL(new Blob([content], { type })); const link = node('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
-  // 所有事件仅挂载一次；独立文件模式继续复用同一仓库和隔离存储。
+  // 所有事件仅挂载一次；范围、菜单和原生抽屉只管理显示，独立文件模式复用同一仓库。
   async function init() {
     if (initialized) return; initialized = true;
     $('appNew').addEventListener('click', () => openEditor().catch((error) => message(error.message, true))); $('appRefresh').addEventListener('click', () => refresh().then(() => message('记录已刷新，详情草稿保留。')).catch((error) => message(error.message, true)));
     $('appForm').addEventListener('submit', save); $('appForm').addEventListener('input', () => { dirty = true; }); $('appEditStatus').addEventListener('change', updateCustomStatus); $('appTodos').addEventListener('input', renderTodos);
     $('appNewRound').addEventListener('change', () => { if ($('appNewRound').checked) { $('appEditStatus').value = 'saved'; $('appAppliedDate').value = ''; updateCustomStatus(); dirty = true; } });
-    $('appClose').addEventListener('click', () => { if (canDiscard()) { dirty = false; $('appDetail').hidden = true; } });
-    $('appDelete').addEventListener('click', async () => { if (!editing || !confirm('确认删除这条申请及其时间线？其他轮次和简历资料保留。')) return; try { await dataCommand('deleteApplication', { applicationId: editing.applicationId, confirmed: true }, editingRevision); dirty = false; $('appDetail').hidden = true; await refresh(); message('申请记录已删除。'); } catch (error) { message(error.message, true); } });
-    for (const id of ['appSearch', 'appStatusFilter', 'appSourceFilter', 'appCityFilter', 'appTypeFilter', 'appDateFrom', 'appDateTo', 'appArchiveFilter']) $(id).addEventListener('input', () => { selected.clear(); invalidateExport(); render(); });
+    $('appClose').addEventListener('click', closeEditor); $('appDetailDismiss').addEventListener('click', closeEditor);
+    $('appDetail').addEventListener('cancel', (event) => { event.preventDefault(); closeEditor(); });
+    $('appDetail').addEventListener('click', (event) => { const rect = $('appDetail').getBoundingClientRect(); if (event.target === $('appDetail') && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) closeEditor(); });
+    $('appDelete').addEventListener('click', async () => { if (!editing || !confirm('确认删除这条申请及其时间线？其他轮次和简历资料保留。')) return; try { await dataCommand('deleteApplication', { applicationId: editing.applicationId, confirmed: true }, editingRevision); editorReturnId = null; hideEditor(); await refresh(); message('申请记录已删除。'); } catch (error) { message(error.message, true); } });
+    for (const id of ['appSearch', 'appStatusFilter', 'appSourceFilter', 'appCityFilter', 'appTypeFilter', 'appDateFrom', 'appDateTo', 'appArchiveFilter']) $(id).addEventListener('input', () => { if (id === 'appArchiveFilter') scope = $('appArchiveFilter').value === 'archived' ? 'archived' : 'all'; selected.clear(); invalidateExport(); message(''); render(); });
+    $('appScopes').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-app-scope]'); if (!button) return;
+      scope = button.dataset.appScope; $('appArchiveFilter').value = scope === 'archived' ? 'archived' : scope === 'all' ? 'all' : ''; $('appStatusFilter').value = '';
+      selected.clear(); invalidateExport(); message(''); render();
+    });
+    $('appResetFilters').addEventListener('click', () => { for (const id of ['appSearch', 'appStatusFilter', 'appSourceFilter', 'appCityFilter', 'appTypeFilter', 'appDateFrom', 'appDateTo']) $(id).value = ''; $('appArchiveFilter').value = 'all'; scope = 'all'; selected.clear(); invalidateExport(); message(''); render(); });
+    document.addEventListener('click', (event) => { for (const id of ['appDataTools', 'appColumns']) if (!$(id).contains(event.target)) $(id).open = false; });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { $('appDataTools').open = false; $('appColumns').open = false; } });
     $('appListView').addEventListener('click', () => { board = false; render(); }); $('appBoardView').addEventListener('click', () => { board = true; render(); });
-    $('appExportPreview').addEventListener('click', () => { try { pendingExport = A.exportPackage(exportRows()); $('appExportSummary').textContent = `将导出 ${pendingExport.applications.length} 条申请，含备注和标签。`; $('appExportPanel').hidden = false; } catch (error) { message(error.message, true); } });
+    $('appExportPreview').addEventListener('click', () => { $('appDataTools').open = false; try { pendingExport = A.exportPackage(exportRows()); $('appExportSummary').textContent = `将导出 ${pendingExport.applications.length} 条申请，含备注和标签。`; $('appExportPanel').hidden = false; } catch (error) { message(error.message, true); } });
     $('appExportCancel').addEventListener('click', invalidateExport);
     $('appExportJson').addEventListener('click', () => { if (pendingExport) download(JSON.stringify(pendingExport, null, 2), 'application/json', 'localapply-applications.json'); });
     $('appExportCsv').addEventListener('click', () => { if (pendingExport) download(A.csv(pendingExport.applications), 'text/csv;charset=utf-8', 'localapply-applications.csv'); });
-    $('appImport').addEventListener('click', () => $('appImportFile').click()); $('appImportCancel').addEventListener('click', () => { pendingImport = null; $('appImportPreview').hidden = true; });
+    $('appImport').addEventListener('click', () => { $('appDataTools').open = false; $('appImportFile').click(); }); $('appImportCancel').addEventListener('click', () => { pendingImport = null; $('appImportPreview').hidden = true; });
     $('appImportFile').addEventListener('change', async (event) => {
       const file = event.target.files[0]; event.target.value = ''; pendingImport = null; $('appImportPreview').hidden = true; if (!file) return;
       try { if (file.size > 8 * 1024 * 1024) throw new Error('申请备份超过 8 MiB'); const text = await file.text(); const incoming = A.parsePackage(text); await refresh(); const plan = A.importPlan(database.applications, incoming); pendingImport = { text, revision: database.revision }; $('appImportSummary').textContent = `校验通过：新增 ${plan.added} 条，重复 ${plan.duplicates} 条，冲突 ${plan.conflicts} 条。冲突保留本机记录；确认前不会写入。`; $('appImportPreview').hidden = false; } catch (error) { message('导入未执行：' + error.message, true); }
