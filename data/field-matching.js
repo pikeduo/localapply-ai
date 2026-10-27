@@ -82,8 +82,10 @@
     if (!repeated) return [{ fieldId, entryId: null }];
     entries = entries.filter((entry) => entry.kind === repeated);
     // 目录首段保存在模块基础字段，与附加记录一起参与语义筛选；多个来源不确定时仍交用户选择。
-    const primary = db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === fieldId && row.entryId === null && row.value !== null && row.value !== '');
-    if (primary && definedKind === repeated) entries.push({ profileId, entryId: null, kind: repeated });
+    const primary = db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === fieldId && row.entryId === null);
+    // 仅有空白模板时返回明确的缺资料项；有独立经历时不凭空插入一条空白来源制造歧义。
+    const bound = db.bindings.some((row) => row.profileId === profileId && row.fieldId === fieldId);
+    if (definedKind === repeated && (hasValue(primary?.value) || !entries.length && bound)) entries.push({ profileId, entryId: null, kind: repeated });
     if (['first', 'undergrad'].includes(field.degree)) entries = entries.filter((entry) => degreeOf(db, entry) === 2);
     if (field.degree === 'master') entries = entries.filter((entry) => degreeOf(db, entry) === 3);
     if (field.degree === 'doctor') entries = entries.filter((entry) => degreeOf(db, entry) === 4);
@@ -100,6 +102,10 @@
     const contextual = group ? exact.filter((definition) => global.WangshenTemplates.recordKind(definition.group) === field.kind) : [];
     if (contextual.length === 1) return { definition: contextual[0], reason: '字段及经历模块精确匹配' };
     if (exact.length === 1) return { definition: exact[0], reason: '标准字段或别名精确匹配' };
+    // 只映射页面中含义明确的同义标题；薪资周期、最近公司等含义不明项不猜。
+    const aliases = { education: { '学校名称': 'school', '专业名称': 'major' }, employment: { '工作职责': 'employmentResponsibilities' }, internship: { '工作职责': 'internshipDescription' }, project: { '职责': 'projectRole', '项目描述': 'projectDescription' } };
+    const alias = aliases[field.kind]?.[field.label] || ({ '出生日期 (年龄)': 'birthDate', '出生日期（年龄）': 'birthDate', '自我描述': 'selfIntroduction' })[field.label];
+    if (alias) { const definition = db.fieldDefinitions.find((def) => def.fieldId === 'builtin.' + alias); if (definition) return { definition, reason: '明确字段别名与模块匹配' }; }
     let key = '';
     if (/院校|学校/.test(field.label) && (field.kind === 'education' || field.degree)) key = 'school';
     else if (/专业/.test(field.label) && field.kind === 'education') key = 'major';

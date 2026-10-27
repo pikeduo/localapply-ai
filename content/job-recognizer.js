@@ -35,14 +35,17 @@
     const scalar = (value, limit = 500) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
     // 页面标题只在明确岗位路径上作为末级候选，不从普通页面标题猜测公司。
     const titleFallback = /\/(?:jobs?|positions?|requisitions?)\/[a-z\d_-]+\/?$/i.test(location.pathname) ? document.title.split(/\s+[|｜·–—]\s+/)[0].trim().slice(0, 500) : '';
-    const title = scalar(structured?.title) || pick('main [data-job-title],main [itemprop="title"],main .job-title,article .job-title,main h1,article h1,[data-job-title]') || titleFallback;
-    const company = scalar(typeof organization === 'string' ? organization : organization?.name) || pick('main [data-company],main [itemprop="hiringOrganization"],main .company-name,article .company-name,[data-company]');
+    // Moka 申请页没有 main/h1，岗位信息明确位于 job-form__title，不能从简历表单标题猜测。
+    const moka = document.querySelector('.job-form__title');
+    const title = scalar(structured?.title) || pick('main [data-job-title],main [itemprop="title"],main .job-title,article .job-title,main h1,article h1,[data-job-title],.job-form__title [class^="job-info-"] > [class^="title-"]') || titleFallback;
+    const company = scalar(typeof organization === 'string' ? organization : organization?.name) || pick('main [data-company],main [itemprop="hiringOrganization"],main .company-name,article .company-name,[data-company],.job-form__title [class^="company-name-"]');
+    const mokaInfo = [...(moka?.querySelectorAll('[class^="job-info-"] [class^="info-"] > span') || [])].filter(visible).map((node) => scalar(node.textContent));
     const params = new URL(location.href).searchParams;
     const id = scalar(typeof structured?.identifier === 'string' ? structured.identifier : structured?.identifier?.value) || ['jobId', 'job_id', 'positionId', 'position_id', 'id'].map((key) => params.get(key)).find(Boolean) || location.pathname.match(/\/(?:jobs?|positions?|requisitions?)\/([a-z\d_-]+)\/?$/i)?.[1] || '';
-    const locationText = scalar(address?.addressLocality) || scalar(address?.addressRegion) || scalar(typeof structured?.jobLocation === 'string' ? structured.jobLocation : '') || pick('main [data-job-location],main [itemprop="jobLocation"],main .job-location,article .job-location');
-    const source = /moka/i.test(location.hostname) ? 'Moka' : /beisen|italent/i.test(location.hostname) ? '北森' : /feishu|lark/i.test(location.hostname) ? '飞书招聘' : location.hostname;
+    const locationText = scalar(address?.addressLocality) || scalar(address?.addressRegion) || scalar(typeof structured?.jobLocation === 'string' ? structured.jobLocation : '') || pick('main [data-job-location],main [itemprop="jobLocation"],main .job-location,article .job-location') || mokaInfo.find((text) => /^[^·|]{1,25}·[^·|]{1,25}$/.test(text)) || '';
+    const source = /moka/i.test(location.hostname) || moka ? 'Moka' : /beisen|italent/i.test(location.hostname) ? '北森' : /feishu|lark/i.test(location.hostname) ? '飞书招聘' : location.hostname;
     const candidate = A.candidate({ companyName: company, jobTitle: title, jobUrl: location.href, jobId: scalar(id), jobSource: source, location: locationText,
-      employmentType: scalar([structured?.employmentType].flat().filter((item) => typeof item === 'string').join(' / ')) || pick('main [data-job-type],main [itemprop="employmentType"],main .job-type'),
+      employmentType: scalar([structured?.employmentType].flat().filter((item) => typeof item === 'string').join(' / ')) || pick('main [data-job-type],main [itemprop="employmentType"],main .job-type') || mokaInfo.find((text) => /^(全职|兼职|实习|劳务|合同制)$/.test(text)) || '',
       summary: pick('main [data-job-description],main [itemprop="description"],main .job-description,article .job-description', 6000) });
     return { candidate, documentId: global.LocalApplyPageScanner?.documentId || '', feedback: feedback(), recognized: !!(title && (company || structured)) };
   }

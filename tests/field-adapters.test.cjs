@@ -51,3 +51,11 @@ test('分级地址只接受明确边界，不从地址正文猜省市区', () =>
 test('独立城市字段不被当成单字地址子控件', () => {
   const el={getAttribute:(key)=>key==='aria-label'?'城市':null}; assert.equal(A.slot(el),'');
 });
+
+// 非标准防补全属性不能吞掉姓名等普通字段，真实密码/认证名称仍需排除。
+test('Moka new_password 文本提示不等于密码，标准认证属性仍被拦截', () => {
+  // 构造适配器过滤所需的最小 DOM 接口，不读取任何控件实际值。
+  const control = (attrs) => ({ getAttribute: (key) => attrs[key] || '', closest: () => null, matches: () => false });
+  assert.equal(A.exclusion(control({ type: 'text', autocomplete: 'new_password' }), '姓名'), null);
+  for (const attrs of [{ type: 'password', autocomplete: 'new_password' }, { type: 'text', name: 'password' }, { type: 'text', autocomplete: 'new-password' }, { type: 'text', autocomplete: 'one-time-code' }]) assert.equal(A.exclusion(control(attrs), '姓名').category, 'security_control');
+});

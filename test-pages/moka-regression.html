@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成招聘申请</title>
+<style>body{font:15px system-ui;margin:30px;max-width:800px}.apply-block-synthetic{border:1px solid #ddd;padding:18px;margin:15px 0}.apply-field-synthetic{margin:10px 0}.title-synthetic{margin:5px 0}input,textarea{padding:9px;border:1px solid #bbb}.sd-Dropdown-container-synthetic{display:inline-block;position:relative}[role=listbox]{position:absolute;top:100%;left:0;background:white;border:1px solid #aaa;max-height:150px;overflow:auto;z-index:10;min-width:100px}[role=option]{padding:8px;cursor:pointer}.month-range-select{display:flex;gap:8px}[hidden]{display:none!important}</style></head>
+<body><div class="job-form__title"><div class="company-name-synthetic">合成招聘企业</div><div class="job-info-synthetic"><div class="title-synthetic">合成 AI 工程师</div><div class="info-synthetic"><span>技术部</span><span>|</span><span>全职</span><span>|</span><span>合成省·合成市</span></div></div></div>
+<form id="application"><div id="blocks" class="apply-blocks-synthetic"></div><button type="submit">投递申请</button></form>
+<script>
+  let submissions = 0; const accepted = {};
+  // 合成模块沿用用户页面的结构类名，不复制其个人数据、脚本或网络资源。
+  function block(title) { const root = document.createElement('div'); root.className = 'apply-block-synthetic'; root.innerHTML = '<div class="blockTitle-synthetic"><span class="text-synthetic"></span></div><div class="apply-fields-synthetic"></div>'; root.querySelector('.text-synthetic').textContent = title; document.getElementById('blocks').append(root); return root.lastElementChild; }
+  // 每个字段标题保持独立，验证扫描器不误读搜索提示或整个模块正文。
+  function field(parent, title) { const root = document.createElement('div'); root.className = 'apply-field-synthetic'; const label = document.createElement('div'); label.className = 'title-synthetic'; label.textContent = title; const control = document.createElement('div'); control.className = 'ctrl-synthetic'; root.append(label, control); parent.append(root); return control; }
+  // 模拟 Moka 普通资料框的非标准自动补全属性，真实密码另用 password 类型。
+  function text(parent, title, id, multiline = false) { const control = field(parent, title); const input = document.createElement(multiline ? 'textarea' : 'input'); input.id = id; input.placeholder = title; input.setAttribute('autocomplete', 'new_password'); control.append(input); input.addEventListener('input', () => { accepted[id] = input.value; }); return input; }
+  // 模拟必须点选才能更新状态的下拉，输入搜索词会在失焦时恢复已选内容。
+  function select(parent, id, placeholder, options, searchable = false) {
+    const root = document.createElement('div'); root.className = 'sd-Dropdown-container-synthetic'; root.innerHTML = '<label class="sd-Select-container-synthetic select"><span class="sd-Input-display-value-synthetic"></span><input type="text" autocomplete="nope"></label><div role="listbox" hidden></div>'; parent.append(root);
+    const input = root.querySelector('input'); const display = root.querySelector('span'); const list = root.querySelector('[role=listbox]'); input.id = id; input.placeholder = placeholder; if (searchable) root.querySelector('label').classList.remove('select');
+    for (const value of options) { const option = document.createElement('div'); option.setAttribute('role', 'option'); option.textContent = value; option.dataset.value = value; list.append(option); option.addEventListener('click', () => { accepted[id] = value; display.textContent = value; input.value = ''; list.hidden = true; }); }
+    input.addEventListener('click', () => { list.hidden = false; }); input.addEventListener('blur', () => { input.value = ''; setTimeout(() => { list.hidden = true; }, 100); }); return input;
+  }
+  // 日期有独立年/月下拉，两个端点按明确的页面排列生成，不靠当前日期补全。
+  function dates(parent, title, prefix, range = true) { const control = field(parent, title); const root = document.createElement('div'); root.className = 'month-range-select'; control.append(root); for (const side of range ? ['Start', 'End'] : ['']) { select(root, prefix + side + 'Year', '年', ['2020','2024','2026']); select(root, prefix + side + 'Month', '月', ['6','9','10']); } }
+  const basic = block('个人信息'); text(basic, '姓名', 'name'); text(basic, '邮箱', 'email'); text(basic, '所在地', 'location'); select(field(basic, '性别'), 'gender', '请选择', ['男','女']);
+  const phone = field(basic, '手机号码'); const code = document.createElement('div'); code.className = 'code-synthetic'; phone.append(code); select(code, 'country', '', ['+86','+44']); code.querySelector('span').textContent = '+86'; accepted.country = '+86'; const number = document.createElement('input'); number.id = 'phone'; number.placeholder = '请输入手机号'; phone.append(number); number.addEventListener('input', () => { accepted.phone = number.value; });
+  const work = block('工作经历'); dates(work, '起止时间', 'work'); text(work, '公司名称', 'company'); text(work, '职位名称', 'position'); text(work, '工作职责', 'workDescription', true);
+  const education = block('教育背景'); dates(education, '就读时间', 'education'); select(field(education, '学校名称'), 'school', '请输入就读学校', ['合成大学','其他合成大学'], true); text(education, '专业名称', 'major'); select(field(education, '学历'), 'degree', '请选择', ['本科','硕士']);
+  const project = block('项目经验'); text(project, '项目名称', 'project'); text(project, '项目描述', 'projectDescription', true);
+  const other = block('补充资料'); text(other, '自我描述', 'introduction', true); text(other, '合成未知偏好', 'unknown'); text(other, '合成已填补充', 'prefilled').value = '网页原有合成值';
+  const rejected = text(other, '合成拒绝控件', 'reject'); rejected.addEventListener('input', () => { setTimeout(() => { rejected.value = ''; }, 30); });
+  const password = document.createElement('input'); password.type = 'password'; password.id = 'password'; password.setAttribute('autocomplete', 'new_password'); other.append(password);
+  const captcha = document.createElement('input'); captcha.setAttribute('autocomplete', 'one-time-code'); captcha.id = 'captcha'; other.append(captcha);
+  const sync = document.createElement('label'); sync.innerHTML = '<input id="sync" type="checkbox">同步更新在线简历'; other.append(sync);
+  document.getElementById('application').addEventListener('submit', (event) => { event.preventDefault(); submissions++; });
+</script></body></html>

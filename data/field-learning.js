@@ -53,6 +53,7 @@
       item.fields = fields; item.rows = M.match(db, item.profileId, item.origin, fields);
       for (const row of item.rows) {
         const previous = old.find((value) => value.field.scanId === row.field.scanId && value.field.semanticId === row.field.semanticId);
+        if (previous) row.webFilled = previous.webFilled === true;
         if (previous?.ignored) row.ignored = true;
         const source = previous?.target && item.sources?.find((source) => source.fieldId === previous.target.fieldId && source.entryId === previous.target.entryId);
         const sameTarget = JSON.stringify(row.target) === JSON.stringify(previous?.target);
@@ -80,13 +81,22 @@
         definitions: db.fieldDefinitions.filter((def) => item.sources.some((source) => source.fieldId === def.fieldId)),
         excluded: item.excluded || [], canUndo: !!undo };
     }
+    // 完成状态只接受当前扫描项的布尔标记；清空已成功字段后允许用户再次填写。
+    function completion(item, snapshot) {
+      const rows = snapshot.completion || [];
+      check(Array.isArray(rows) && rows.length <= item.rows.length && rows.every((row) => row && Object.keys(row).sort().join() === 'present,scanId' && typeof row.present === 'boolean' && item.rows.some((item) => item.field.scanId === row.scanId)) && new Set(rows.map((row) => row.scanId)).size === rows.length, '网页完成状态格式错误');
+      for (const row of item.rows) {
+        const state = rows.find((item) => item.scanId === row.field.scanId); row.webFilled = state?.present === true;
+        if (state?.present === false && row.status === 'success' && !(row.field.type === 'checkbox' && row.verification?.value === false)) { row.status = 'matched'; row.reason = '网页内容已清空，可以重新填写'; delete row.verification; }
+      }
+    }
     // 再扫描只读取已经授权的同一文档，动态新增时清理旧建议/确认令牌。
     async function refresh(item, db) {
       const response = await pageMessage(item.tabId, { type: 'learning:scan', authorize: false });
       check(response.snapshot.documentId === item.documentId, '页面已刷新，请重新授权扫描');
       response.snapshot.fields.forEach(M.validateField);
       if (JSON.stringify(response.snapshot.fields) !== JSON.stringify(item.fields)) { item.rows = []; item.aiPreview = null; item.valuePreview = null; }
-      rebuild(item, db, response.snapshot.fields); item.excluded = response.snapshot.excluded || []; item.dirty = false;
+      rebuild(item, db, response.snapshot.fields); completion(item, response.snapshot); item.excluded = response.snapshot.excluded || []; item.dirty = false;
     }
     // 选择仅允许本档案来源，不能通过 AI/页面提供的 ID 读取其他人的值。
     function target(item, fieldId, entryId) {
@@ -122,7 +132,7 @@
         for (const [id, previous] of sessions) if (previous.tabId === msg.tabId || sessions.size >= 8) drop(id);
         const item = { sessionId: crypto.randomUUID(), createdAt: Date.now(), tabId: msg.tabId, url: tab.url, origin: snapshot.origin,
           documentId: snapshot.documentId, profileId, fields: snapshot.fields, excluded: snapshot.excluded || [], notice: snapshot.notice || '' };
-        rebuild(item, db); sessions.set(item.sessionId, item); return view(item, db);
+        rebuild(item, db); completion(item, snapshot); sessions.set(item.sessionId, item); return view(item, db);
       }
       if (msg.type === 'learning:rules') { const db = await repository.read(); return { rules: db.mappingRules, definitions: db.fieldDefinitions, profiles: db.profiles, entries: db.entries, revision: db.revision, canUndo: !!undo }; }
       if (msg.type === 'learning:exportV3') { const backup = await repository.exportBackup(3); backup.database.mappingRules = backup.database.mappingRules.map(({ mappingId, origin, path, label, fieldId, profileId, entryId }) => ({ mappingId, origin, path, label, fieldId, profileId, entryId })); return { backup }; }

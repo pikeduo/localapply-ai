@@ -9,7 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 
 // 构建与生产相同的 repository/匹配/学习服务，网络和网页只由明确桩响应。
 async function fixture() {
-  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null;
+  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let completion = [];
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
   for (const file of ['templates','providers','key-vault','resume','field-matching','field-suggestions','applications','local-store','field-learning']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
@@ -18,7 +18,7 @@ async function fixture() {
   const db = await repo.read(); const profileId = db.activeProfileId;
   const browser = { tabs: { get: async () => ({ id: 42, url }), sendMessage: async (tabId, msg) => {
     calls.push({ type: msg.type, ...msg });
-    if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', origin: new URL(url).origin, fields: structuredClone(fields) } };
+    if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', origin: new URL(url).origin, fields: structuredClone(fields), completion } };
     if (msg.type === 'learning:read') return { ok: true, value: actual };
     if (msg.type === 'learning:fill') { if (fillGate) await fillGate; actual = failFill ? '' : msg.value; return { ok: true, result: { status: failFill ? 'failed' : 'success', reason: failFill ? '受控组件回退' : '', verifiedAt: new Date().toISOString() } }; }
     if (msg.type === 'learning:verify') return { ok: true, result: { status: actual === msg.value ? 'success' : 'failed', verifiedAt: new Date().toISOString() } };
@@ -34,7 +34,7 @@ async function fixture() {
   const send = (view, type, payload = {}) => service.handle({ type: 'learning:' + type, sessionId: view.sessionId, ...(type === 'prepareAI' ? { scanIds: view.rows.filter((row) => !row.target).map((row) => row.field.scanId) } : {}), ...payload });
   const setValue = (fieldId, value, entryId = null) => repo.command({ action: 'setValue', payload: { profileId, fieldId, entryId, value } });
   return { context, repo, disk, profileId, calls, aiCalls, field, scan, send, service, setValue,
-    response: (next) => { response = next; }, navigate: () => { url += '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; },
+    response: (next) => { response = next; }, navigate: () => { url += '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, completion: (value) => { completion = value; },
     holdFill: () => { let release; fillGate = new Promise((resolve) => { release = resolve; }); return release; } };
 }
 
@@ -50,6 +50,26 @@ test('已有标准字段本地直接匹配，不调用 AI；0 和 false 不是�
   const env = await fixture(); await env.setValue('builtin.name', '合成姓名');
   const view = await env.scan(env.field('姓名')); assert.equal(view.rows[0].status, 'matched'); assert.equal(view.rows[0].target.fieldId, 'builtin.name');
   assert.equal(env.aiCalls.length, 0); assert.equal(env.context.FieldMatchingEngine.hasValue(false), true); assert.equal(env.context.FieldMatchingEngine.hasValue(0), true);
+});
+
+// 完成标记只含是否有值；重新清空已验证字段后恢复为 matched，不保留假成功。
+test('网页完成标记独立于字段元数据，清空后可再次填写且不能夹带实际值', async () => {
+  const env = await fixture(); await env.setValue('builtin.name', '合成姓名'); const name = env.field('姓名'); env.completion([{ scanId: name.scanId, present: false }]); let view = await env.scan(name);
+  assert.equal(view.rows[0].webFilled, false); view = await env.send(view, 'fill', { scanId: name.scanId, confirmed: true }); assert.equal(view.rows[0].status, 'success'); env.completion([{ scanId: name.scanId, present: true }]); view = await env.send(view, 'session'); assert.equal(view.rows[0].status, 'success'); assert.equal(view.rows[0].webFilled, true);
+  env.completion([{ scanId: name.scanId, present: false }]); view = await env.send(view, 'session'); assert.equal(view.rows[0].status, 'matched'); assert.equal(view.rows[0].verification, undefined);
+  for (const rows of [[{ scanId: name.scanId, present: true, value: '禁止携带值' }], [{ scanId: 'scan.forged', present: true }], [{ scanId: name.scanId, present: 'yes' }], [{ scanId: name.scanId, present: true }, { scanId: name.scanId, present: true }]]) { env.completion(rows); await assert.rejects(env.scan(name), /完成状态格式/); }
+  // 未勾选可代表有效的 false，不能把已经回读成功的布尔值反复判为未填写。
+  const created = await env.repo.command({ action: 'createField', payload: { profileId: env.profileId, definition: { label: '合成布尔项', type: 'boolean' }, value: false } });
+  const toggle = env.field('合成布尔项', { type: 'checkbox' }); env.completion([{ scanId: toggle.scanId, present: false }]); view = await env.scan(toggle);
+  view = await env.send(view, 'select', { scanId: toggle.scanId, fieldId: created.result }); view = await env.send(view, 'fill', { scanId: toggle.scanId, confirmed: true });
+  assert.equal(view.rows[0].status, 'success'); view = await env.send(view, 'session'); assert.equal(view.rows[0].status, 'success'); assert.equal(view.rows[0].value, false);
+});
+
+// 页面明确标题可以匹配本地字段，不通过降低相似度阈值放宽薪资/公司等歧义语义。
+test('岗位申请页明确别名与模块对应，无内容时保持缺资料且不猜薪资周期', async () => {
+  const env = await fixture(); await env.setValue('builtin.birthDate', '2000-06'); await env.setValue('builtin.employmentResponsibilities', '合成职责');
+  const view = await env.scan(env.field('出生日期 (年龄)'), env.field('工作职责', { kind: 'employment' }), env.field('项目描述', { kind: 'project' }), env.field('当前薪资'));
+  assert.equal(view.rows[0].value, '2000-06'); assert.equal(view.rows[1].value, '合成职责'); assert.equal(view.rows[2].target?.fieldId, 'builtin.projectDescription'); assert.equal(view.rows[2].status, 'missing_value'); assert.notEqual(view.rows[3].target?.fieldId, 'builtin.currentMonthlySalary'); assert.equal(env.context.FieldMatchingEngine.hasValue(view.rows[3].value), false); assert.equal(env.aiCalls.length, 0);
 });
 
 // 目录首段的平面值和后续记录共同匹配；只有明确学历/模块才能缩小来源，不能默认选最高学历。

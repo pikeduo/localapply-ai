@@ -16,6 +16,7 @@
     if (field.type === 'radio') return members.some((node) => node.checked && (node.value === String(expected) || node.closest('label')?.textContent.trim() === String(expected)));
     if (field.type === 'select') return [...el.selectedOptions].some((option) => option.value === String(expected) || option.textContent.trim() === String(expected));
     if (field.type === 'combobox') {
+      if (A.dropdown(el)) return A.dropdownAccepted(el, expected);
       const menu = el.getRootNode().getElementById?.(el.getAttribute('aria-controls') || el.getAttribute('aria-owns'));
       const selected = [...(menu?.querySelectorAll('[role="option"][aria-selected="true"]') || [])];
       return selected.some((option) => option.textContent.trim() === String(expected) || option.getAttribute('data-value') === String(expected))
@@ -50,10 +51,14 @@
     if (A.handles(item)) {
       const result = await A.fill(item, value); if (!result.ok) return { status: result.status || 'failed', ...result };
     } else if (field.type === 'combobox') {
-      const menu = el.getRootNode().getElementById?.(el.getAttribute('aria-controls') || el.getAttribute('aria-owns'));
-      const candidates = [...(menu?.querySelectorAll('[role="option"]') || [])].filter((option) => option.textContent.trim() === String(value) || option.getAttribute('data-value') === String(value));
-      if (candidates.length !== 1 || candidates[0].matches('button,input,a,[role="button"]') || candidates[0].querySelector('button,input,a,[role="button"]')) return { status: 'unsupported', ok: false, reason: '自定义下拉无唯一安全选项，请在网页手动选择' };
-      candidates[0].click();
+      if (A.dropdown(el)) {
+        const result = await A.fillDropdown(el, value); if (!result.ok) return result;
+      } else {
+        const menu = el.getRootNode().getElementById?.(el.getAttribute('aria-controls') || el.getAttribute('aria-owns'));
+        const candidates = [...(menu?.querySelectorAll('[role="option"]') || [])].filter((option) => option.textContent.trim() === String(value) || option.getAttribute('data-value') === String(value));
+        if (candidates.length !== 1 || candidates[0].matches('button,input,a,[role="button"]') || candidates[0].querySelector('button,input,a,[role="button"]')) return { status: 'unsupported', ok: false, reason: '自定义下拉无唯一安全选项，请在网页手动选择' };
+        candidates[0].click();
+      }
     } else if (['select', 'radio'].includes(field.type)) {
       const candidates = field.type === 'select' ? [...el.options] : members;
       const found = candidates.filter((option) => option.value === String(value) || (field.type === 'select' ? option.textContent : option.closest('label')?.textContent)?.trim() === String(value));

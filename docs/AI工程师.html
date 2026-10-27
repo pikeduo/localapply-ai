@@ -1,0 +1,719 @@
+<html lang="zh-CN" style="--brandColor: #0068FF; --brandColorRGB: 0, 104, 255; --cardRadius: 16; --buttonRadius: 300;" data-immersive-translate-page-theme="light"><head><style>/*! normalize.css v2.1.3 | MIT License | git.io/normalize */
+
+/* ==========================================================================
+   HTML5 display definitions
+   ========================================================================== */
+
+/**
+ * Correct `block` display not defined in IE 8/9.
+ */
+
+article,
+aside,
+details,
+figcaption,
+figure,
+footer,
+header,
+hgroup,
+main,
+nav,
+section,
+summary {
+    display: block;
+}
+
+/**
+ * Correct `inline-block` display not defined in IE 8/9.
+ */
+
+audio,
+canvas,
+video {
+    display: inline-block;
+}
+
+/**
+ * Prevent modern browsers from displaying `audio` without controls.
+ * Remove excess height in iOS 5 devices.
+ */
+
+audio:not([controls]) {
+    display: none;
+    height: 0;
+}
+
+/**
+ * Address `[hidden]` styling not present in IE 8/9.
+ * Hide the `template` element in IE, Safari, and Firefox < 22.
+ */
+
+[hidden],
+template {
+    display: none;
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+/**
+ * 1. Set default font family to sans-serif.
+ * 2. Prevent iOS text size adjust after orientation change, without disabling
+ *    user zoom.
+ */
+
+html {
+    font-family: sans-serif; /* 1 */
+    -ms-text-size-adjust: 100%; /* 2 */
+    -webkit-text-size-adjust: 100%; /* 2 */
+}
+
+/**
+ * Remove default margin.
+ */
+
+body {
+    margin: 0;
+}
+
+/* ==========================================================================
+   Links
+   ========================================================================== */
+
+/**
+ * Remove the gray background color from active links in IE 10.
+ */
+
+a {
+    background: transparent;
+}
+
+/**
+ * Address `outline` inconsistency between Chrome and other browsers.
+ */
+
+a:focus {
+    outline: thin dotted;
+}
+
+/**
+ * Improve readability when focused and also mouse hovered in all browsers.
+ */
+
+a:active,
+a:hover {
+    outline: 0;
+}
+
+/* ==========================================================================
+   Typography
+   ========================================================================== */
+
+/**
+ * Address variable `h1` font-size and margin within `section` and `article`
+ * contexts in Firefox 4+, Safari 5, and Chrome.
+ */
+
+h1 {
+    font-size: 2em;
+    margin: 0.67em 0;
+}
+
+/**
+ * Address styling not present in IE 8/9, Safari 5, and Chrome.
+ */
+
+abbr[title] {
+    border-bottom: 1px dotted;
+}
+
+/**
+ * Address style set to `bolder` in Firefox 4+, Safari 5, and Chrome.
+ */
+
+b,
+strong {
+    font-weight: bold;
+}
+
+/**
+ * Address styling not present in Safari 5 and Chrome.
+ */
+
+dfn {
+    font-style: italic;
+}
+
+/**
+ * Address differences between Firefox and other browsers.
+ */
+
+hr {
+    -moz-box-sizing: content-box;
+    box-sizing: content-box;
+    height: 0;
+}
+
+/**
+ * Address styling not present in IE 8/9.
+ */
+
+mark {
+    background: #ff0;
+    color: #000;
+}
+
+/**
+ * Correct font family set oddly in Safari 5 and Chrome.
+ */
+
+code,
+kbd,
+pre,
+samp {
+    font-family: monospace, serif;
+    font-size: 1em;
+}
+
+/**
+ * Improve readability of pre-formatted text in all browsers.
+ */
+
+pre {
+    white-space: pre-wrap;
+}
+
+/**
+ * Set consistent quote types.
+ */
+
+q {
+    quotes: "\201C" "\201D" "\2018" "\2019";
+}
+
+/**
+ * Address inconsistent and variable font size in all browsers.
+ */
+
+small {
+    font-size: 80%;
+}
+
+/**
+ * Prevent `sub` and `sup` affecting `line-height` in all browsers.
+ */
+
+sub,
+sup {
+    font-size: 75%;
+    line-height: 0;
+    position: relative;
+    vertical-align: baseline;
+}
+
+sup {
+    top: -0.5em;
+}
+
+sub {
+    bottom: -0.25em;
+}
+
+/* ==========================================================================
+   Embedded content
+   ========================================================================== */
+
+/**
+ * Remove border when inside `a` element in IE 8/9.
+ */
+
+img {
+    border: 0;
+}
+
+/**
+ * Correct overflow displayed oddly in IE 9.
+ */
+
+svg:not(:root) {
+    overflow: hidden;
+}
+
+/* ==========================================================================
+   Figures
+   ========================================================================== */
+
+/**
+ * Address margin not present in IE 8/9 and Safari 5.
+ */
+
+figure {
+    margin: 0;
+}
+
+/* ==========================================================================
+   Forms
+   ========================================================================== */
+
+/**
+ * Define consistent border, margin, and padding.
+ */
+
+fieldset {
+    border: 1px solid #c0c0c0;
+    margin: 0 2px;
+    padding: 0.35em 0.625em 0.75em;
+}
+
+/**
+ * 1. Correct `color` not being inherited in IE 8/9.
+ * 2. Remove padding so people aren't caught out if they zero out fieldsets.
+ */
+
+legend {
+    border: 0; /* 1 */
+    padding: 0; /* 2 */
+}
+
+/**
+ * 1. Correct font family not being inherited in all browsers.
+ * 2. Correct font size not being inherited in all browsers.
+ * 3. Address margins set differently in Firefox 4+, Safari 5, and Chrome.
+ */
+
+button,
+input,
+select,
+textarea {
+    font-family: inherit; /* 1 */
+    font-size: 100%; /* 2 */
+    margin: 0; /* 3 */
+}
+
+/**
+ * Address Firefox 4+ setting `line-height` on `input` using `!important` in
+ * the UA stylesheet.
+ */
+
+button,
+input {
+    line-height: normal;
+}
+
+/**
+ * Address inconsistent `text-transform` inheritance for `button` and `select`.
+ * All other form control elements do not inherit `text-transform` values.
+ * Correct `button` style inheritance in Chrome, Safari 5+, and IE 8+.
+ * Correct `select` style inheritance in Firefox 4+ and Opera.
+ */
+
+button,
+select {
+    text-transform: none;
+}
+
+/**
+ * 1. Avoid the WebKit bug in Android 4.0.* where (2) destroys native `audio`
+ *    and `video` controls.
+ * 2. Correct inability to style clickable `input` types in iOS.
+ * 3. Improve usability and consistency of cursor style between image-type
+ *    `input` and others.
+ */
+
+button,
+html input[type="button"], /* 1 */
+input[type="reset"],
+input[type="submit"] {
+    -webkit-appearance: button; /* 2 */
+    cursor: pointer; /* 3 */
+}
+
+/**
+ * Re-set default cursor for disabled elements.
+ */
+
+button[disabled],
+html input[disabled] {
+    cursor: default;
+}
+
+/**
+ * 1. Address box sizing set to `content-box` in IE 8/9/10.
+ * 2. Remove excess padding in IE 8/9/10.
+ */
+
+input[type="checkbox"],
+input[type="radio"] {
+    box-sizing: border-box; /* 1 */
+    padding: 0; /* 2 */
+}
+
+/**
+ * 1. Address `appearance` set to `searchfield` in Safari 5 and Chrome.
+ * 2. Address `box-sizing` set to `border-box` in Safari 5 and Chrome
+ *    (include `-moz` to future-proof).
+ */
+
+input[type="search"] {
+    -webkit-appearance: textfield; /* 1 */
+    -moz-box-sizing: content-box;
+    -webkit-box-sizing: content-box; /* 2 */
+    box-sizing: content-box;
+}
+
+/**
+ * Remove inner padding and search cancel button in Safari 5 and Chrome
+ * on OS X.
+ */
+
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-decoration {
+    -webkit-appearance: none;
+}
+
+/**
+ * Remove inner padding and border in Firefox 4+.
+ */
+
+button::-moz-focus-inner,
+input::-moz-focus-inner {
+    border: 0;
+    padding: 0;
+}
+
+/**
+ * 1. Remove default vertical scrollbar in IE 8/9.
+ * 2. Improve readability and alignment in all browsers.
+ */
+
+textarea {
+    overflow: auto; /* 1 */
+    vertical-align: top; /* 2 */
+}
+
+/* ==========================================================================
+   Tables
+   ========================================================================== */
+
+/**
+ * Remove most spacing between table cells.
+ */
+
+table {
+    border-collapse: collapse;
+    border-spacing: 0;
+}
+</style><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="renderer" content="webkit"><link rel="stylesheet" href="/icon/style.css" type="text/css"><link rel="icon" type="image/png" href="https://moka-public.oss-cn-beijing.aliyuncs.com/shichuangyi/1e4dae80c9364e06b387f95f0c854fc1.jpg?x-oss-process=image/resize,m_lfit,h_32,w_32"><script>if (Boolean(true)) {
+  (function() {
+    if (1 === 1) {
+      document.documentElement.lang = 'zh-CN';
+    } else if (typeof navigator !== 'undefined' && /en/i.test(navigator.language)) {
+      document.documentElement.lang = 'en-US';
+    } else {
+      document.documentElement.lang = 'zh-CN';
+    }
+  })();
+}
+</script><script>document.documentElement.lang = document.documentElement.lang || 'zh-CN';
+</script><title>深圳市时创意电子股份有限公司 - 校园招聘</title><meta name="keywords" content="深圳市时创意电子股份有限公司校园招聘,深圳市时创意电子股份有限公司校招,深圳市时创意电子股份有限公司招聘,深圳市时创意电子股份有限公司招聘官网,深圳市时创意电子股份有限公司招聘官方网站"><meta name="description" content="2026年深圳市时创意电子股份有限公司校园招聘正在进行，点击申请职位"><!--[if lt IE 10]><script>//- Only support IE >= 10
+(function () {
+    window.location = '/browser-not-support';
+}());</script><![endif]--><script>function report(error) {
+  if (window.location.origin.indexOf("localhost") !== -1 || window.location.origin.indexOf("staging") !== -1) {
+    return null;
+  }
+  function createXHR() {
+      if (typeof window.XMLHttpRequest !== "undefined") {
+      return new window.XMLHttpRequest();
+    } else if (typeof window.ActiveXObject !== "undefined") {
+      if (typeof arguments.callee.activeXString !== "string") {
+        var versions = [
+          "Msxml3.XMLHTTP",
+          "MSXML2.XMLHttp.6.0",
+          "MSXML2.XMLHttp.3.0",
+          "MSXML2.XMLHttp",
+          "Microsoft.XMLHTTP",
+        ];
+        for (var i = 0, len = versions.length; i < len; i++) {
+          try {
+            var xhr = new window.ActiveXObject(versions[i]);
+            arguments.callee.activeXString = versions[i];
+            return xhr;
+          } catch (error) {
+            console.error(error);
+            //跳过
+          }
+        }
+      }
+      return new window.ActiveXObject(arguments.callee.activeXString);
+    } else {
+      return null;
+    }
+  }
+
+  var xhr = createXHR();
+  if (!xhr) {
+    return null;
+  }
+
+  function getEventId() {
+    var a = window.crypto || window.msCrypto;
+    if (a && a.getRandomValues) {
+        var b = new Uint16Array(8);
+        a.getRandomValues(b), b[3] = 4095 & b[3] | 16384, b[4] = 16383 & b[4] | 32768;
+        var c = function (a) {
+            for (var b = a.toString(16); b.length < 4;) b = "0" + b;
+            return b
+        };
+        return c(b[0]) + c(b[1]) + c(b[2]) + c(b[3]) + c(b[4]) + c(b[5]) + c(b[6]) + c(b[7])
+    }
+    return "xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx".replace(/[xy]/g, function (a) {
+        var b = 16 * Math.random() | 0,
+            c = "x" === a ? b : 3 & b | 8;
+        return c.toString(16)
+    })
+  }
+  xhr.open("POST", "https://sentry-fe.mokahr.com/api/107/store/?sentry_version=7&sentry_client=raven-js%2F3.26.4&sentry_key=840dcafb7d524b21a665748fae084418");
+  xhr.send(JSON.stringify({
+    project: "107",
+    logger: "javascript",
+    platform: "javascript",
+    request: {
+        headers: {
+          "User-Agent": window.navigator.userAgent
+        },
+        url: window.location.href
+    },
+    exception: {
+      values: [error],
+      mechanism: {
+        type: "generic",
+        handled: true
+      }
+    },
+    level: "fatal",
+    tags: { "user.orgId": "", "user.role": "" },
+    user: {
+      id: "",
+      orgId: "",
+      pay: "",
+      role: "",
+      isGrayReleased: "0",
+    },
+    environment: "prod-ali",
+    release: "20261019-1741-eccf3-release",
+    event_id: getEventId()
+  }));
+}
+
+window.MOKA_RETRY = {
+  origins: ["https://static-ats.mokahr.com","https://static.mokahr.com","https://app.mokahr.com"],
+  pointer: 0,
+  timer: null,
+  getCdnPath: function() {
+    return window.MOKA_RETRY.origins[window.MOKA_RETRY.pointer] || window.location.origin;
+  },
+  refreshOriginPathFunc: function() {
+    var oldPath = window.MOKA_RETRY.getCdnPath();
+
+    window.MOKA_RETRY.pointer = window.MOKA_RETRY.pointer + 1;
+
+    var newPath = window.MOKA_RETRY.getCdnPath();
+
+    report({
+      type: "cdn资源事故！！！",
+      value: oldPath + " 出现故障：切换至 " + newPath + " --- window.MOKA_RETRY:" +  (window.MOKA_RETRY ? JSON.stringify(window.MOKA_RETRY) : " MOKA_RETRY not found")
+    });
+
+    if (!window.MOKA_RETRY.timer) {
+      window.MOKA_RETRY.timer = setTimeout(function(){
+        window.MOKA_RETRY.pointer = 0;
+      }, 30 * 60 * 1000)
+    }
+  },
+  onError: function(error){
+    report({
+      type: "cdn资源事故！！！ " + error.type,
+      value: error.message
+    });
+  },
+}
+
+window.addEventListener("error", function(e) {
+  if (!(e instanceof ErrorEvent) && e.target instanceof HTMLElement) {
+    var type = e.target.tagName;
+    var src = type === "SCRIPT" ? e.target.src : type === "LINK" ? e.target.href : "";
+    var url = src.split("/");
+    var origin = src.split("//").length > 1 ? url[0] + "//" + url[2]: window.location.origin;
+    var extraMessage = "";
+    if (!src || (origin.indexOf("mokahr.com") === -1 && !/new_i18n.*messages/.test(src)) || src.indexOf(".chunk.") > -1 || src.indexOf("style_") > -1 || src.indexOf("micro-app") > -1) {
+      return;
+    }
+    if(window.performance){
+      try {
+        var performanceData = window.performance.getEntriesByName(e.target.src);
+        var mainData = performanceData[0] ? performanceData[0].duration : "";
+        extraMessage = "duration:" + mainData+ "\\n" + JSON.stringify(performanceData);
+      } catch (e) {
+        extraMessage = "performance data error";
+      }
+    }
+    var error = new Error();
+    error.message = origin + " 出现故障：" + "Loading static failed after 0 retries. \\n(" + src + ")" +"\\n extraMessage:" + extraMessage;
+    error.request = src;
+    error.type = "failed";
+    window.MOKA_RETRY.onError(error);
+
+    if (origin === window.location.origin && window.MOKA_RETRY.getCdnPath() === window.location.origin) {
+      return;
+    } else if (origin === window.MOKA_RETRY.getCdnPath()) {
+      window.MOKA_RETRY.refreshOriginPathFunc();
+    }
+    
+    var el = null;
+    if (type === "SCRIPT") {
+      el = document.createElement("script");
+      el.setAttribute("crossorigin", "anonymous");
+      el.src = src.replace(origin, window.MOKA_RETRY.getCdnPath());
+    } else if (type === "LINK") {
+      el = document.createElement("link");
+      el.setAttribute("rel", "stylesheet");
+      el.href = src.replace(origin, window.MOKA_RETRY.getCdnPath());
+    }
+
+    if (el) {
+      var head = document.querySelector("head");
+      head.appendChild(el);
+    }
+  }
+}, true);</script><script>window.MATERIAL_PLATFORM_HOST = "";
+window.MATERIAL_PLATFORM_PUBLIC_PATHS = ["https://static-ats.mokahr.com","https://static.mokahr.com","https://app.mokahr.com"];</script><script type="text/javascript" crossorigin="anonymous" data-dev-ignore="true" src="https://static-ats.mokahr.com/moka-fe-public/mage-i18n/javascripts/new_i18n_zh_cn_messages.9240dd4cf8ae676601d58c8ecb2dd1c1.js"></script><script>window.languageManifest = {"new_i18n_en_us_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_en_us_messages.09f55036a639805fecdc5157785804af.js","new_i18n_zh_cn_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_zh_cn_messages.9240dd4cf8ae676601d58c8ecb2dd1c1.js","new_i18n_en_dingtalk_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_en_dingtalk_messages.29d3dae5be4adf14100d3b2a77847777.js","new_i18n_zh_dingtalk_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_zh_dingtalk_messages.fccc407087780d2e41b13a6d432788eb.js","new_i18n_fr_fr_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_fr_fr_messages.6ef04975842c1696fa4640037cea1510.js","new_i18n_ms_my_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_ms_my_messages.f98fb243649a731687e4619314801241.js","new_i18n_vi_vn_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_vi_vn_messages.bb1298eab54eeb71e6a492d596209d1b.js","new_i18n_es_es_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_es_es_messages.92ec5583b6559f0bc00d7ffd4254c622.js","new_i18n_th_th_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_th_th_messages.4e9f5a461a8694b7d5cb37d24b8a8142.js","new_i18n_id_id_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_id_id_messages.a8e7a25090a7f86632f663e98c7d9949.js","new_i18n_sr_sp_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_sr_sp_messages.02060a934e9b9d9333569c3a420852ea.js","new_i18n_de_de_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_de_de_messages.651351bab979403d6a237aa9c799b629.js","new_i18n_zh_tw_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_zh_tw_messages.b2a87febc57e53ab0ad9bbcd59eec4df.js","new_i18n_zh_hk_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_zh_hk_messages.660bfe1ad091a481c9ddcce662f8947e.js","new_i18n_ja_jp_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_ja_jp_messages.6e78793f348247cc3132acae927295b9.js","new_i18n_ko_kr_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_ko_kr_messages.2c12c8e7d0ad5054c8602e95708cdd59.js","new_i18n_pt_pt_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_pt_pt_messages.25c0c8f3f5b5d42c76915225c2405e19.js","new_i18n_tl_ph_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_tl_ph_messages.1ad8bd1a4e14394059ff8d260398d573.js","new_i18n_ru_ru_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_ru_ru_messages.b1e8a2474cd12e58dac655a3852439ec.js","new_i18n_ta_lk_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_ta_lk_messages.5aecf2b34937e073fe8ef223fedf7f0e.js","new_i18n_uz_uz_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_uz_uz_messages.56ab19b40e9b372d47719c203cd7849e.js","new_i18n_kk_kz_messages":"/moka-fe-public/mage-i18n/javascripts/new_i18n_kk_kz_messages.1aae64548926a7fefba3d6618c3790b6.js"};
+window.orgMainLocale = "zh-CN";
+window.orgSupportLocales = ["zh-CN","en-US"];</script><link rel="stylesheet" href="https://static-ats.mokahr.com/recruitment-web-client/stylesheets/recruitmentWeb-20261019-1741-eccf3-release.css" type="text/css"><script crossorigin="anonymous" src="https://static-ats.mokahr.com/recruitment-web-client/javascripts/sentry-0391c5210d1478c1df01880d317a7d6b.js"></script><script crossorigin="anonymous" src="https://static-ats.mokahr.com/recruitment-web-client/javascripts/initial-969f962c55bf52b1774a6797b82e2358.js"></script><style></style><style></style><style id="0395535502"></style><style id="8002663575">
+      .navbar-gtb7M9m5eP {
+        color: #FFFFFF;
+        background-color: #0C8CF6;
+        box-shadow: 0 0px 3px rgba(0, 0, 0, 0.1);
+      }
+      .navbar-gtb7M9m5eP .logo-link-XLQBXKms_Y {
+        width: 72px;
+        height: 48px;
+        background-image: url(https://public-cdn.mokahr.com/shichuangyi/727b070c-160e-4a56-b345-0b40d70920dc.png);;
+      }
+      .navbar-gtb7M9m5eP .menu-item-OEA_UqrB87:hover,
+      .navbar-gtb7M9m5eP .menu-item-active-Y2i7A4URmE {
+        color: #FFFFFF;
+      }
+      .navbar-gtb7M9m5eP .menu-item-OEA_UqrB87::after {
+        background-color: #FFFFFF;
+      }
+
+      .navbar-gtb7M9m5eP.navbar-sd-NlnjvRjLj6 {
+        color: #FFFFFF;
+        background-color: #0C8CF6;
+        box-shadow: 0 0px 3px rgba(0, 0, 0, 0.1);
+      }
+      .navbar-gtb7M9m5eP.navbar-sd-NlnjvRjLj6 .logo-link-XLQBXKms_Y {
+        width: 72px;
+        height: 48px;
+        background-image: url(https://public-cdn.mokahr.com/shichuangyi/727b070c-160e-4a56-b345-0b40d70920dc.png);;
+      }
+      .navbar-gtb7M9m5eP.navbar-sd-NlnjvRjLj6 .menu-item-OEA_UqrB87:hover,
+      .navbar-gtb7M9m5eP.navbar-sd-NlnjvRjLj6 .menu-item-active-Y2i7A4URmE {
+        color: #FFFFFF;
+      }
+      .navbar-gtb7M9m5eP.navbar-sd-NlnjvRjLj6 .menu-item-OEA_UqrB87::after {
+        background-color: #FFFFFF;
+      }
+      .portal-label-lSh2wLmmoi {
+        color: #000;
+        background-color: #FFFFFF;
+        display: block;
+      }
+      .portal-label-lSh2wLmmoi.portal-label-sd-MlR_q6965C {
+        color: #000;
+        background-color: #FFFFFF;
+        display: block;
+      }
+      .nav-wrapper-NdvPddMehp {
+        margin-left: 80px;
+        flex-direction: row;
+      }
+      .menu-YoueIwA2cU {
+        font-size: 14px;
+      }
+    </style><style id="0161373042">
+        .navbar-E78E18wwJC + * {
+          margin-top: 68px;
+        }
+      </style><link rel="stylesheet" href="https://static-ats.mokahr.com/micro-apps/apply-form/stylesheets/micro-app-style_apply-form.release.cbf537395374c00481d3.css" crossorigin="anonymous"><style type="text/css">.marquee-container {
+  overflow-x: hidden !important;
+  display: flex !important;
+  flex-direction: row !important;
+  position: relative;
+  width: 100%;
+}
+.marquee-container:hover div {
+  animation-play-state: var(--pause-on-hover);
+}
+.marquee-container:active div {
+  animation-play-state: var(--pause-on-click);
+}
+
+.overlay {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+}
+.overlay::before, .overlay::after {
+  background: linear-gradient(to right, var(--gradient-color));
+  content: "";
+  height: 100%;
+  position: absolute;
+  width: var(--gradient-width);
+  z-index: 2;
+}
+.overlay::after {
+  right: 0;
+  top: 0;
+  transform: rotateZ(180deg);
+}
+.overlay::before {
+  left: 0;
+  top: 0;
+}
+
+.marquee {
+  flex: 0 0 auto;
+  min-width: 100%;
+  z-index: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  animation: scroll var(--duration) linear var(--delay) var(--iteration-count);
+  animation-play-state: var(--play);
+  animation-delay: var(--delay);
+  animation-direction: var(--direction);
+}
+@keyframes scroll {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}</style></head><body><input style="display: none" id="moka-version" data-gray-released="0" data-version="20261019-1741-eccf3-release"><div id="app"><div class="apply-container"><div><div style="display: flex; flex-direction: column; min-height: 100vh;"><div class="nav-y6uNkj9ulJ navbar-E78E18wwJC"><div class="navbar-gtb7M9m5eP navbar-sd-NlnjvRjLj6"><div class="navbar-head-nCSbkoIYek"><div class="logo-m7uLpIojj8"><a class="logo-link-XLQBXKms_Y not-link-k5C0e5evBK" target="_self"></a></div><div class="portal-label-lSh2wLmmoi portal-label-sd-MlR_q6965C">校园招聘</div><div class="nav-wrapper-NdvPddMehp"><div class="menu-YoueIwA2cU"><div class="menu-item-OEA_UqrB87"><a target="_self" title="首页">首页</a></div><div class="menu-item-OEA_UqrB87"><a target="_self" title="热招职位">热招职位</a></div></div><div class="op-gt77J3kICx"><div class="account-q4V9o0gFXX"><div class="sd-Dropdown-container-1CigZ"><div class="avatar-P47CwdVTSy"><div class="avatar-div-pYvefnB0XT"><img class="avatar-img-vxTEr_r0E4" src="https://public-cdn.mokahr.com/46d17bdc-7a22-4b31-82e6-916ab2bcc036"></div></div></div></div></div></div></div><form class="navbar-search-hidden-WFZ8CwwxX2"><input title="搜索职位" class="navbar-search-input-JsaVlauxLX" placeholder="输入职位关键字"></form></div></div><div class="flex1-RnXKT9C5vW pdb32-MQhsNPpFqc"><div class="applyContent-YhY1kFNXZ3"><div class="main-container"><div class="complete-form"><div class="left-side"><ul class="breadcrumb-f51wzl7WBC"><li><a class="link-lfDMdXNy0M" href="#/">首页</a><span class="nav-icon-mPi8m93FR9">/</span></li><li><a class="link-lfDMdXNy0M" href="#/jobs">职位列表</a><span class="nav-icon-mPi8m93FR9">/</span></li><li><a class="link-lfDMdXNy0M" href="#/job/3c26fd7f-b4c5-4dff-8d28-77cfb3f408ea">职位详情</a><span class="nav-icon-mPi8m93FR9">/</span></li><li><span style="color: rgb(20, 25, 51);">职位申请</span><span class="nav-icon-mPi8m93FR9">/</span></li></ul><div class="job-form__wrapper"><div class="job-form__title"><div class="heading-dOc2p9oP1M"><div class="company-name-UnNyeDrf0f">深圳市时创意电子股份有限公司</div><div class="job-info-loqCchDh8y"><div class="title-ydDm6N7dMp">AI工程师</div><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-flex-vertical-1PxVy"><div class="info-s2WxYzXYU8" style="margin-bottom: 4px;"><span style="margin-right: 8px;">IT中心</span><span class="sd-foundation-n30-fgyrE" style="margin-right: 8px;">|</span><span style="margin-right: 8px;">全职</span><span class="sd-foundation-n30-fgyrE" style="margin-right: 8px;">|</span><span style="margin-right: 8px;">IT类</span><span class="sd-foundation-n30-fgyrE" style="margin-right: 8px;">|</span><span>广东·深圳市</span></div><span class="sd-foundation-body-tertiary-3nvFb">发布于 2026-09-03</span></div></div></div></div><div><div class="apply-form-yCQO5hUc23"><div class="question-MaXqi0RulE"><div class="apply-blocks-ir_MrIodtj"><div class="apply-block-KRDTLLb5hU" data-nav-id="block-uploadInfo"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color"><span>上传</span></span></div></div><div class="apply-fields-BzcXI4i2Pm"><div class="apply-field-Q2iJ7AtQGX file_upload-MPorXc4w3A apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>上传简历</span></span><span class="required-asterisk-av7daEKsLS"></span></div><div class="ctrl-CICMG4Fr4_"><div class="file_upload"><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-tertiary-light-3xDGD sd-Button-lg-3bz1y file_upload-btn" type="button"><span class="sd-Button-content-1Zgzx"><span><span>上传简历</span></span></span></button><input id="resumeKey" type="file" name="resumeKey" accept="application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/wps-office.doc,application/wps-office.docx,.doc,.docx,application/mspowerpoint,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/wps-office.ppt,application/wps-office.pptx,.ppt,.pptx,.html,image/jpeg,.jpg,.jpeg,image/png,.png,application/rtf,application/x-rtf,text/richtext,text/rtf,.rtf,.wps,text/plain,.txt,.pdf"></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"><span>支持pdf、doc、ppt、docx、pptx、wps、jpg、jpeg、png、txt等简历格式。上传附加简历后，会自动解析、填充申请表信息。</span></div></div></div></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-basicInfo"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color"><span>个人信息</span></span></div></div><div class="apply-fields-BzcXI4i2Pm"><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>姓名</span></span><span class="required-asterisk-av7daEKsLS"></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="姓名" maxlength="255" value="朱科林"></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>手机号码</span></span><span class="required-asterisk-av7daEKsLS"></span></div><div class="ctrl-CICMG4Fr4_"><div class="wrapper-zOQxgCZej2 string_info"><div class="code-fpHCe5Nr_7"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"><span class="">+86</span></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div class="number-PjeQbgfkLz"><label class="sd-Input-container-2S_vM sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" placeholder="请输入手机号" maxlength="255" value="18816475450" data-wsa-id="ewlevvcr2"></label></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>邮箱</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="邮箱" maxlength="255" value="pikeduo@gmail.com"></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX Select-oqOV0aGogs apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>性别</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE w-full-mRUtzMQLHs"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x select no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请选择" autocomplete="nope" maxlength="-1" value="" data-wsa-id="e9yi0nqi7"><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX day_info-S5Nug1w6IL apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>出生日期 (年龄)</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM day_info sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" readonly="" placeholder="出生日期 (年龄)" fieldinfo="[object Object]" callingcodelist="[object Object]" callsource="apply-web" placement="bottomLeft" maxlength="255" value="" data-wsa-id="emy8i5ii7"><span class="sd-Input-addon-1Dv-z sd-picker-addon-1SMM0"><div class=""></div></span></label><span></span></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX Select-oqOV0aGogs apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>工作经验</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE w-full-mRUtzMQLHs"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x select no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请选择" autocomplete="nope" maxlength="-1" value="" data-wsa-id="e0qfod5b9"><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX Select-oqOV0aGogs apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>最高学历</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE w-full-mRUtzMQLHs"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x select no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请选择" autocomplete="nope" maxlength="-1" value="" data-wsa-id="e8dxkdix3"><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>所在地</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="所在地" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>最近公司</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="最近公司" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-jobIntention"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color"><span>求职意向</span></span></div></div><div class="apply-fields-BzcXI4i2Pm"><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>当前薪资</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="当前薪资" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>期望薪资</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="期望薪资" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>期望城市</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="期望城市" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-experienceInfo"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color" style="margin-right: 8px;"><span>工作经历</span></span><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-1IIJk sd-Button-lg-3bz1y sd-Button-has-left-icon-SGR3C" type="button" icon="[object Object]"><span class="sd-Button-content-1Zgzx"><span class="sd-Icon-container-1EGHG sd-Icon-iconadd-2bWGG sd-Button-left-icon-21UeS" style="font-size: 12px;"></span><span><span>添加</span></span></span></button></div></div><div class="apply-fields-BzcXI4i2Pm multi-NTCDdF2lci"><div class="apply-field-Q2iJ7AtQGX date_info-nCj8tT_zjw apply-filed-padding-gvR51AnKq6 full-width-field-_9KdqB6mcu"><div class="title-IWWQ0Xa4L7"><span><span>起止时间</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="month-range-select date_info wrapper-Wilqy7sjl0"><label class="label-ZJNsc2aXvx"></label><span><div class="item-CNFmjn2r6y"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div><div class="item-CNFmjn2r6y"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div></span><span class="till-QjTOI37re2">-<br></span><span><div class="item-CNFmjn2r6y"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div class="item-CNFmjn2r6y"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></span><span class="sign-MhIus99jyR"><label class="sd-Checkbox-container-3IoOq"><span class="sd-Checkbox-box-1tF62"><span class="sd-Checkbox-checker-Y9ZGJ"><input type="checkbox" class="sd-Checkbox-input-1uFHv" value=""><svg class="sd-Checkbox-svg-2FBgn" width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"></svg></span></span><span class="sd-Checkbox-label-187mu"><div class="sd-Checkbox-label-text-3hBVW" style="vertical-align: top;">至今</div></span></label></span></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>公司名称</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="公司名称" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>职位名称</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="职位名称" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX text_info-YMkFcQzvoO apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>工作职责</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Textarea-container-1Hj7A" style="width: 100%;"><textarea class="sd-Textarea-textarea-dyLbN text_info" placeholder="内容" style="resize: vertical; width: 100%; height: 78px;" data-wsa-id="e3c903but"></textarea></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="sd-Tooltip-container-2B2OE"><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-danger-2EnhK sd-Button-lg-3bz1y remove-gIFww9IvGS no-adaptive-tooltip" type="button"><span class="sd-Button-content-1Zgzx"><span><span>删除本条</span></span></span></button></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-educationInfo"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color" style="margin-right: 8px;"><span>教育背景</span></span><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-1IIJk sd-Button-lg-3bz1y sd-Button-has-left-icon-SGR3C" type="button" icon="[object Object]"><span class="sd-Button-content-1Zgzx"><span class="sd-Icon-container-1EGHG sd-Icon-iconadd-2bWGG sd-Button-left-icon-21UeS" style="font-size: 12px;"></span><span><span>添加</span></span></span></button></div></div><div class="apply-fields-BzcXI4i2Pm multi-NTCDdF2lci"><div class="apply-field-Q2iJ7AtQGX date_info-nCj8tT_zjw apply-filed-padding-gvR51AnKq6 full-width-field-_9KdqB6mcu"><div class="title-IWWQ0Xa4L7"><span><span>就读时间</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="month-range-select date_info wrapper-Wilqy7sjl0"><label class="label-ZJNsc2aXvx"></label><span><div class="item-CNFmjn2r6y"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div><div class="item-CNFmjn2r6y"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div></span><span class="till-QjTOI37re2">-<br></span><span><div class="item-CNFmjn2r6y"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div class="item-CNFmjn2r6y"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></span></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>学校名称</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请输入就读学校" autocomplete="nope" maxlength="-1" value="" data-wsa-id="eic9lui2b"><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>专业名称</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE w-full-mRUtzMQLHs"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请输入专业名称" autocomplete="nope" maxlength="-1" value="" data-wsa-id="esxbkphe0"><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX Select-oqOV0aGogs apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>学历</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE w-full-mRUtzMQLHs"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x select no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请选择" autocomplete="nope" maxlength="-1" value="" data-wsa-id="e7e7jpttk"><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="sd-Tooltip-container-2B2OE"><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-danger-2EnhK sd-Button-lg-3bz1y remove-gIFww9IvGS no-adaptive-tooltip" type="button"><span class="sd-Button-content-1Zgzx"><span><span>删除本条</span></span></span></button></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-practiceInfo"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color" style="margin-right: 8px;"><span>实习经历</span></span><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-1IIJk sd-Button-lg-3bz1y sd-Button-has-left-icon-SGR3C" type="button" icon="[object Object]"><span class="sd-Button-content-1Zgzx"><span class="sd-Icon-container-1EGHG sd-Icon-iconadd-2bWGG sd-Button-left-icon-21UeS" style="font-size: 12px;"></span><span><span>添加</span></span></span></button></div></div><div class="apply-fields-BzcXI4i2Pm multi-NTCDdF2lci"><div class="apply-field-Q2iJ7AtQGX date_info-nCj8tT_zjw apply-filed-padding-gvR51AnKq6 full-width-field-_9KdqB6mcu"><div class="title-IWWQ0Xa4L7"><span><span>起止时间</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="month-range-select date_info wrapper-Wilqy7sjl0"><label class="label-ZJNsc2aXvx"></label><span><div class="item-CNFmjn2r6y"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div><div class="item-CNFmjn2r6y"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div></span><span class="till-QjTOI37re2">-<br></span><span><div class="item-CNFmjn2r6y"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div class="item-CNFmjn2r6y"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></span><span class="sign-MhIus99jyR"><label class="sd-Checkbox-container-3IoOq"><span class="sd-Checkbox-box-1tF62"><span class="sd-Checkbox-checker-Y9ZGJ"><input type="checkbox" class="sd-Checkbox-input-1uFHv" value=""><svg class="sd-Checkbox-svg-2FBgn" width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"></svg></span></span><span class="sd-Checkbox-label-187mu"><div class="sd-Checkbox-label-text-3hBVW" style="vertical-align: top;">至今</div></span></label></span></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>公司名称</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="公司名称" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>职位名称</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="职位名称" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX text_info-YMkFcQzvoO apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>工作职责</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Textarea-container-1Hj7A" style="width: 100%;"><textarea class="sd-Textarea-textarea-dyLbN text_info" placeholder="内容" style="resize: vertical; width: 100%; height: 78px;" data-wsa-id="ebj33lme5"></textarea></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="sd-Tooltip-container-2B2OE"><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-danger-2EnhK sd-Button-lg-3bz1y remove-gIFww9IvGS no-adaptive-tooltip" type="button"><span class="sd-Button-content-1Zgzx"><span><span>删除本条</span></span></span></button></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-projectInfo"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color" style="margin-right: 8px;"><span>项目经验</span></span><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-1IIJk sd-Button-lg-3bz1y sd-Button-has-left-icon-SGR3C" type="button" icon="[object Object]"><span class="sd-Button-content-1Zgzx"><span class="sd-Icon-container-1EGHG sd-Icon-iconadd-2bWGG sd-Button-left-icon-21UeS" style="font-size: 12px;"></span><span><span>添加</span></span></span></button></div></div><div class="apply-fields-BzcXI4i2Pm multi-NTCDdF2lci"><div class="apply-field-Q2iJ7AtQGX date_info-nCj8tT_zjw apply-filed-padding-gvR51AnKq6 full-width-field-_9KdqB6mcu"><div class="title-IWWQ0Xa4L7"><span><span>起止时间</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="month-range-select date_info wrapper-Wilqy7sjl0"><label class="label-ZJNsc2aXvx"></label><span><div class="item-CNFmjn2r6y"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div><div class="item-CNFmjn2r6y"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div></span><span class="till-QjTOI37re2">-<br></span><span><div class="item-CNFmjn2r6y"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div class="item-CNFmjn2r6y"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></span><span class="sign-MhIus99jyR"><label class="sd-Checkbox-container-3IoOq"><span class="sd-Checkbox-box-1tF62"><span class="sd-Checkbox-checker-Y9ZGJ"><input type="checkbox" class="sd-Checkbox-input-1uFHv" value=""><svg class="sd-Checkbox-svg-2FBgn" width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"></svg></span></span><span class="sd-Checkbox-label-187mu"><div class="sd-Checkbox-label-text-3hBVW" style="vertical-align: top;">至今</div></span></label></span></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>项目名称</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="项目名称" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>职责</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="职责" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX text_info-YMkFcQzvoO apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>项目描述</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Textarea-container-1Hj7A" style="width: 100%;"><textarea class="sd-Textarea-textarea-dyLbN text_info" placeholder="内容" style="resize: vertical; width: 100%; height: 78px;" data-wsa-id="e55h5f41s"></textarea></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX text_info-YMkFcQzvoO apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>项目中职责</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Textarea-container-1Hj7A" style="width: 100%;"><textarea class="sd-Textarea-textarea-dyLbN text_info" placeholder="项目中职责" style="resize: vertical; width: 100%; height: 78px;" data-wsa-id="e90da3nq1"></textarea></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="sd-Tooltip-container-2B2OE"><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-danger-2EnhK sd-Button-lg-3bz1y remove-gIFww9IvGS no-adaptive-tooltip" type="button"><span class="sd-Button-content-1Zgzx"><span><span>删除本条</span></span></span></button></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-languageInfo"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color" style="margin-right: 8px;"><span>语言能力</span></span><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-1IIJk sd-Button-lg-3bz1y sd-Button-has-left-icon-SGR3C" type="button" icon="[object Object]"><span class="sd-Button-content-1Zgzx"><span class="sd-Icon-container-1EGHG sd-Icon-iconadd-2bWGG sd-Button-left-icon-21UeS" style="font-size: 12px;"></span><span><span>添加</span></span></span></button></div></div><div class="apply-fields-BzcXI4i2Pm multi-NTCDdF2lci"><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>语言类型</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="语言类型" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX Select-oqOV0aGogs apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>掌握程度</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE w-full-mRUtzMQLHs"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x select no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请选择" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX Select-oqOV0aGogs apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>听说</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE w-full-mRUtzMQLHs"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x select no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请选择" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX Select-oqOV0aGogs apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>读写</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE w-full-mRUtzMQLHs"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x select no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="请选择" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="sd-Tooltip-container-2B2OE"><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-danger-2EnhK sd-Button-lg-3bz1y remove-gIFww9IvGS no-adaptive-tooltip" type="button"><span class="sd-Button-content-1Zgzx"><span><span>删除本条</span></span></span></button></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-selfDescription"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color"><span>自我描述</span></span></div></div><div class="apply-fields-BzcXI4i2Pm"><div class="apply-field-Q2iJ7AtQGX text_info-YMkFcQzvoO apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>自我描述</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Textarea-container-1Hj7A" style="width: 100%;"><textarea class="sd-Textarea-textarea-dyLbN text_info" placeholder="简介" style="resize: vertical; width: 100%; height: 78px;" data-wsa-id="el8x7zmzy"></textarea></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-awardInfo"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color" style="margin-right: 8px;"><span>获奖经历</span></span><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-1IIJk sd-Button-lg-3bz1y sd-Button-has-left-icon-SGR3C" type="button" icon="[object Object]"><span class="sd-Button-content-1Zgzx"><span class="sd-Icon-container-1EGHG sd-Icon-iconadd-2bWGG sd-Button-left-icon-21UeS" style="font-size: 12px;"></span><span><span>添加</span></span></span></button></div></div><div class="apply-fields-BzcXI4i2Pm multi-NTCDdF2lci"><div class="apply-field-Q2iJ7AtQGX date_info-nCj8tT_zjw apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>获奖时间</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="month-range-select date_info wrapper-Wilqy7sjl0"><label class="label-ZJNsc2aXvx"></label><span><div class="item-half-mz_My7kExy"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="年" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div><div class="item-half-mz_My7kExy"><div class="sd-Tooltip-container-2B2OE full-width-fZap_B2OcF"><div class="sd-Dropdown-container-1CigZ" style="width: 100%;"><label class="sd-Input-container-2S_vM sd-Select-container-1Eq4x no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><span class="sd-Input-display-value-RwqDy sd-Input-display-value-spacing-2BKCS"></span><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE sd-Input-has-addon-3djHe" placeholder="月" autocomplete="nope" maxlength="-1" value=""><span class="sd-Input-addon-1Dv-z sd-Select-addon-26oV3"><div class="sd-Input-shadow-2mn0F"></div><span class="sd-Icon-container-1EGHG sd-Icon-iconcaretDown-juEqC sd-Input-icon--R4ZV sd-Select-icon-Bs6XN" style="font-size: 16px;"></span></span></label><span></span></div></div></div></span></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="apply-field-Q2iJ7AtQGX string_info-UOJxKN5mtC apply-filed-padding-gvR51AnKq6"><div class="title-IWWQ0Xa4L7"><span><span>奖项名称</span></span></div><div class="ctrl-CICMG4Fr4_"><div class="sd-Tooltip-container-2B2OE" style="width: 100%;"><label class="sd-Input-container-2S_vM string_info no-adaptive-tooltip sd-Input-lg-3X8ma" style="width: 100%;"><input type="text" class="sd-Input-input-10L0t sd-Input-common-input-1XimE" autocomplete="new_password" placeholder="奖项名称" maxlength="255" value=""></label></div><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div><div class="sd-Tooltip-container-2B2OE"><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-text-danger-2EnhK sd-Button-lg-3bz1y remove-gIFww9IvGS no-adaptive-tooltip" type="button"><span class="sd-Button-content-1Zgzx"><span><span>删除本条</span></span></span></button></div></div></div><div class="apply-block-KRDTLLb5hU" data-nav-id="block-updateAccountResume"><div class="blockTitle-dcmrfhpkg1"><div class="sd-Spacing-spacing-inline-2zHeO sd-Spacing-stretched-1WTcn sd-Spacing-align-center-1syHL sd-Spacing-justify-between-3DYHz"><span class="text-JHHb1llnzL theme-border-color"><span>更新说明</span></span></div></div><div class="apply-fields-BzcXI4i2Pm"><div class="apply-field-Q2iJ7AtQGX confirm_info-iqEC7RvBDg"><div class="ctrl-CICMG4Fr4_"><label class="sd-Checkbox-container-3IoOq"><span class="sd-Checkbox-box-1tF62"><span class="sd-Checkbox-checker-Y9ZGJ sd-Checkbox-active-2sgD9"><input type="checkbox" class="sd-Checkbox-input-1uFHv" value="" checked=""><svg class="sd-Checkbox-svg-2FBgn sd-Checkbox-path-in-3SMdQ" width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path class="sd-Checkbox-tick-1ln48" fill-rule="evenodd" clip-rule="evenodd" d="M10.7894 5.38611C11.1284 5.82205 11.0499 6.45033 10.614 6.7894L6.75681 9.7894C6.37596 10.0856 5.83791 10.0677 5.47766 9.74671L3.3348 7.83762C2.92244 7.47023 2.88597 6.83812 3.25335 6.42575C3.62073 6.01338 4.25285 5.97691 4.66522 6.3443L6.18628 7.69942L9.38607 5.21069C9.82202 4.87162 10.4503 4.95016 10.7894 5.38611Z" fill="white"></path></svg></span></span><span class="sd-Checkbox-label-187mu"><div class="sd-Checkbox-label-text-3hBVW" style="vertical-align: top;"><span>同步更新在线简历</span></div></span></label><div style="margin-top: 0px;"><div class="describe-GCCjupJ4ID"></div></div></div></div></div></div></div><div class="wrapper-GcTRtSPE6X" style="left: 700px; top: 32px;"><ul class="nav-zjN_DfSsJz"><li class="nav-item-AP2g32IlL8 nav-item-active-hEF7pjxs5Q"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>上传</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>上传</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>个人信息</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>个人信息</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>求职意向</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>求职意向</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>工作经历</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>工作经历</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>教育背景</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>教育背景</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>实习经历</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>实习经历</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>项目经验</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>项目经验</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>语言能力</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>语言能力</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>自我描述</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>自我描述</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>获奖经历</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>获奖经历</span></div></div></span></li><li class="nav-item-AP2g32IlL8"><span class="title-jNS1YArbIL"><div class="sd-LineClamp-clamp-wrapper-2A0PE"><div id="clamp-container" lang="" class="sd-LineClamp-clamp-container-2SOgg sd-LineClamp-text-clamp-3cTZj sd-LineClamp-text-left-2Q717" style="-webkit-line-clamp: 2;"><span>更新说明</span></div><div id="shadow-line-clamp" class="sd-LineClamp-shadow-container-1gQAS"><span>更新说明</span></div></div></span></li></ul></div></div><div class="error-message-UgAT5aZUGG"></div><div class="submitApply-s_IljbB0Og"><div class="sd-Tooltip-container-2B2OE"><button class="sd_global_focus_controller_class sd-Button-container-1cq0K sd-foundation-bold-body-secondary-1UKiw sd-Button-primary-Riulm sd-Button-lg-3bz1y btn-bg-color no-adaptive-tooltip" type="button"><span class="sd-Button-content-1Zgzx"><span>预览并提交</span></span></button></div></div></div></div></div></div></div></div></div></div><div class="footer-container-OdXtXkNqKa" style="background: rgb(20, 25, 51);"><div style="padding-top: 40px;"><div class="main-content-Xjvz9jbcWO"><div class="basic-info-dB86EjV5uU" style="order: -1; color: rgb(255, 255, 255); text-align: left; align-items: flex-start;"><span class="mgb8-_7jJiRSsbZ">© 2021-2022 公司名称</span><div><img class="public-security-icon-NRyimlPyhd" width="16" height="16" src="https://static-ats.mokahr.com/recruitment-web-client/images/publicSecurityIcon.png"><div class="license-text-nlwT5vIICg"><a href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=11010802024479" target="_blank">京公网安备 11010802024479号</a><a href="https://beian.miit.gov.cn" target="_blank">京ICP备15060035号-3</a></div></div></div></div></div><p class="powered-by-QQJ4wlsK8K"><span class="" style="display: inline-block; height: 0px; width: 0px;"></span></p></div></div></div><button class="button-WAkb5zsITq hidden-button-h20AieGNsD"><span class="sd-Icon-container-1EGHG sd-Icon-iconbackToTop-2RL3K back-top-icon-wILEaCyTvy" style="font-size: 16px;"></span></button></div></div><script>window.TurboApply = window.TurboApply || {};
+var $initData = document.getElementById('init-data');
+window.TurboApply.data = JSON.parse($initData.value);
+$initData.remove && $initData.remove();
+try {
+  localStorage.setItem('TY_DISTINCT_ID', window.TurboApply.data.org.id);
+} catch(e) {}
+
+window.MAGE_PUBLIC_PATH = 'https://static-ats.mokahr.com';
+</script><script crossorigin="anonymous" src="https://static-ats.mokahr.com/recruitment-web-client/javascripts/runtime-2fc5176797b16824838cab581ed76afa.js"></script><script crossorigin="anonymous" src="https://static-ats.mokahr.com/recruitment-web-client/javascripts/vendor-8317e05a65a1ddc0e33b557ffbd1538f.js"></script><script crossorigin="anonymous" src="https://static-ats.mokahr.com/recruitment-web-client/javascripts/recruitmentWeb-20261019-1741-eccf3-release.js"></script><div style="visibility: hidden; position: fixed; top: 0px; left: 0px; pointer-events: none; font-size: 14px;"><div>热招职位</div></div><script src="//cstaticdun-v6.126.net/load.min.js"></script><div class="sugar-portal"></div><div class="sugar-portal"></div><div class="sugar-portal"></div><style type="text/css">
+        .sd_global_focus_controller_class {
+          outline: none;
+        }
+      </style><div class="sugar-portal"></div><div class="sugar-portal"></div><div class="sugar-portal"></div><div class="sugar-portal"></div><div class="sugar-portal"></div><div class="sugar-portal"><span></span></div><div class="ReactModalPortal"></div></body><div id="immersive-translate-popup" style="all: initial"></div><div id="wsa-floatbar-host" style="color-scheme: initial !important; forced-color-adjust: initial !important; math-depth: initial !important; position-anchor: initial !important; text-size-adjust: initial !important; appearance: initial !important; color: initial !important; font: initial !important; font-palette: initial !important; font-synthesis: initial !important; position-area: initial !important; text-orientation: initial !important; text-rendering: initial !important; text-spacing-trim: initial !important; -webkit-font-smoothing: initial !important; -webkit-locale: initial !important; -webkit-text-orientation: initial !important; -webkit-writing-mode: initial !important; writing-mode: initial !important; zoom: initial !important; accent-color: initial !important; place-content: initial !important; place-items: initial !important; place-self: initial !important; alignment-baseline: initial !important; anchor-name: initial !important; anchor-scope: initial !important; animation-composition: initial !important; animation: initial !important; animation-trigger: initial !important; app-region: initial !important; aspect-ratio: initial !important; backdrop-filter: initial !important; backface-visibility: initial !important; background: initial !important; background-blend-mode: initial !important; baseline-shift: initial !important; baseline-source: initial !important; block-size: initial !important; border-block: initial !important; border: initial !important; border-radius: initial !important; border-collapse: initial !important; border-end-end-radius: initial !important; border-end-start-radius: initial !important; border-inline: initial !important; border-shape: initial !important; border-start-end-radius: initial !important; border-start-start-radius: initial !important; box-decoration-break: initial !important; box-shadow: initial !important; box-sizing: initial !important; break-after: initial !important; break-before: initial !important; break-inside: initial !important; buffered-rendering: initial !important; caption-side: initial !important; caret-animation: initial !important; caret-color: initial !important; caret-shape: initial !important; clear: initial !important; clip: initial !important; clip-path: initial !important; clip-rule: initial !important; color-interpolation: initial !important; color-interpolation-filters: initial !important; color-rendering: initial !important; columns: initial !important; column-fill: initial !important; gap: initial !important; rule-break: initial !important; rule: initial !important; rule-inset: initial !important; rule-visibility-items: initial !important; column-span: initial !important; contain: initial !important; contain-intrinsic-block-size: initial !important; contain-intrinsic-size: initial !important; contain-intrinsic-inline-size: initial !important; container: initial !important; content: initial !important; content-visibility: initial !important; corner-shape: initial !important; corner-block-end-shape: initial !important; corner-block-start-shape: initial !important; counter-increment: initial !important; counter-reset: initial !important; counter-set: initial !important; cursor: initial !important; cx: initial !important; cy: initial !important; d: initial !important; dominant-baseline: initial !important; dynamic-range-limit: initial !important; empty-cells: initial !important; field-sizing: initial !important; fill: initial !important; fill-opacity: initial !important; fill-rule: initial !important; filter: initial !important; flex: initial !important; flex-flow: initial !important; flex-line-count: initial !important; float: initial !important; flood-color: initial !important; flood-opacity: initial !important; frame-sizing: initial !important; grid: initial !important; grid-area: initial !important; height: initial !important; hyphenate-character: initial !important; hyphenate-limit-chars: initial !important; hyphens: initial !important; image-orientation: initial !important; image-rendering: initial !important; initial-letter: initial !important; inline-size: initial !important; inset-block: initial !important; inset-inline: initial !important; interactivity: initial !important; interest-delay: initial !important; interpolate-size: initial !important; isolation: initial !important; letter-spacing: initial !important; lighting-color: initial !important; line-break: initial !important; list-style: initial !important; margin-block: initial !important; margin: initial !important; margin-inline: initial !important; margin-trim: initial !important; marker: initial !important; mask: initial !important; mask-type: initial !important; math-shift: initial !important; math-style: initial !important; max-block-size: initial !important; max-height: initial !important; max-inline-size: initial !important; min-block-size: initial !important; min-height: initial !important; min-inline-size: initial !important; min-width: initial !important; mix-blend-mode: initial !important; object-fit: initial !important; object-position: initial !important; object-view-box: initial !important; offset: initial !important; opacity: initial !important; order: initial !important; orphans: initial !important; outline: initial !important; outline-offset: initial !important; overflow-anchor: initial !important; overflow-block: initial !important; overflow-clip-margin: initial !important; overflow-inline: initial !important; overflow-wrap: initial !important; overflow: initial !important; overlay: initial !important; overscroll-behavior-block: initial !important; overscroll-behavior-inline: initial !important; overscroll-behavior: initial !important; padding-block: initial !important; padding: initial !important; padding-inline: initial !important; page: initial !important; page-margin-safety: initial !important; page-orientation: initial !important; paint-order: initial !important; perspective: initial !important; perspective-origin: initial !important; pointer-events: initial !important; position-try: initial !important; position-visibility: initial !important; print-color-adjust: initial !important; quotes: initial !important; r: initial !important; reading-flow: initial !important; reading-order: initial !important; resize: initial !important; rotate: initial !important; ruby-align: initial !important; ruby-overhang: initial !important; ruby-position: initial !important; rule-overlap: initial !important; rx: initial !important; ry: initial !important; scale: initial !important; scroll-axis-lock: initial !important; scroll-behavior: initial !important; scroll-initial-target: initial !important; scroll-margin-block: initial !important; scroll-margin: initial !important; scroll-margin-inline: initial !important; scroll-marker-group: initial !important; scroll-padding-block: initial !important; scroll-padding: initial !important; scroll-padding-inline: initial !important; scroll-snap-align: initial !important; scroll-snap-stop: initial !important; scroll-snap-type: initial !important; scroll-target-group: initial !important; scroll-timeline: initial !important; scrollbar-color: initial !important; scrollbar-gutter: initial !important; scrollbar-width: initial !important; shape-image-threshold: initial !important; shape-margin: initial !important; shape-outside: initial !important; shape-rendering: initial !important; size: initial !important; speak: initial !important; stop-color: initial !important; stop-opacity: initial !important; stroke: initial !important; stroke-dasharray: initial !important; stroke-dashoffset: initial !important; stroke-linecap: initial !important; stroke-linejoin: initial !important; stroke-miterlimit: initial !important; stroke-opacity: initial !important; stroke-width: initial !important; tab-size: initial !important; table-layout: initial !important; text-align: initial !important; text-align-last: initial !important; text-anchor: initial !important; text-autospace: initial !important; text-box: initial !important; text-combine-upright: initial !important; text-decoration: initial !important; text-decoration-skip-ink: initial !important; text-emphasis: initial !important; text-emphasis-position: initial !important; text-fit: initial !important; text-indent: initial !important; text-justify: initial !important; text-overflow: initial !important; text-shadow: initial !important; text-transform: initial !important; text-underline-offset: initial !important; text-underline-position: initial !important; text-wrap: initial !important; timeline-scope: initial !important; timeline-trigger: initial !important; touch-action: initial !important; transform: initial !important; transform-box: initial !important; transform-origin: initial !important; transform-style: initial !important; transition: initial !important; translate: initial !important; trigger-scope: initial !important; user-select: initial !important; vector-effect: initial !important; vertical-align: initial !important; view-timeline: initial !important; view-transition-class: initial !important; view-transition-group: initial !important; view-transition-name: initial !important; view-transition-scope: initial !important; visibility: initial !important; border-spacing: initial !important; -webkit-box-align: initial !important; -webkit-box-decoration-break: initial !important; -webkit-box-direction: initial !important; -webkit-box-flex: initial !important; -webkit-box-ordinal-group: initial !important; -webkit-box-orient: initial !important; -webkit-box-pack: initial !important; -webkit-box-reflect: initial !important; -webkit-line-break: initial !important; -webkit-line-clamp: initial !important; -webkit-mask-box-image: initial !important; -webkit-rtl-ordering: initial !important; -webkit-ruby-position: initial !important; -webkit-tap-highlight-color: initial !important; -webkit-text-combine: initial !important; -webkit-text-decorations-in-effect: initial !important; -webkit-text-fill-color: initial !important; -webkit-text-security: initial !important; -webkit-text-stroke: initial !important; -webkit-user-drag: initial !important; white-space-collapse: initial !important; widows: initial !important; will-change: initial !important; window-drag: initial !important; word-break: initial !important; word-spacing: initial !important; x: initial !important; y: initial !important; position: fixed !important; width: max-content !important; max-width: calc(-20px + 100vw) !important; inset: 18px auto auto 1241px !important; z-index: 2147483000 !important; display: block !important;"></div></html>

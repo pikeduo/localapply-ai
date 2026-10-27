@@ -1,8 +1,50 @@
 // 复合控件适配只依赖本地 DOM；节点引用和网页值始终留在已授权页面内。
 (function (global) {
   'use strict';
-  const containers = '.form-item,.form-group,.field,.el-form-item,.ant-form-item,[role="group"],.date-control,.phone-control';
+  const containers = '.form-item,.form-group,.field,.el-form-item,.ant-form-item,[role="group"],.date-control,.phone-control,[class^="apply-field-"],[class*=" apply-field-"]';
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const selections = new WeakMap();
+
+  // 只识别上传页面使用的 Moka 下拉容器，不将普通带装饰的文本框升级为下拉。
+  function dropdown(el) { return el.matches?.('input') ? el.closest('[class^="sd-Select-container-"],[class*=" sd-Select-container-"]') : null; }
+
+  // Moka 有时将已选文本放在独立显示节点，搜索输入为空不能据此判定未选择。
+  function dropdownText(el) { return dropdown(el)?.querySelector('[class^="sd-Input-display-value-"]')?.textContent.trim() || el.value || ''; }
+
+  // 候选必须属于该输入的显式弹层或同一个下拉容器，禁止到全页任意点击相似文字。
+  function dropdownOptions(el) {
+    const owner = dropdown(el); if (!owner) return [];
+    const linked = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+    const root = linked ? el.getRootNode().getElementById?.(linked) : owner.closest('[class^="sd-Dropdown-container-"],[class*=" sd-Dropdown-container-"]');
+    return [...(root?.querySelectorAll('[role="option"],[class*="option-" i],[class*="menu-item-" i]') || [])].filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'
+      && node.getAttribute('aria-disabled') !== 'true' && !node.matches('button,input,a,[role="button"]') && !node.closest('button,a') && !node.querySelector('button,input,a,[role="button"],[role="option"],[class*="option-" i]'));
+  }
+
+  // 精确点选才登记本次选择证据；仅输入文字即使暂时显示相同也不能算填写成功。
+  async function fillDropdown(el, value, unit = '') {
+    const desired = String(value); selections.delete(el); el.focus(); el.click();
+    if (!el.readOnly && !dropdown(el).classList.contains('select')) {
+      // 搜索时保持弹层焦点，不能复用会立即 blur 的普通文本填写路径。
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, desired);
+      el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await sleep(60);
+      const found = dropdownOptions(el).filter((node) => node.textContent.trim() === desired || node.getAttribute('data-value') === desired || unit && new RegExp('^\\d+' + unit + '?$').test(node.textContent.trim()) && Number(node.textContent.trim().replace(unit, '')) === Number(desired));
+      if (found.length > 1) break;
+      if (found.length === 1) {
+        const text = found[0].textContent.trim(); found[0].click(); el.blur();
+        selections.set(el, { expected: desired, text }); return { ok: true };
+      }
+    }
+    el.blur(); return { ok: false, status: 'unsupported', reason: '下拉未出现属于此字段的唯一精确选项，请在网页选择' };
+  }
+
+  // 回读必须同时命中显示值和精确选择证据，受控组件清空或回退不会计为成功。
+  function dropdownAccepted(el, value) {
+    const selected = selections.get(el); const desired = String(value);
+    return !!selected && selected.expected === desired && [desired, selected.text].includes(dropdownText(el));
+  }
 
   // 单个子控件的显式提示优先于父字段标签，避免把“月”或国码当成独立语义。
   function slot(el) {
@@ -21,18 +63,22 @@
   function country(el) {
     const hint = [el.getAttribute('aria-label'), el.getAttribute('name')].join(' ');
     if (/区号|country.?code|dial.?code|^\s*\+\d{1,4}\s*$/i.test(hint)) return true;
+    if (dropdown(el) && el.closest('[class^="code-"]') && el.closest('[class^="apply-field-"]')) return true;
     const rows = el.tagName === 'SELECT' ? [...el.options].filter((option) => option.getAttribute('value') !== '') : [];
     return rows.length > 0 && rows.every((option) => /\+\d{1,4}/.test(option.textContent) && !/手机|电话/.test(option.textContent));
   }
 
   // 网站操作、安全及导航只返回固定原因，不读取账号、密码、验证码或控件实际值。
   function exclusion(el, label) {
-    const hint = [el.getAttribute('type'), el.getAttribute('autocomplete'), el.getAttribute('name'), el.getAttribute('id'), label].join(' ');
+    // new_password 是该站普通文本框的防补全提示，不等同标准密码控件。
+    const autocomplete = el.getAttribute('autocomplete');
+    const hint = [el.getAttribute('type'), autocomplete === 'new_password' ? '' : autocomplete, el.getAttribute('name'), el.getAttribute('id'), label].join(' ');
     if (/password|captcha|one-time-code|验证码|密码|csrf|token|cc-number|cc-csc|信用卡|支付卡|登录账号|登录帐号/i.test(hint)) return { category: 'security_control', reason: '安全或登录控件，禁止采集和填写' };
     const popup = el.closest('[role="dialog"],.calendar,.ant-picker-panel,.el-picker-panel');
     const owner = popup?.id ? el.getRootNode().querySelector('[aria-controls="' + CSS.escape(popup.id) + '"][aria-haspopup="dialog"]') : null;
     if (owner && (owner.readOnly || ['date','month'].includes(owner.type))) return { category: 'compound_part', reason: '绑定弹层的内部候选控件，不单独创建资料字段' };
     if (/同步.*(?:在线)?简历|更新在线简历|我已阅读|同意|协议|隐私政策|确认已阅读|复制简历内容/.test(label)) return { category: 'site_action', reason: '网站行为或协议选项，由用户自行操作' };
+    if (label === '至今' && el.closest('.month-range-select')) return { category: 'compound_part', reason: '日期范围的至今开关，请在网页手动选择' };
     if (el.matches('button,input[type="button"],input[type="submit"],input[type="reset"]') && el.getAttribute('role') !== 'combobox') return { category: 'navigation_control', reason: '导航或提交按钮，不作为资料字段' };
     if (/搜索|站内检索|订阅邮件/.test(label) || el.getAttribute('type') === 'search') return { category: 'site_action', reason: '搜索或订阅控件，不属于本次申请资料' };
     return null;
@@ -41,13 +87,25 @@
   // 只在局部同一语义容器中合并；不跨整个表单或多段经历拼接日期/电话。
   function groups(nodes, labelOf) {
     const result = new Map(); const handled = new Set();
+    // 已知年月范围按页面明确的“年/月、年/月”顺序拆为两项，绝不混合不同记录。
+    const ranges = new Set(nodes.map((el) => el.closest('.month-range-select')).filter(Boolean));
+    for (const container of ranges) {
+      const peers = nodes.filter((node) => container.contains(node) && slot(node));
+      const sequence = peers.map(slot).join(',');
+      if (!['year,month', 'year,month,year,month'].includes(sequence)) continue;
+      for (let index = 0; index < peers.length; index += 2) {
+        const parts = { year: peers[index], month: peers[index + 1] };
+        const group = { kind: 'date', parts, anchor: parts.year, label: peers.length === 2 ? labelOf(parts.year) : index === 0 ? '开始日期' : '结束日期', type: 'month', layout: 'date:year-month' };
+        Object.values(parts).forEach((node) => { result.set(node, group); handled.add(node); });
+      }
+    }
     for (const el of nodes) {
       if (handled.has(el) || (!slot(el) && !country(el))) continue;
       const container = el.closest(containers) || el.parentElement;
       if (!container || container.matches('form,body,html')) continue;
       const peers = nodes.filter((node) => container.contains(node) && (node.closest(containers) || node.parentElement) === container);
       if (peers.length > 8) continue;
-      const heading = global.FieldMatchingEngine.redact(container.querySelector(':scope > label,:scope > .label,:scope > legend,:scope > .el-form-item__label,:scope > .ant-form-item-label')?.textContent || container.getAttribute('aria-label') || '');
+      const heading = global.FieldMatchingEngine.redact(container.querySelector(':scope > label,:scope > .label,:scope > legend,:scope > .el-form-item__label,:scope > .ant-form-item-label,:scope > [class^="title-"]')?.textContent || container.getAttribute('aria-label') || '');
       const parts = {};
       for (const node of peers) { const key = slot(node); if (key) { if (parts[key]) parts.ambiguous = true; parts[key] = node; } }
       let group = null;
@@ -90,10 +148,13 @@
   function phoneValue(group, value) {
     const text = String(value).replace(/[\s()-]/g, '').replace(/^00/, '+');
     const codes = [...group.parts.country.options || []].map((option) => /\+\d{1,4}/.exec(option.textContent)?.[0] || (/^\+\d{1,4}$/.test(option.value) ? option.value : '')).filter(Boolean);
+    // 自定义国码只复用网页已明确选择的区号，未知或不同区号交用户选择，禁止猜测。
+    if (dropdown(group.parts.country)) { const current = dropdownText(group.parts.country); if (/^\+\d{1,4}$/.test(current)) codes.push(current); }
     let code = ''; let number = text;
     if (text.startsWith('+')) { code = [...new Set(codes)].sort((a, b) => b.length - a.length).find((item) => text.startsWith(item)) || ''; number = text.slice(code.length); }
     else if (/^1[3-9]\d{9}$/.test(text) && codes.includes('+86')) code = '+86';
     if (!code || !/^\d{5,15}$/.test(number) || (code === '+86' && !/^1[3-9]\d{9}$/.test(number))) return null;
+    if (dropdown(group.parts.country)) return code === dropdownText(group.parts.country) ? { country: code, number } : null;
     const candidates = [...group.parts.country.options || []].filter((option) => !option.disabled && (option.value === code || /\+\d{1,4}/.exec(option.textContent)?.[0] === code));
     return candidates.length === 1 ? { country: candidates[0].value, number } : null;
   }
@@ -132,8 +193,9 @@
   function read(item) {
     if (!item.compound) return item.el.isContentEditable ? item.el.textContent : item.el.value;
     const parts = item.compound.parts; const values = Object.fromEntries(Object.entries(parts).map(([key, el]) => {
-      const selected = el.selectedOptions?.[0]?.textContent.trim(); const numeric = /^(\d+)[年月日]?$/.exec(selected || '');
-      return [key, !el.value ? '' : item.compound.kind === 'address' ? selected || el.value : item.compound.kind === 'date' && numeric ? numeric[1] : el.value];
+      const raw = dropdown(el) ? dropdownText(el) : el.value;
+      const selected = el.selectedOptions?.[0]?.textContent.trim(); const numeric = /^(\d+)[年月日]?$/.exec(selected || raw || '');
+      return [key, !raw ? '' : item.compound.kind === 'address' ? selected || raw : item.compound.kind === 'date' && numeric ? numeric[1] : raw];
     }));
     if (item.compound.kind === 'phone') return values.number ? (parts.country.selectedOptions?.[0]?.textContent.match(/\+\d{1,4}/)?.[0] || values.country) + values.number : '';
     if (!Object.values(values).some(Boolean)) return '';
@@ -144,11 +206,15 @@
   function accepted(item, value) {
     const next = plan(item, value); if (next.error) return false;
     if (!item.compound) return item.el.value === next.value;
-    return Object.entries(item.compound.parts).every(([key, el]) => el.isConnected && el.getAttribute('aria-invalid') !== 'true' && el.validity?.valid !== false && (el.tagName === 'SELECT' ? optionFor(el, next.parts[key], { year: '年', month: '月', day: '日' }[key])?.value === el.value : el.value === next.parts[key]));
+    return Object.entries(item.compound.parts).every(([key, el]) => el.isConnected && el.getAttribute('aria-invalid') !== 'true' && el.validity?.valid !== false && (el.tagName === 'SELECT' ? optionFor(el, next.parts[key], { year: '年', month: '月', day: '日' }[key])?.value === el.value : dropdown(el) ? dropdownAccepted(el, next.parts[key]) || dropdownText(el) === next.parts[key] : el.value === next.parts[key]));
   }
 
   // 子控件通过原生 setter 和事件进入框架；先校验全部静态选项，避免半填日期。
   async function setPart(el, value, key) {
+    if (dropdown(el)) {
+      if (dropdownText(el) === String(value)) return true;
+      return (await fillDropdown(el, value, { year: '年', month: '月', day: '日' }[key] || '')).ok;
+    }
     if (el.tagName === 'SELECT') {
       const option = optionFor(el, value, { year: '年', month: '月', day: '日' }[key]);
       if (!option) return false;
@@ -190,5 +256,5 @@
     }
     return { ok: true };
   }
-  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill };
+  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, dropdown, dropdownText, dropdownOptions, fillDropdown, dropdownAccepted };
 })(globalThis);

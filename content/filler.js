@@ -238,7 +238,9 @@
   async function fillElement(el, value, ctx) {
     ctx = ctx || {};
     if (!el) return { ok: false, reason: '元素不存在' };
-    if (/^(password|hidden|submit|reset|button|file)$/i.test(el.getAttribute('type') || '') || /password|captcha|one-time-code|验证码|密码/i.test([el.name, el.id, el.getAttribute('autocomplete'), el.getAttribute('aria-label')].join(' '))) return { ok: false, reason: '认证或动作控件不允许自动处理' };
+    // Moka 普通输入使用 new_password；仍以真实类型、名称及标准密码提示拦截认证控件。
+    const autocomplete = el.getAttribute('autocomplete');
+    if (/^(password|hidden|submit|reset|button|file)$/i.test(el.getAttribute('type') || '') || /password|captcha|one-time-code|验证码|密码/i.test([el.name, el.id, autocomplete === 'new_password' ? '' : autocomplete, el.getAttribute('aria-label')].join(' '))) return { ok: false, reason: '认证或动作控件不允许自动处理' };
     const kind = ctx.inputType || (el.tagName === 'TEXTAREA' ? 'textarea' : el.tagName === 'SELECT' ? 'select' : (el.getAttribute('type') || 'text').toLowerCase());
     if (value == null || value === '') return { ok: false, reason: '档案中该字段为空' };
     if (!ctx.radios && (kind === 'radio' || kind === 'checkbox')) {

@@ -170,7 +170,9 @@
       const type = (el.getAttribute('type') || '').toLowerCase();
       if (el.tagName === 'INPUT') {
         if (['hidden', 'password', 'submit', 'button', 'reset', 'image', 'file'].includes(type)) continue;
-        if (/password|captcha|one-time-code|验证码|密码/i.test([el.name, el.id, el.getAttribute('autocomplete'), el.getAttribute('aria-label')].join(' '))) continue;
+        // 兼容普通资料框的非标准防补全提示，保留真实密码与验证码过滤。
+        const autocomplete = el.getAttribute('autocomplete');
+        if (/password|captcha|one-time-code|验证码|密码/i.test([el.name, el.id, autocomplete === 'new_password' ? '' : autocomplete, el.getAttribute('aria-label')].join(' '))) continue;
       }
       if (el.disabled) continue;
       if (!isVisible(el)) continue;
@@ -418,6 +420,8 @@
           case 'learning:scan': {
             if (msg.authorize === true && msg.expectedUrl !== location.href) throw new Error('页面已导航，请重新授权扫描');
             const snapshot = globalThis.LocalApplyPageScanner.scan(msg.authorize === true);
+            // 完成标记与结构元数据分开，AI 契约不会接收网页输入值或完成状态。
+            snapshot.completion = globalThis.LocalApplyPageScanner.completion();
             if (msg.authorize === true) { authorized = true; authorizedUrl = location.href; detect(); }
             sendResponse({ ok: true, snapshot }); return;
           }

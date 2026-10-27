@@ -98,8 +98,12 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   // 完成响应后串行落盘，避免记录高频轮询或消息 payload。
   function sendResponse(response, logError) {
     const count = response?.rows?.length ?? response?.data?.items?.length;
-    if (!quiet) diagnostics.append(operation, { level: response?.ok ? 'INFO' : 'ERROR', durationMs: Date.now() - started, count,
+    // 岗位缺失和控件拒绝虽可正常返回，仍需警告日志，便于区分业务失败与通信成功。
+    const outcome = msg?.type === 'learning:fill' ? response?.rows?.find((row) => row.field.scanId === msg.scanId) : null;
+    const incomplete = response?.ok && (msg?.type === 'jobs:scan' && !response.recognized || outcome && outcome.status !== 'success');
+    if (!quiet) diagnostics.append(operation, { level: response?.ok ? incomplete ? 'WARNING' : 'INFO' : 'ERROR', durationMs: Date.now() - started, count,
       ...(response?.rows ? { success: response.rows.filter((row) => row.status === 'success').length, failed: response.rows.filter((row) => row.status === 'failed').length } : {}),
+      ...(incomplete ? { error: new Error(msg.type === 'jobs:scan' ? '缺少岗位元数据' : outcome.status === 'unsupported' ? '控件格式暂不支持' : outcome.status === 'needs_confirmation' ? '网页内容需要确认' : '网页填写校验失败') } : {}),
       ...(!response?.ok ? { error: logError || response?.error } : {}) }).catch(() => {});
     respond(response);
   }

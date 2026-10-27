@@ -12,7 +12,9 @@
   // 过滤认证、搜索和协议控件，不读取它们的值；节点不可见或脱离文档时也不能填写。
   function allowed(el) {
     const type = (el.getAttribute('type') || '').toLowerCase();
-    const hint = [type, el.getAttribute('autocomplete'), el.getAttribute('name'), el.getAttribute('id'), el.getAttribute('aria-label')].join(' ');
+    // Moka 在普通资料框使用非标准 new_password 禁用补全；真实密码类型/名称仍须排除。
+    const autocomplete = el.getAttribute('autocomplete');
+    const hint = [type, autocomplete === 'new_password' ? '' : autocomplete, el.getAttribute('name'), el.getAttribute('id'), el.getAttribute('aria-label')].join(' ');
     return el.isConnected && !el.disabled && el.getAttribute('aria-disabled') !== 'true'
       && !['hidden', 'password', 'file', 'submit', 'reset', 'image', 'search'].includes(type) && (type !== 'button' || el.getAttribute('role') === 'combobox')
       && !/password|captcha|one-time-code|验证码|密码|验证口令|csrf|token/i.test(hint)
@@ -25,12 +27,22 @@
     const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map((id) => root.getElementById?.(id)?.textContent || '').join(' ');
     const explicit = el.id ? root.querySelector('label[for="' + CSS.escape(el.id) + '"]')?.textContent : '';
     const wrap = el.closest('label')?.textContent;
-    const nearby = el.closest('.form-item,.form-group,.field,.el-form-item,.ant-form-item')?.querySelector('label,.label,.el-form-item__label,.ant-form-item-label')?.textContent;
-    return M.redact(explicit || labelled.trim() || nearby || el.getAttribute('aria-label') || wrap || el.getAttribute('name') || el.getAttribute('placeholder'));
+    const nearby = el.closest('.form-item,.form-group,.field,.el-form-item,.ant-form-item,[class^="apply-field-"],[class*=" apply-field-"]')?.querySelector(':scope > [class^="title-"],label,.label,.el-form-item__label,.ant-form-item-label')?.textContent;
+    return M.redact(explicit || labelled.trim() || nearby || el.getAttribute('aria-label') || wrap || el.getAttribute('name') || el.getAttribute('placeholder')).replace(/\s*[*＊]+\s*$/, '');
   }
 
   // 只读取分组标题，不读取经历内容；识别学历、经历种类及重复区块序号。
   function context(el) {
+    // Moka 的模块标题和记录容器使用哈希类名，只取模块标题，不读取记录正文。
+    const block = el.closest('[class^="apply-block-"],[class*=" apply-block-"]');
+    if (block) {
+      const group = M.redact(block.querySelector(':scope > [class^="blockTitle-"] [class^="text-"]')?.textContent);
+      const record = el.closest('[class^="apply-fields-"],[class*=" apply-fields-"]');
+      const records = [...block.children].filter((node) => node.matches('[class^="apply-fields-"],[class*=" apply-fields-"]'));
+      const kind = /教育|学历/.test(group) ? 'education' : /实习/.test(group) ? 'internship' : /工作经历/.test(group) ? 'employment' : /项目/.test(group) ? 'project' : /获奖/.test(group) ? 'award' : '';
+      const probe = label(el); const degree = /第一学历/.test(probe) ? 'first' : /最高学历/.test(probe) ? 'highest' : '';
+      return { group, kind, degree, index: Math.max(0, records.indexOf(record)) };
+    }
     const selectors = 'fieldset,[data-experience],[role="group"],.experience,.education-item,.work-item,.project-item,.form-section';
     const containers = []; let parent = el.parentElement;
     while (parent && parent !== document.body) { if (parent.matches(selectors)) containers.push(parent); parent = parent.parentElement; }
@@ -90,7 +102,7 @@
       const rawType = (el.getAttribute('type') || 'text').toLowerCase();
       const members = ['radio', 'checkbox'].includes(rawType) && el.name ? found.filter((node) => node.name === el.name && node.getAttribute('type') === rawType && node.closest('form,fieldset,[role="group"]') === el.closest('form,fieldset,[role="group"]')) : [el];
       members.forEach((member) => used.add(member));
-      const type = compound?.type || (el.getAttribute('role') === 'combobox' ? 'combobox' : el.isContentEditable ? 'contenteditable'
+      const type = compound?.type || (el.getAttribute('role') === 'combobox' || A.dropdown(el) ? 'combobox' : el.isContentEditable ? 'contenteditable'
         : el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : ['email','tel','number','url','date','month','datetime-local','radio','checkbox'].includes(rawType) ? rawType : 'text');
       let text = compound?.label || label(el);
       if (members.length > 1) text = M.redact(el.closest('fieldset,[role="group"],.form-item,.form-group')?.querySelector('legend,:scope > label,.label')?.textContent || text);
@@ -118,13 +130,26 @@
     return registry.get(scanId);
   }
 
-  // 只有用户主动保存或核对填写时才读取该控件；不批量收集网页个人值。
+  // 主动保存/核对时读取单项；主动扫描仅在本页调用它判空，不传出实际值。
   function readValue(item) {
     if (item.compound) return A.read(item);
+    if (A.dropdown(item.el)) return A.dropdownText(item.el);
     if (item.field.type === 'radio') return item.members.find((el) => el.checked)?.value || '';
     if (item.field.type === 'checkbox') return item.members.length === 1 ? item.el.checked : item.members.filter((el) => el.checked).map((el) => el.value);
     if (item.field.type === 'combobox' && !('value' in item.el)) return item.el.textContent.trim();
     return item.el.isContentEditable ? item.el.textContent : item.el.value;
+  }
+
+  // 用户主动扫描后仅读取是否已有内容；只返回布尔标记，不传出网页实际值。
+  function completion() {
+    if (!granted || currentUrl !== location.href) throw new Error('请先主动授权扫描当前招聘页面');
+    return [...registry.values()].map((item) => {
+      const value = readValue(item);
+      let present = Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined && value !== false && String(value).trim() !== '' && !/^(请选择|请选择一项|Select|Please select)$/i.test(String(value).trim());
+      if (item.compound?.kind === 'date') present = present && !A.plan(item, value).error;
+      if (A.dropdown(item.el) && !item.compound) present = present && (!!A.dropdown(item.el).querySelector('[class^="sd-Input-display-value-"]')?.textContent.trim() || A.dropdownAccepted(item.el, value));
+      return { scanId: item.field.scanId, present: present && item.el.getAttribute('aria-invalid') !== 'true' && item.el.validity?.valid !== false };
+    });
   }
 
   // 只通知结构变化，不向后台发送值；导航会撤销当前文档授权。
@@ -141,5 +166,5 @@
 
   // 撤销只清理本页内存，不删除用户资料或已确认规则。
   function revoke() { granted = false; registry.clear(); lastSignature = ''; }
-  global.LocalApplyPageScanner = { scan, record, readValue, revoke, documentId };
+  global.LocalApplyPageScanner = { scan, record, readValue, completion, revoke, documentId };
 })(globalThis);
