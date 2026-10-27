@@ -5,7 +5,7 @@
   const directFill = document.body.dataset.fillMode === 'direct';
   const labels = { matched: '已匹配', needs_confirmation: '需要确认', missing_value: '缺少资料', filling: '正在填写', success: '填写成功', failed: '填写失败', unsupported: '控件暂不支持' };
   let current = null; let aiPreview = null; let fillIds = []; let busy = false; let rulesView = null; let selectionInitialized = false;
-  let generation = 0; let polling = false; let activity = 0;
+  let generation = 0; let polling = false; let activity = 0; let pageActive = true;
   const drafts = new Map(); const selected = new Set(); const aiSelected = new Set();
   // DOM 元素只通过 textContent 显示不可信标签和模型内容。
   function node(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
@@ -92,13 +92,13 @@
     details.append(name, type, group, aliases, options, source, entry, value, read, preview, review); return details;
   }
   // 卡片点击即执行；旧界面继续使用预览，不改变模型建议或资料保存流程。
-  async function prepareFill(ids) {
+  async function prepareFill(ids, includeDynamic = false) {
     fillIds = ids.filter((id) => current.rows.some((row) => row.field.scanId === id && row.target && row.value !== null && row.value !== '' && (!directFill || unfinished(row))));
     if (!fillIds.length) {
       if (directFill) { $('smartStatus').textContent = `填写完成：本次成功填入 0 个字段，剩余 ${current.rows.filter(unfinished).length} 个未完成；请为待处理项选择来源或补充资料。`; return; }
       throw new Error('没有可填写的已选字段，请先选择来源或补充资料');
     }
-    if (directFill) { await fillSelected([...fillIds], $('smartRememberAfter').checked); return; }
+    if (directFill) { await fillSelected([...fillIds], $('smartRememberAfter').checked, includeDynamic); return; }
     $('smartFillPayload').textContent = JSON.stringify(current.rows.filter((row) => fillIds.includes(row.field.scanId)).map((row) => ({ 网页字段: row.field.label, 分组: row.field.group, 来源: current.sources.find((source) => source.fieldId === row.target.fieldId && source.entryId === row.target.entryId)?.label, 实际值: row.value })), null, 2);
     $('smartFillConsent').checked = false; $('smartRememberAfter').checked = false; $('smartFillReview').hidden = false;
   }
@@ -207,17 +207,49 @@
   $('smartFillAll').addEventListener('click', () => task(async () => {
     if (directFill) { await ensureCurrent(); update(await request('prepareRecords', { confirmed: true })); current.rows.filter((row) => row.source === 'record' && row.status === 'matched').forEach((row) => selected.add(row.field.scanId)); }
     else if (!current) throw new Error('请先扫描页面');
-    await prepareFill([...selected]);
+    await prepareFill([...selected], directFill);
   }));
   $('smartFillCancel')?.addEventListener('click', () => { fillIds = []; $('smartFillReview').hidden = true; });
-  // 批量和单项共用原填写及回读链路；自动模式只在按钮点击后传递执行许可。
-  async function fillSelected(ids, remember) {
-    let success = 0; let failed = 0; let pending = 0;
-    for (const scanId of ids) {
-      const card = [...document.querySelectorAll('.smart-row')].find((node) => node.dataset.scanId === scanId); if (card) { card.dataset.status = 'filling'; card.querySelector('h4').append(document.createTextNode(' · 正在填写')); }
-      update(await request('fill', { scanId, confirmed: true }));
-      const status = current.rows.find((row) => row.field.scanId === scanId)?.status;
-      if (status === 'success') { success++; if (remember) update(await request('remember', { scanId, confirmed: true })); } else if (status === 'needs_confirmation') pending++; else failed++;
+  // 切到其他浏览器标签时暂停后续写入，返回原页继续；换档案/撤销立即释放等待，不抢用户焦点。
+  async function waitForPage() {
+    if (!directFill) return;
+    // tabs.active 同样适用于不派发 visibilitychange 的浏览器窗口，始终查询卡片绑定的标签。
+    pageActive = (await chrome.tabs.get(globalThis.LocalApplyPanelContext.id)).active;
+    if (pageActive && !document.hidden) return;
+    const started = generation;
+    $('smartStatus').textContent = '已暂停后续填写，当前结果已保留；回到此页面后自动继续。';
+    await new Promise((resolve) => {
+      const resume = () => { if (pageActive && !document.hidden || started !== generation) { document.removeEventListener('visibilitychange', resume); document.removeEventListener('localapply:page-activation', resume); document.removeEventListener('localapply:learning-reset', resume); resolve(); } };
+      document.addEventListener('visibilitychange', resume); document.addEventListener('localapply:page-activation', resume); document.addEventListener('localapply:learning-reset', resume); resume();
+    });
+    if (started !== generation) throw new Error('档案或页面已变化，已停止填写');
+    // 返回时再次经过后台文档、URL、档案及有效期校验，不沿用过期执行许可。
+    update(await request('session'));
+    $('smartStatus').textContent = '已回到原页面，正在继续填写…';
+  }
+  // 批量只补本次新启用的确定字段；每项最多尝试一次，单项填写不扩展队列，失败项不无限重试。
+  async function fillSelected(ids, remember, includeDynamic = false) {
+    let success = 0; let failed = 0; let pending = 0; let queue = ids; const attempted = new Set(); const known = new Set(current.rows.map((row) => row.field.scanId));
+    for (let round = 0; queue.length && round < 4 && attempted.size < 500; round++) {
+      for (const scanId of queue) {
+        await waitForPage();
+        if (attempted.has(scanId)) continue; attempted.add(scanId);
+        const row = current.rows.find((row) => row.field.scanId === scanId); if (!row || directFill && !unfinished(row)) continue;
+        const card = [...document.querySelectorAll('.smart-row')].find((node) => node.dataset.scanId === scanId); if (card) { card.dataset.status = 'filling'; card.querySelector('h4').append(document.createTextNode(' · 正在填写')); }
+        update(await request('fill', { scanId, confirmed: true }));
+        const status = current.rows.find((row) => row.field.scanId === scanId)?.status;
+        if (status === 'success') { success++; if (remember) update(await request('remember', { scanId, confirmed: true })); } else if (status === 'needs_confirmation') pending++; else failed++;
+      }
+      queue = [];
+      if (!includeDynamic) break;
+      await waitForPage(); update(await request('session'));
+      const discovered = current.rows.filter((row) => !known.has(row.field.scanId));
+      if (!discovered.length) break;
+      update(await request('prepareRecords', { confirmed: true }));
+      for (const row of current.rows) {
+        if (!known.has(row.field.scanId) && row.status === 'matched' && unfinished(row) && !attempted.has(row.field.scanId)) queue.push(row.field.scanId);
+        known.add(row.field.scanId);
+      }
     }
     $('smartStatus').textContent = `填写完成：成功填入 ${success} 个字段，失败/不支持 ${failed}，需确认 ${pending}${directFill ? `，剩余 ${current.rows.filter(unfinished).length} 个未完成` : ''}。未提交申请。${current.notice || ''}`;
   }
@@ -228,12 +260,13 @@
   $('smartRules').addEventListener('click', () => task(showRules));
   $('smartUndo').addEventListener('click', () => task(async () => { if (confirm('确认撤销最近一次规则操作？')) { await request('undoRule', { revision: rulesView.revision, confirmed: true }); await showRules(); } }));
   $('smartExportV3').addEventListener('click', () => task(async () => { const result = await request('exportV3'); const url = URL.createObjectURL(new Blob([JSON.stringify(result.backup, null, 2)], { type: 'application/json' })); const link = node('a'); link.href = url; link.download = 'localapply-compatible-v3.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }));
-  // 档案/标签变化清空旧来源；卡片可点击重扫，旧界面继续要求主动授权。
-  function clear() { generation++; current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); if ($('smartPageConsent')) $('smartPageConsent').checked = false; $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '点击自动填写，使用当前档案匹配网页字段' : '请选择当前招聘页并主动授权扫描'; }
-  $('profileSel').addEventListener('change', clear); chrome.tabs.onActivated.addListener(clear);
+  // 悬浮卡片绑定原文档，切标签保留扫描与草稿；旧侧栏跟随活动标签，换档案仍须清空。
+  function clear() { generation++; document.dispatchEvent(new Event('localapply:learning-reset')); current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); if ($('smartPageConsent')) $('smartPageConsent').checked = false; $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '点击自动填写，使用当前档案匹配网页字段' : '请选择当前招聘页并主动授权扫描'; }
+  $('profileSel').addEventListener('change', clear);
+  chrome.tabs.onActivated.addListener((info) => { if (!directFill) clear(); else if (globalThis.LocalApplyPanelContext) { pageActive = info.tabId === globalThis.LocalApplyPanelContext.id; document.dispatchEvent(new Event('localapply:page-activation')); } });
   // 后台观察只在未编辑时重绘；展开资料编辑器后保留 DOM，避免手填内容使读取按钮消失。
   setInterval(async () => {
-    if (!current || busy || polling || $('tab-smart').hidden || document.querySelector('.smart-editor[open]') || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
+    if (!current || busy || polling || !pageActive || document.hidden || $('tab-smart').hidden || document.querySelector('.smart-editor[open]') || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
     const id = current.sessionId; const startedActivity = activity; polling = true;
     try {
       const view = await request('session');

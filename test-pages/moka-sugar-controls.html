@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成 Moka 控件回归</title>
+<style>body{font:15px system-ui;margin:24px;max-width:900px}.apply-block-synthetic{padding:18px;border:1px solid #ddd;margin:15px 0}.apply-fields-synthetic{border-top:1px solid #ddd;padding:12px}.apply-field-synthetic{margin:12px 0}.title-synthetic{margin-bottom:5px}input{padding:8px;width:170px}.month-range-select{display:flex;gap:6px}.sd-Dropdown-dropdown-synthetic{position:fixed;top:15px;left:20px;z-index:999999;background:white;border:1px solid #aaa;padding:12px;max-height:400px;overflow:auto}.sd-Menu-container-synthetic,.sd-Select-common-item-synthetic{padding:8px;cursor:pointer}.sd-basic-year-container-synthetic{display:grid;grid-template-columns:repeat(4,80px)}.sd-basic-year-wrapper-synthetic{padding:12px;cursor:pointer}.sd-basic-disabled-synthetic,.sd-Menu-disabled-synthetic{opacity:.4}.sd-basic-selector-synthetic{display:flex;gap:16px;margin:10px}td{padding:9px;cursor:pointer}[hidden]{display:none!important}</style></head>
+<body><h1>合成岗位申请</h1><form id="application"></form><button type="button" id="rerender">重新渲染已确认状态</button>
+<script>
+  const params = new URLSearchParams(location.search); const mode = params.get('mode') || 'month';
+  window.acceptedControls = {}; window.optionClicks = 0; window.submissions = 0; window.rejectedClicks = 0;
+  const renderers = []; let activePopup;
+  // 夹具只重现公开组件的类名和事件，不加载岗位页脚本或真实个人信息。
+  function block(title) { const node = document.createElement('section'); node.className = 'apply-block-synthetic'; node.innerHTML = '<div class="blockTitle-synthetic"><span class="text-synthetic"></span></div>'; node.querySelector('span').textContent = title; application.append(node); return node; }
+  // 同一模块可有多条记录，标题与输入值严格分离。
+  function record(parent) { const node = document.createElement('div'); node.className = 'apply-fields-synthetic'; parent.append(node); return node; }
+  // 使用上传页面的字段外壳，扫描不得依赖夹具专用 ID。
+  function field(parent, title) { const node = document.createElement('div'); node.className = 'apply-field-synthetic'; node.innerHTML = '<div class="title-synthetic"></div>'; node.firstChild.textContent = title; parent.append(node); return node; }
+  // 打开新 portal 会关闭旧弹层，多个同时出现的弹层专门用于验证拒绝猜测。
+  function openPopup(popup) { if (activePopup) activePopup.hidden = true; activePopup = popup; popup.hidden = false; }
+  // 默认菜单没有 ARIA/option 类；关键词被多个 span 包裹，真正 click 处理在菜单项上。
+  function select(parent, id, placeholder, values, searchable = false, custom = false) {
+    const root = document.createElement('div'); root.className = 'sd-Dropdown-container-synthetic';
+    root.innerHTML = '<label class="sd-Input-container-synthetic sd-Select-container-synthetic"><span class="decorative sd-Input-display-value-synthetic"></span><input autocomplete="nope"></label>'; parent.append(root);
+    const input = root.querySelector('input'); input.id = id; input.placeholder = placeholder; if (!searchable) root.querySelector('label').classList.add('select');
+    const popup = document.createElement('div'); popup.className = 'sd-Dropdown-dropdown-synthetic'; popup.hidden = true; popup.innerHTML = '<div class="sd-Select-menu-synthetic"></div>'; document.body.append(popup);
+    let search = ''; let timer;
+    // 重新渲染只认页面已接受的 state，临时输入值不能冒充已选项。
+    const render = () => { root.querySelector('span').textContent = acceptedControls[id] || ''; if (document.activeElement !== input) input.value = ''; }; renderers.push(render);
+    // 异步搜索结果使用同一个 portal，不允许从别的字段拿相同候选。
+    const options = () => {
+      popup.firstChild.replaceChildren();
+      const candidates = mode === 'duplicate' ? [...values, ...values] : values;
+      for (const value of candidates.filter((value) => !searchable || value.includes(search))) {
+        const item = document.createElement('div'); item.className = custom ? 'sd-Select-common-item-synthetic' : 'sd-Menu-container-synthetic';
+        const hit = document.createElement('div'); if (custom) hit.className = 'school-choice-synthetic';
+        const label = document.createElement('span'); label.setAttribute('data-key', 'sugar.select.label'); const prefix = document.createElement('span'); prefix.textContent = value.slice(0, 2); const suffix = document.createElement('span'); suffix.textContent = value.slice(2); label.append(prefix, suffix); hit.append(label); item.append(hit); popup.firstChild.append(item);
+        // 复现真实菜单标题旁的说明/图标；这些附加文字不能混入要比较的正式选项标签。
+        if (['feedback', 'equivalent-duplicate'].includes(mode)) {
+          if (custom) { label.removeAttribute('data-key'); label.className = 'sd-Menu-title-synthetic'; }
+          const note = document.createElement('span'); note.className = 'sd-Menu-sub-title-synthetic'; note.textContent = ' · 合成候选说明'; hit.append(note);
+        }
+        if (mode === 'disabled') item.classList.add('sd-Menu-disabled-synthetic');
+        // 自定义项事件挂在内部节点，点击没有 handler 的外层不能提交。
+        (custom ? hit : item).addEventListener('click', () => { optionClicks++; if (mode === 'disabled') { rejectedClicks++; return; } clearTimeout(timer); if (mode !== 'rejected') acceptedControls[id] = value; input.value = ''; search = ''; popup.hidden = true; render(); setTimeout(render, 180); document.dispatchEvent(new Event('synthetic-selection')); });
+      }
+    };
+    input.addEventListener('click', () => { if (!popup.hidden) { popup.hidden = true; return; } options(); openPopup(popup); if (mode === 'ambiguous') { const decoy = popup.cloneNode(true); document.body.append(decoy); } });
+    input.addEventListener('input', () => { if (!searchable) return; search = input.value; clearTimeout(timer); timer = setTimeout(() => { options(); openPopup(popup); }, mode === 'feedback' ? 400 : 90); });
+    input.addEventListener('blur', () => { input.value = ''; setTimeout(() => { popup.hidden = true; render(); }, 40); });
+    return input;
+  }
+  // 日历只由 mousedown 打开；年/月导航与真正 onChange 是不同事件。
+  function calendar(parent) {
+    const host = field(parent, '出生日期 (年龄)'); host.classList.add('day_info-synthetic');
+    host.insertAdjacentHTML('beforeend', '<div class="sd-Dropdown-container-synthetic"><label class="sd-Input-container-synthetic day_info"><input id="birth" readonly placeholder="出生日期 (年龄)"></label></div>');
+    const input = host.querySelector('input'); const popup = document.createElement('div'); popup.className = 'sd-Dropdown-dropdown-synthetic'; popup.hidden = true; document.body.append(popup);
+    const precision = mode === 'day' || mode === 'day-missing' ? 'day' : mode === 'year' ? 'year' : 'month'; let view = precision; let year = 2026; let month = 10; let decade = 2020;
+    // 用实际确认状态重绘，测试 blur、晚到渲染及日精度不足时绝不补日。
+    const refresh = () => { input.value = acceptedControls.birth || ''; }; renderers.push(refresh);
+    // 月精度真实值只保存 YYYY-MM，内部日期对象的默认 1 日不属于资料事实。
+    const commit = (value) => { if (mode !== 'calendar-rejected') acceptedControls.birth = value; refresh(); popup.hidden = true; setTimeout(refresh, 180); };
+    // 头部翻页有界且与共享组件一致，只有已知日历区域中的控件可操作。
+    const render = () => {
+      if (!popup.firstChild) popup.innerHTML = '<div class="sd-panal-menu-wrapper-synthetic"></div>';
+      popup.firstChild.innerHTML = '<div class="sd-panal-select-container-synthetic"><div class="sd-basic-selector-synthetic"><div><span class="sd-basic-selector-icon-synthetic">«</span></div><div class="sd-basic-selector-content-synthetic"><span class="sd-basic-selector-year-synthetic"></span><span class="sd-basic-selector-month-synthetic"></span></div><div><span class="sd-basic-selector-icon-synthetic">»</span></div></div></div><div class="sd-panal-table-container-synthetic"></div>';
+      const header = popup.querySelector('[class*="selector-year-"]'); header.textContent = view === 'year' ? decade + ' - ' + (decade + 9) : year + '年';
+      header.addEventListener('click', () => { view = 'year'; decade = Math.floor(year / 10) * 10; render(); });
+      // 伪装成日历标题的提交按钮必须被拒绝，合成提交仅计数而不发送请求。
+      if (mode === 'unsafe-calendar') { const submit = document.createElement('button'); submit.type = 'submit'; submit.setAttribute('form', 'application'); header.replaceWith(submit); submit.append(header); }
+      const monthHeader = popup.querySelector('[class*="selector-month-"]'); monthHeader.textContent = month + '月'; monthHeader.addEventListener('click', () => { view = 'month'; render(); }); if (view !== 'day') monthHeader.remove();
+      for (const [side, delta] of [['first', -1], ['last', 1]]) popup.querySelector('.sd-basic-selector-synthetic > div:' + side + '-child > span').addEventListener('click', () => { if (mode !== 'stuck-year') { if (view === 'year') decade += delta * 10; else year += delta; } render(); });
+      const table = popup.querySelector('[class*="table-container-"]');
+      if (view === 'day') {
+        const grid = document.createElement('table'); const row = document.createElement('tr'); grid.append(row); table.append(grid);
+        for (let day = 1; day <= new Date(year, month, 0).getDate(); day++) { const cell = document.createElement('td'); cell.className = 'sd-basic-item-wrapper-synthetic'; cell.innerHTML = '<div class="sd-basic-date-item-synthetic"></div>'; cell.firstChild.textContent = day; cell.addEventListener('click', () => commit(`${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`)); row.append(cell); }
+      } else {
+        const grid = document.createElement('div'); grid.className = 'sd-basic-year-container-synthetic'; table.append(grid);
+        const values = view === 'year' ? Array.from({length:12}, (_, i) => decade - 1 + i) : ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
+        values.forEach((value, i) => { const cell = document.createElement('div'); cell.className = 'sd-basic-year-wrapper-synthetic'; if (view === 'year' && (i === 0 || i === 11)) cell.classList.add('sd-basic-disabled-synthetic'); cell.innerHTML = '<div class="sd-basic-year-item-synthetic"></div>'; cell.firstChild.textContent = value; grid.append(cell);
+          cell.addEventListener('click', () => { if (cell.classList.contains('sd-basic-disabled-synthetic')) { rejectedClicks++; return; } if (view === 'year') { year = value; if (precision === 'year') commit(String(year)); else { view = precision; render(); } } else { month = i + 1; if (precision === 'month') commit(`${year}-${String(month).padStart(2,'0')}`); else { view = 'day'; render(); } } });
+        });
+      }
+    };
+    input.addEventListener('mousedown', () => { if (!popup.hidden) { popup.hidden = true; return; } view = precision; render(); openPopup(popup); });
+  }
+  const basic = record(block('个人信息')); calendar(basic); select(field(basic, '工作经验'), 'experience', '请选择', mode === 'equivalent-duplicate' ? ['1年以下', '一年以下工作经验'] : ['应届生', ...(mode === 'feedback' ? ['一年以下工作经验'] : []), '1-3年', '3-5年']);
+  const education = block('教育背景');
+  // 添加按钮沿用上传页结构；预置两条恰好对应本地两条，无须测试器直接分配来源。
+  const add = document.createElement('button'); add.type = 'button'; add.textContent = '+ 添加'; education.firstChild.append(add);
+  // 每条教育记录复用相同字段，所有选中状态按记录索引独立保存。
+  function educationRecord(index) {
+    const node = record(education); const dates = document.createElement('div'); dates.className = 'month-range-select'; field(node, '就读时间').append(dates);
+    for (const side of ['start','end']) { select(dates, `${side}Year${index}`, '年', ['2018','2020','2022','2024','2026'], true); select(dates, `${side}Month${index}`, '月', ['06月','09月']); }
+    // 部分站点先禁用结束年月；开始月份真正入 state 后才启用，用于验证同一次批量继续发现结束字段。
+    if (mode === 'feedback') {
+      const unlock = () => { const ready = !!acceptedControls['startYear' + index] && !!acceptedControls['startMonth' + index]; dates.querySelectorAll('input[id^="end"]').forEach((input) => { input.disabled = !ready; }); };
+      document.addEventListener('synthetic-selection', unlock); unlock();
+    }
+    select(field(node, '学校名称'), 'school' + index, '请输入就读学校', ['合成本科大学','合成硕士大学'], true, true);
+    select(field(node, '专业名称'), 'major' + index, '请输入专业名称', ['合成专业甲','合成专业乙'], true);
+  }
+  add.addEventListener('click', () => educationRecord(education.querySelectorAll('.apply-fields-synthetic').length));
+  for (let index = 0; index < 2; index++) educationRecord(index);
+  if (mode === 'feedback') {
+    const work = block('工作经历');
+    // 没有添加按钮的多条工作记录仍共享模板，资料只能对应整条记录，不能逐字段混搭。
+    for (let index = 0; index < 2; index++) { const node = record(work); const box = document.createElement('textarea'); box.id = 'duties' + index; field(node, '工作职责').append(box); }
+    const unknown = document.createElement('input'); unknown.id = 'unknown'; field(basic, '合成未知补充').append(unknown);
+  }
+  // 所有重绘都从控件 state 恢复；插件不能只改 DOM 文本通过测试。
+  rerender.addEventListener('click', () => renderers.forEach((render) => render()));
+  application.addEventListener('submit', (event) => { event.preventDefault(); submissions++; });
+</script></body></html>

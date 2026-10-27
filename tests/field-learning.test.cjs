@@ -84,6 +84,33 @@ test('岗位申请页明确别名与模块对应，无内容时保持缺资料�
   assert.equal(view.rows[0].value, '2000-06'); assert.equal(view.rows[1].value, '合成职责'); assert.equal(view.rows[2].target?.fieldId, 'builtin.projectDescription'); assert.equal(view.rows[2].status, 'missing_value'); assert.notEqual(view.rows[3].target?.fieldId, 'builtin.currentMonthlySalary'); assert.equal(env.context.FieldMatchingEngine.hasValue(view.rows[3].value), false); assert.equal(env.aiCalls.length, 0);
 });
 
+// 职责来源只允许同条工作记录的明确内容，专门职责优先，不套用实习或拼接其他条目。
+test('工作职责复用同条工作详细内容，缺值和多条来源不错误回退', async () => {
+  const env = await fixture(); const duties = env.field('工作职责', { kind: 'employment', group: '工作经历' });
+  await env.setValue('builtin.employmentDescription', '合成首条工作内容'); await env.setValue('builtin.internshipDescription', '不应套用的实习内容');
+  let view = await env.scan(duties); assert.equal(view.rows[0].target.fieldId, 'builtin.employmentDescription'); assert.equal(view.rows[0].value, '合成首条工作内容');
+  await env.setValue('builtin.employmentResponsibilities', '合成专门职责'); view = await env.scan(duties); assert.equal(view.rows[0].target.fieldId, 'builtin.employmentResponsibilities'); assert.equal(view.rows[0].value, '合成专门职责');
+  const entry = (await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'employment', title: '合成第二条工作' } })).result;
+  await env.setValue('builtin.employmentDescription', '合成第二条工作内容', entry);
+  view = await env.scan(duties); assert.equal(view.rows[0].target, null); assert.equal(view.rows[0].candidates.length, 2);
+  env.recordBlocks([{ blockId: 'scan.work', kind: 'employment', canAdd: false, records: [{ recordId: 'scan.work0', scanIds: [duties.scanId] }] }]);
+  view = await env.send(view, 'prepareRecords', { confirmed: true }); assert.equal(view.rows[0].value, '合成专门职责'); assert.ok(view.notice.includes('尚未分配')); assert.equal(env.calls.filter((row) => row.type === 'learning:addRecord').length, 0);
+  await env.setValue('builtin.employmentResponsibilities', ''); await env.setValue('builtin.employmentDescription', ''); await env.setValue('builtin.employmentDescription', '', entry);
+  view = await env.scan(duties); assert.ok(view.rows.every((row) => row.value === null)); assert.equal(env.aiCalls.length, 0);
+});
+
+// 无“添加”按钮也要按整条记录绑定开始/结束/职责，缺失项保持缺资料，不能借用下一段的值。
+test('不可增补模块也能按共享记录绑定完整字段，缺结束日期不跨条补齐', async () => {
+  const env = await fixture(); await env.setValue('builtin.employmentStartDate', '2020-06'); await env.setValue('builtin.employmentDescription', '合成第一条职责');
+  const entry = (await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'employment', title: '合成第二条' } })).result;
+  await env.setValue('builtin.employmentEndDate', '2025-09', entry); await env.setValue('builtin.employmentDescription', '合成第二条职责', entry);
+  const fields = [0, 1].flatMap((index) => ['开始日期', '结束日期', '工作职责'].map((label) => env.field(label, { kind: 'employment', group: '工作经历', index })));
+  env.recordBlocks([{ blockId: 'scan.work', kind: 'employment', canAdd: false, records: [0, 1].map((index) => ({ recordId: 'scan.record' + index, scanIds: fields.slice(index * 3, index * 3 + 3).map((field) => field.scanId) })) }]);
+  let view = await env.scan(...fields); view = await env.send(view, 'prepareRecords', { confirmed: true });
+  assert.equal(view.rows[1].status, 'missing_value'); assert.equal(view.rows[1].target.entryId, null); assert.equal(view.rows[2].value, '合成第一条职责');
+  assert.equal(view.rows[4].value, '2025-09'); assert.equal(view.rows[5].value, '合成第二条职责'); assert.equal(view.rows[5].target.entryId, entry);
+});
+
 // 分配整条已保存经历，而非按每个字段分别猜来源；页面添加不会修改个人库。
 test('用户直填时按整条经历补充空网页记录，字段绑定不串条且不重复添加', async () => {
   const env = await fixture(); await env.setValue('builtin.school','合成本科学校');

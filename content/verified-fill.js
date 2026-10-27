@@ -53,7 +53,7 @@
       const result = await A.fill(item, value); if (!result.ok) return { status: result.status || 'failed', ...result };
     } else if (field.type === 'combobox') {
       if (A.dropdown(el)) {
-        const result = await A.fillDropdown(el, value); if (!result.ok) return result;
+        const result = await A.fillDropdown(el, value, '', field.label); if (!result.ok) return result;
       } else {
         const menu = el.getRootNode().getElementById?.(el.getAttribute('aria-controls') || el.getAttribute('aria-owns'));
         const candidates = [...(menu?.querySelectorAll('[role="option"]') || [])].filter((option) => option.textContent.trim() === String(value) || option.getAttribute('data-value') === String(value));

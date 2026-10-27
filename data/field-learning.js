@@ -110,7 +110,7 @@
     // 本地整条记录按简历现有顺序分配空白网页槽位；已有非空且未绑定的记录保留，避免混写或重复添加。
     async function prepareRecords(item, db) {
       await refresh(item, db); item.recordBindings ||= {}; item.recordTargets ||= {}; item.protectedRecords = new Set(); let added = 0; let protectedGroups = 0; let remaining = 0;
-      for (const initial of item.recordBlocks.filter((block) => block.canAdd)) {
+      for (const initial of item.recordBlocks) {
         const belongs = (fieldId) => global.WangshenTemplates.recordKind(db.fieldDefinitions.find((def) => def.fieldId === fieldId)?.group) === initial.kind;
         const local = [null, ...db.entries.filter((entry) => entry.profileId === item.profileId && entry.kind === initial.kind).sort((a, b) => a.order - b.order || a.entryId.localeCompare(b.entryId)).map((entry) => entry.entryId)]
           .filter((entryId) => db.fieldValues.some((value) => value.profileId === item.profileId && value.entryId === entryId && belongs(value.fieldId) && M.hasValue(value.value)));
@@ -123,7 +123,7 @@
         const used = initial.records.filter((record) => Object.hasOwn(item.recordBindings, record.recordId)).map((record) => item.recordBindings[record.recordId]);
         const pending = local.filter((entryId) => !used.includes(entryId));
         let block = initial;
-        while (block.records.filter((record) => !occupied(record) && !Object.hasOwn(item.recordBindings, record.recordId)).length < pending.length && block.records.length < 20 && added < 20) {
+        while (block.canAdd && block.records.filter((record) => !occupied(record) && !Object.hasOwn(item.recordBindings, record.recordId)).length < pending.length && block.records.length < 20 && added < 20) {
           const latest = await session(item.sessionId); check(latest.db.revision === db.revision, '资料已变化，已停止添加，请重新扫描');
           await pageMessage(item.tabId, { type: 'learning:addRecord', documentId: item.documentId, blockId: block.blockId }); added++;
           const after = await session(item.sessionId); check(after.db.revision === db.revision, '添加期间资料已变化，已停止，请重新扫描');
@@ -137,12 +137,12 @@
           if (!Object.hasOwn(item.recordBindings, record.recordId)) { record.scanIds.forEach((scanId) => item.protectedRecords.add(scanId)); continue; }
           for (const scanId of record.scanIds) {
             const field = item.fields.find((field) => field.scanId === scanId); const def = M.definitionFor(db, field)?.definition;
-            if (def && belongs(def.fieldId) && db.publicFieldIds.includes(def.fieldId)) item.recordTargets[scanId] = { fieldId: def.fieldId, entryId: item.recordBindings[record.recordId], semanticId: field.semanticId };
+            if (def && belongs(def.fieldId) && db.publicFieldIds.includes(def.fieldId)) item.recordTargets[scanId] = { ...M.targetForRecord(db, item.profileId, field, def.fieldId, item.recordBindings[record.recordId]), semanticId: field.semanticId };
           }
         }
         remaining += pending.length;
       }
-      item.recordNotice = `已补充 ${added} 条网页经历${protectedGroups ? `；${protectedGroups} 个模块已有未绑定内容，保留原记录，请手动选择来源` : ''}${remaining ? `；已达到本次添加上限，另有 ${remaining} 条经历尚未分配，请检查网页后继续` : ''}`;
+      item.recordNotice = `已补充 ${added} 条网页经历${protectedGroups ? `；${protectedGroups} 个模块已有未绑定内容，保留原记录，请手动选择来源` : ''}${remaining ? `；没有更多可用槽位或已达到本次添加上限，另有 ${remaining} 条经历尚未分配，请检查网页后继续` : ''}`;
       rebuild(item, db); return view(item, db);
     }
     // 再扫描只读取已经授权的同一文档，动态新增时清理旧建议/确认令牌。

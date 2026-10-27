@@ -73,6 +73,15 @@
     return /博士/.test(text) ? 4 : /硕士|研究生/.test(text) ? 3 : /本科|学士/.test(text) ? 2 : /大专|专科/.test(text) ? 1 : 0;
   }
 
+  // 网页“工作职责”可复用同一条工作经历的详细内容；有专门职责时优先它，绝不跨条或套用实习资料。
+  function targetForRecord(db, profileId, field, fieldId, entryId = null) {
+    const target = { fieldId, entryId };
+    if (field.kind !== 'employment' || field.label !== '工作职责' || fieldId !== 'builtin.employmentResponsibilities' || hasValue(valueOf(db, profileId, target)?.value)) return target;
+    const fallback = { fieldId: 'builtin.employmentDescription', entryId };
+    const definition = db.fieldDefinitions.find((item) => item.fieldId === fallback.fieldId);
+    return global.WangshenTemplates.recordKind(definition?.group) === 'employment' && db.publicFieldIds.includes(fallback.fieldId) && hasValue(valueOf(db, profileId, fallback)?.value) ? fallback : target;
+  }
+
   // 根据明确学历/经历语义缩小来源；只有唯一来源才可匹配，不默认拿最高学历覆盖第一学历。
   function targetsFor(db, profileId, field, fieldId) {
     let entries = db.entries.filter((entry) => entry.profileId === profileId && (!field.kind || entry.kind === field.kind));
@@ -85,12 +94,13 @@
     const primary = db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === fieldId && row.entryId === null);
     // 仅有空白模板时返回明确的缺资料项；有独立经历时不凭空插入一条空白来源制造歧义。
     const bound = db.bindings.some((row) => row.profileId === profileId && row.fieldId === fieldId);
-    if (definedKind === repeated && (hasValue(primary?.value) || !entries.length && bound)) entries.push({ profileId, entryId: null, kind: repeated });
+    const primaryTarget = targetForRecord(db, profileId, field, fieldId);
+    if (definedKind === repeated && (hasValue(primary?.value) || hasValue(valueOf(db, profileId, primaryTarget)?.value) || !entries.length && bound)) entries.push({ profileId, entryId: null, kind: repeated });
     if (['first', 'undergrad'].includes(field.degree)) entries = entries.filter((entry) => degreeOf(db, entry) === 2);
     if (field.degree === 'master') entries = entries.filter((entry) => degreeOf(db, entry) === 3);
     if (field.degree === 'doctor') entries = entries.filter((entry) => degreeOf(db, entry) === 4);
     if (field.degree === 'highest') { const rank = Math.max(0, ...entries.map((entry) => degreeOf(db, entry))); entries = rank ? entries.filter((entry) => degreeOf(db, entry) === rank) : []; }
-    return entries.map((entry) => ({ fieldId, entryId: entry.entryId }));
+    return entries.map((entry) => targetForRecord(db, profileId, field, fieldId, entry.entryId));
   }
 
   // 词典精确命中优先，上下文仅做有界显式规则；相似度不够时留给 AI 或人工。
@@ -141,5 +151,5 @@
   }
 
   global.FieldMappingMemory = { find: memory };
-  global.FieldMatchingEngine = { redact, features, semanticId, validateField, restricted, hasValue, valueOf, match, degreeOf, definitionFor };
+  global.FieldMatchingEngine = { redact, features, semanticId, validateField, restricted, hasValue, valueOf, match, degreeOf, definitionFor, targetForRecord };
 })(globalThis);

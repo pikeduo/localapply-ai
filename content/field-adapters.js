@@ -15,7 +15,7 @@
   }
 
   // 只枚举明确的列表/日历弹层；用于将一次主动打开中新出现的唯一弹层绑定回输入框。
-  function popupRoots() { return [...document.querySelectorAll('[role="listbox"],[role="dialog"],[class*="sd-Dropdown-popup-"],[class*="sd-Dropdown-overlay-"],[class*="sd-picker-panel-"],.rc-picker-dropdown,.ant-picker-dropdown')].filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'); }
+  function popupRoots() { return [...document.querySelectorAll('[role="listbox"],[role="dialog"],[class*="sd-Dropdown-popup-"],[class*="sd-Dropdown-overlay-"],[class*="sd-Dropdown-dropdown-"],[class*="sd-picker-panel-"],.rc-picker-dropdown,.ant-picker-dropdown')].filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'); }
 
   // portal 没有 aria-controls 时也须有本次打开的证据；多个新弹层或焦点已离开时拒绝猜归属。
   function popupFor(el, before) {
@@ -29,25 +29,64 @@
     return null;
   }
 
+  // 已手动打开的无关联 portal 先关闭再打开以取得归属证据；只触发同一控件且最多补开一次。
+  async function openControl(el, isCalendar = false) {
+    let before = new Set(popupRoots()); el.focus(); await sleep(0);
+    if (popupFor(el, before)?.getClientRects().length) return before;
+    // Sugar 日历监听 mousedown，下拉及其他日历监听 click，不能对切换开关连发两种打开事件。
+    const trigger = () => {
+      if (isCalendar && el.closest('[class*="sd-Dropdown-container-"]')) { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })); el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 })); }
+      else el.click();
+    };
+    trigger(); await sleep(60);
+    if (!popupFor(el, before) && [...before].some((node) => !node.isConnected || !node.getClientRects().length)) { before = new Set(popupRoots()); trigger(); }
+    return before;
+  }
+
   // 只识别上传页面使用的 Moka 下拉容器，不将普通带装饰的文本框升级为下拉。
   function dropdown(el) { return el.matches?.('input') ? el.closest('[class^="sd-Select-container-"],[class*=" sd-Select-container-"]') : null; }
 
   // Moka 有时将已选文本放在独立显示节点，搜索输入为空不能据此判定未选择。
-  function dropdownText(el) { return dropdown(el)?.querySelector('[class^="sd-Input-display-value-"]')?.textContent.trim() || el.value || ''; }
+  function dropdownText(el) { return dropdown(el)?.querySelector('[class*="sd-Input-display-value-"]')?.textContent.trim() || el.value || ''; }
+
+  // 只允许可见、未禁用的候选；组件把禁用标记放在父包装时同样拒绝点击。
+  function usable(node) { return node.isConnected && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden' && !node.closest('[disabled],[aria-disabled="true"],[class*="sd-Menu-disabled-"],[class*="sd-Select-disabled-"],[class*="sd-basic-disabled-"]'); }
 
   // 候选必须属于该输入的显式弹层或同一个下拉容器，禁止到全页任意点击相似文字。
   function dropdownOptions(el) {
     const owner = dropdown(el); if (!owner) return [];
     const root = popupFor(el) || owner.closest('[class^="sd-Dropdown-container-"],[class*=" sd-Dropdown-container-"]');
-    return [...(root?.querySelectorAll('[role="option"],[class*="option-" i],[class*="menu-item-" i]') || [])].filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'
-      && node.getAttribute('aria-disabled') !== 'true' && !node.matches('button,input,a,[role="button"]') && !node.closest('button,a') && !node.querySelector('button,input,a,[role="button"],[role="option"],[class*="option-" i]'));
+    const ordinary = [...(root?.querySelectorAll('[role="option"],[class*="option-" i],[class*="menu-item-" i]') || [])];
+    // Sugar 默认项不是 option，必须限定在 Select 菜单且含正式标签，排除菜单工具及分组标题。
+    const sugar = [...(root?.querySelectorAll('[class*="sd-Select-menu-"] [class*="sd-Menu-container-"]') || [])].filter((node) => node.querySelector('[data-key="sugar.select.label"]'));
+    // 自定义渲染项的 onClick 在内部根节点，不能只点没有事件的 common-item 包装。
+    const custom = [...(root?.querySelectorAll('[class*="sd-Select-menu-"] [class*="sd-Select-common-item-"]') || [])].map((node) => node.firstElementChild).filter(Boolean);
+    const candidates = [...new Set([...ordinary, ...sugar, ...custom])];
+    return candidates.filter((node) => usable(node) && !node.matches('button,input,a,[role="button"]') && !node.closest('button,a') && !node.querySelector('button,input,a,[role="button"]')
+      && !candidates.some((other) => other !== node && node.contains(other)));
+  }
+
+  // 只取候选的正式标签，排除 Sugar 菜单的说明、图标及搜索提示，仍点击原候选节点。
+  function optionLabel(node) {
+    const label = node.querySelector('[data-key="sugar.select.label"]') || node.querySelector('[class*="sd-Menu-title-"]:not([class*="sd-Menu-title-icon-"])');
+    return (label?.textContent || node.getAttribute('aria-label') || node.textContent).trim();
+  }
+
+  // 文本只规范显示空白与全角字符；工作经验仅允许明确的小于一年同义词，不放宽区间边界。
+  function optionEqual(actual, expected, fieldLabel = '', unit = '') {
+    const normalize = (text) => String(text).normalize('NFKC').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+    const left = normalize(actual); const right = normalize(expected);
+    if (left === right) return true;
+    if (unit && new RegExp('^\\d+' + unit + '?$').test(left)) return Number(left.replace(unit, '')) === Number(right);
+    const belowOne = /^(?:(?:1|一)年以下(?:(?:工作)?经验)?|不足(?:1|一)年|少于(?:1|一)年)$/;
+    return /^工作经验$/.test(fieldLabel) && belowOne.test(left) && belowOne.test(right);
   }
 
   // 精确点选才登记本次选择证据；仅输入文字即使暂时显示相同也不能算填写成功。
-  async function fillDropdown(el, value, unit = '') {
-    const started = Date.now(); const desired = String(value); const before = new Set(popupRoots()); const searchable = !el.readOnly && !dropdown(el).classList.contains('select');
+  async function fillDropdown(el, value, unit = '', fieldLabel = '') {
+    const started = Date.now(); const desired = String(value); const searchable = !el.readOnly && !dropdown(el).classList.contains('select');
     const trace = { adapter: 'moka-dropdown', phase: 'open', candidateCount: 0, matchCount: 0, searchable, popupRelation: 'none', associatedPopup: false };
-    selections.delete(el); popups.delete(el); el.focus(); el.click();
+    selections.delete(el); const before = await openControl(el);
     if (searchable) {
       // 搜索时保持弹层焦点，不能复用会立即 blur 的普通文本填写路径。
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, desired);
@@ -56,11 +95,13 @@
     for (let attempt = 0; attempt < 30; attempt++) {
       await sleep(60);
       const popup = popupFor(el, before); const visible = popupRoots(); const candidates = dropdownOptions(el);
-      const found = candidates.filter((node) => node.textContent.trim() === desired || node.getAttribute('data-value') === desired || unit && new RegExp('^\\d+' + unit + '?$').test(node.textContent.trim()) && Number(node.textContent.trim().replace(unit, '')) === Number(desired));
+      const found = candidates.filter((node) => optionEqual(optionLabel(node), desired, fieldLabel, unit) || node.getAttribute('data-value') === desired);
       Object.assign(trace, { phase: 'options', popupRelation: popup ? el.getAttribute('aria-controls') || el.getAttribute('aria-owns') ? 'aria' : 'portal' : candidates.length ? 'local' : 'none', associatedPopup: !!popup || candidates.length > 0, candidateCount: candidates.length, matchCount: found.length, popupCount: visible.length, newPopupCount: visible.filter((node) => !before.has(node)).length, focused: document.activeElement === el || dropdown(el).contains(document.activeElement), elapsedMs: Date.now() - started });
       if (found.length > 1) break;
       if (found.length === 1) {
-        const text = found[0].textContent.trim(); found[0].click(); el.blur();
+        const text = optionLabel(found[0]); found[0].click();
+        // 等组件处理 onChange 和自身的延迟 blur，过早失焦会让搜索值回退为空。
+        await sleep(60); el.blur();
         traces.set(el, { ...trace, phase: 'select', reasonCode: 'option_selected' });
         selections.set(el, { expected: desired, text }); return { ok: true };
       }
@@ -73,7 +114,7 @@
   // 回读必须同时命中显示值和精确选择证据，受控组件清空或回退不会计为成功。
   function dropdownAccepted(el, value) {
     const selected = selections.get(el); const desired = String(value);
-    return !!selected && selected.expected === desired && [desired, selected.text].includes(dropdownText(el));
+    return !!selected && selected.expected === desired && [desired, selected.text].some((text) => optionEqual(dropdownText(el), text));
   }
 
   // 单个子控件的显式提示优先于父字段标签，避免把“月”或国码当成独立语义。
@@ -120,11 +161,13 @@
     // 已知年月范围按页面明确的“年/月、年/月”顺序拆为两项，绝不混合不同记录。
     const ranges = new Set(nodes.map((el) => el.closest('.month-range-select')).filter(Boolean));
     for (const container of ranges) {
-      const peers = nodes.filter((node) => container.contains(node) && slot(node));
+      // 结束控件可能先禁用；读取完整结构确定起止角色，只为本次可操作的完整子组建立扫描项。
+      const peers = [...container.querySelectorAll('input,select,[role="combobox"]')].filter((node) => slot(node));
       const sequence = peers.map(slot).join(',');
       if (!['year,month', 'year,month,year,month'].includes(sequence)) continue;
       for (let index = 0; index < peers.length; index += 2) {
         const parts = { year: peers[index], month: peers[index + 1] };
+        if (!Object.values(parts).every((node) => nodes.includes(node))) continue;
         const group = { kind: 'date', parts, anchor: parts.year, label: peers.length === 2 ? labelOf(parts.year) : index === 0 ? '开始日期' : '结束日期', type: 'month', layout: 'date:year-month' };
         Object.values(parts).forEach((node) => { result.set(node, group); handled.add(node); });
       }
@@ -156,10 +199,11 @@
     return result;
   }
 
-  // 严格解析精度、闰年与时间；绝不自动补日、补当前年月或猜测美国日期顺序。
+  // 仅解析明确日期字段中的年月日，允许中文单位周围空白及单独年份；不补月日或从年龄推算。
   function dateValue(value) {
     if (typeof value !== 'string') return null;
-    const match = /^(\d{4})(?:[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?月?)?(?:[T ](\d{2}):(\d{2}))?$/.exec(value.trim());
+    const text = value.trim().replace(/\s*([-/.年月日])\s*/g, '$1');
+    const match = /^(\d{4})(?:[-/.年](\d{1,2})(?:[-/.月](\d{1,2})日?)?月?|年)?(?:[T ](\d{2}):(\d{2}))?$/.exec(text);
     if (!match) return null;
     const [, y, m, d, h, minute] = match; const year = +y; const month = m ? +m : null; const day = d ? +d : null;
     if (year < 1900 || year > 2200 || (month !== null && (month < 1 || month > 12)) || (day !== null && (day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate())) || (h && (!day || +h > 23 || +minute > 59))) return null;
@@ -245,10 +289,15 @@
     return item.compound.kind === 'date' ? [values.year, values.month?.padStart(2, '0'), ...(parts.day ? [values.day?.padStart(2, '0')] : [])].join('-') : Object.values(values).join(' / ');
   }
 
-  // 复读所有成员及网页原生校验状态，框架回退任一部分都不能记成功。
+  // 复读全部成员和实际日期精度；年月日历只接受真实选中且回读为相同年月的值。
   function accepted(item, value) {
     const next = plan(item, value); if (next.error) return false;
-    if (!item.compound) return item.el.value === next.value;
+    if (!item.compound) {
+      if (item.el.value === next.value) return true;
+      if (!item.el.readOnly) return false;
+      const actual = dateValue(item.el.value); const expected = dateValue(next.value); const selected = selections.get(item.el);
+      return !!actual && (actual.iso === expected?.iso && actual.time === expected.time || selected?.kind === 'calendar' && selected.expected === next.value && actual.iso === selected.iso && actual.precision === selected.precision);
+    }
     return Object.entries(item.compound.parts).every(([key, el]) => el.isConnected && el.getAttribute('aria-invalid') !== 'true' && el.validity?.valid !== false && (el.tagName === 'SELECT' ? optionFor(el, next.parts[key], { year: '年', month: '月', day: '日' }[key])?.value === el.value : dropdown(el) ? dropdownAccepted(el, next.parts[key]) || dropdownText(el) === next.parts[key] : el.value === next.parts[key]));
   }
 
@@ -269,12 +318,72 @@
     global.WangshenFiller.setValue(el, String(value)); return el.value === String(value);
   }
 
-  // 日历仅点击绑定弹层内有完整日期的唯一候选；不猜“上一月/下一月”或任意网页按钮。
+  // 月面板的明确标签转换为数字；不按格子位置猜月份或选取相似文字。
+  function monthNumber(text) {
+    const label = text.trim(); const numeric = /^(0?[1-9]|1[0-2])月?$/.exec(label);
+    return numeric ? Number(numeric[1]) : ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'].indexOf(label) + 1;
+  }
+
+  // 日历内也禁止链接、输入及提交按钮，哈希类名不能赋予普通网页操作可点击权限。
+  function calendarTarget(node) { return usable(node) && !node.closest('a,input,button:not([type="button"]),[role="link"]') && !node.querySelector('a,input,button:not([type="button"]),[role="link"]'); }
+
+  // 只枚举已关联 Sugar 日历里的可选格，禁用的边界年及相邻月份日期均排除。
+  function calendarCells(panel) { return [...panel.querySelectorAll('[class*="sd-basic-year-wrapper-"]')].filter(calendarTarget); }
+
+  // 点击局部唯一的已知日历导航控件，重渲染后重新查询，避免使用失效节点。
+  async function calendarClick(panel, selector) {
+    const nodes = [...panel.querySelectorAll(selector)].filter(calendarTarget);
+    if (nodes.length !== 1) return false;
+    nodes[0].click(); await sleep(60); return true;
+  }
+
+  // Sugar 年/月/日面板分别提交；初始面板决定精度，导航到月格不能冒充支持年月。
+  async function sugarCalendar(el, panel, next) {
+    const initial = calendarCells(panel); const date = next.date;
+    const precision = panel.querySelector('[class*="sd-basic-date-item-"]') ? 'day' : initial.length && initial.every((node) => monthNumber(node.textContent)) ? 'month' : initial.length && initial.every((node) => /^\d{4}$/.test(node.textContent.trim())) ? 'year' : '';
+    if (!precision) return { ok: false, status: 'unsupported', reason: '日历精度或结构不明确，请在网页选择' };
+    if (precision === 'day' && !date.day || precision === 'month' && !date.month) return { ok: false, status: 'needs_confirmation', reason: '网页日历需要更完整的日期，本地只有年或年月；不自动补日或月份' };
+    const yearSelector = '[class*="sd-basic-selector-year-"]';
+    if (precision !== 'year' && !await calendarClick(panel, yearSelector)) return { ok: false, status: 'unsupported', reason: '日历年份入口不唯一，请在网页选择' };
+    let chosen = false; const visited = new Set();
+    // 最多跨 31 个十年区间，覆盖既有 1900～2200 日期范围；不允许失效翻页无限重试。
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const cells = calendarCells(panel).filter((node) => /^\d{4}$/.test(node.textContent.trim())); const target = cells.filter((node) => Number(node.textContent.trim()) === date.year);
+      if (target.length === 1) { target[0].click(); await sleep(60); chosen = true; break; }
+      const years = cells.map((node) => Number(node.textContent.trim())); const signature = years.join(',');
+      if (!years.length || target.length > 1 || visited.has(signature)) break;
+      visited.add(signature); const direction = date.year < Math.min(...years) ? 'prev' : date.year > Math.max(...years) ? 'next' : '';
+      // 年份双箭头只有 icon 类；prev/next-tool 是日面板的月份箭头，不能混用。
+      const arrow = '[class*="sd-basic-selector-"] > div:' + (direction === 'prev' ? 'first' : 'last') + '-child [class*="sd-basic-selector-icon-"]:not([class*="sd-basic-selector-prev-tool-"]):not([class*="sd-basic-selector-next-tool-"])';
+      if (!direction || !await calendarClick(panel, arrow)) break;
+    }
+    if (!chosen) return { ok: false, status: 'unsupported', reason: '日历中没有唯一可选的目标年份，请在网页选择' };
+    if (precision !== 'year') {
+      if (precision === 'day' && !await calendarClick(panel, '[class*="sd-basic-selector-month-"]')) return { ok: false, status: 'unsupported', reason: '日历月份入口不唯一，请在网页选择' };
+      const months = calendarCells(panel).filter((node) => monthNumber(node.textContent) === date.month);
+      if (months.length !== 1) return { ok: false, status: 'unsupported', reason: '日历中没有唯一可选的目标月份，请在网页选择' };
+      months[0].click(); await sleep(60);
+    }
+    if (precision === 'day') {
+      // 先复核头部年月，避免日期导航回退后误点另一个月份的同一天。
+      const year = panel.querySelector(yearSelector)?.textContent.trim(); const month = panel.querySelector('[class*="sd-basic-selector-month-"]')?.textContent;
+      const days = [...panel.querySelectorAll('td[class*="sd-basic-item-wrapper-"]')].filter((node) => calendarTarget(node) && !node.matches('[class*="sd-basic-fade-"]') && Number(node.querySelector('[class*="sd-basic-date-item-"]')?.textContent.trim()) === date.day);
+      if (!/^\d{4}年?$/.test(year || '') || Number(year.replace('年','')) !== date.year || monthNumber(month || '') !== date.month || days.length !== 1) return { ok: false, status: 'unsupported', reason: '日历当前年月或日期候选不明确，请在网页选择' };
+      days[0].click(); await sleep(60);
+    }
+    const length = { year: 4, month: 7, day: 10 }[precision];
+    selections.set(el, { kind: 'calendar', expected: next.value, precision, iso: date.iso.slice(0, length) });
+    el.blur(); return { ok: true };
+  }
+
+  // 优先识别实际日历精度；只有要求日精度的控件才拒绝不完整日期，原生日期边界不放宽。
   async function calendar(item, next) {
     const el = item.el;
-    if (!next.date.day) return { ok: false, status: 'needs_confirmation', reason: '网页日历需要完整日期，本地只有年或年月；请补充日期，不自动补日' };
-    const before = new Set(popupRoots()); popups.delete(el); el.focus(); el.click();
+    popups.delete(el); selections.delete(el); const before = await openControl(el, true);
     let popup; for (let attempt = 0; attempt < 15 && !popup; attempt++) { await sleep(60); popup = popupFor(el, before); }
+    const panels = [...(popup?.querySelectorAll('[class*="sd-panal-menu-wrapper-"]') || [])].filter(usable);
+    if (panels.length === 1) return sugarCalendar(el, panels[0], next);
+    if (!next.date.day) return { ok: false, status: 'needs_confirmation', reason: '网页日历需要完整日期，本地只有年或年月；请补充日期，不自动补日' };
     if (!popup || !popup.matches('[role="dialog"],.calendar,.ant-picker-panel,.el-picker-panel,[class*="sd-picker-panel-"],.rc-picker-dropdown,.ant-picker-dropdown')) return { ok: false, status: 'unsupported', reason: '日历未出现唯一关联弹层，请在网页手选' };
     // 有明确年/月选择器时按目标值选择，避免跨年依赖次数猜测或无限翻月。
     for (const [key, value] of [['year', next.date.year], ['month', next.date.month]]) {
@@ -299,5 +408,5 @@
     }
     return { ok: true };
   }
-  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, fillDropdown, dropdownAccepted, diagnostic };
+  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, optionEqual, fillDropdown, dropdownAccepted, diagnostic };
 })(globalThis);

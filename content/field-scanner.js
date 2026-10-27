@@ -140,14 +140,14 @@
     return item.el.isContentEditable ? item.el.textContent : item.el.value;
   }
 
-  // 用户主动扫描后仅读取是否已有内容；只返回布尔标记，不传出网页实际值。
+  // 用户主动扫描后仅读取是否已有内容；兼容显示节点的多类名顺序，仅返回布尔标记。
   function completion() {
     if (!granted || currentUrl !== location.href) throw new Error('请先主动授权扫描当前招聘页面');
     return [...registry.values()].map((item) => {
       const value = readValue(item);
       let present = Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined && value !== false && String(value).trim() !== '' && !/^(请选择|请选择一项|Select|Please select)$/i.test(String(value).trim());
       if (item.compound?.kind === 'date') present = present && !A.plan(item, value).error;
-      if (A.dropdown(item.el) && !item.compound) present = present && (!!A.dropdown(item.el).querySelector('[class^="sd-Input-display-value-"]')?.textContent.trim() || A.dropdownAccepted(item.el, value));
+      if (A.dropdown(item.el) && !item.compound) present = present && (!!A.dropdown(item.el).querySelector('[class*="sd-Input-display-value-"]')?.textContent.trim() || A.dropdownAccepted(item.el, value));
       return { scanId: item.field.scanId, present: present && item.el.getAttribute('aria-invalid') !== 'true' && item.el.validity?.valid !== false };
     });
   }

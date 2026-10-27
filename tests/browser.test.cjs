@@ -203,6 +203,145 @@ test('岗位页面修复：Moka结构、自动识别及只显示未填写字段'
   } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
+// 按上传页及公开组件静态结构构造无 ARIA 菜单，避免理想化 role=option 掩盖漏填。
+test('Moka真实控件：年月日精度、默认和搜索菜单、失焦重绘与原值保护', { timeout: 120000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'moka-sugar-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId; const errors = [];
+    // 使用真实本地库和内容脚本链路，不直接调用页面内的适配器私有函数。
+    const set = async (key, value, entryId = null) => rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.' + key, value, entryId } } });
+    await set('workExperience', '1-3年'); await set('birthDate', '2000年 6月');
+    const entryId = (await rpc(options, 'localapply:command', { request: { action: 'createEntry', payload: { profileId, kind: 'education', title: '合成硕士记录' } } })).result;
+    for (const [key, first, second] of [['school','合成本科大学','合成硕士大学'],['major','合成专业甲','合成专业乙'],['educationStartDate','2020-09','2018-09'],['graduationDate','2024-06-15','2022-06']]) { await set(key, first); await set(key, second, entryId); }
+    // 每个故障场景均使用新合成文档，保留生产授权、文档绑定和延迟验证。
+    const prepare = async (mode = 'month') => {
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(api.base + '/test-pages/moka-sugar-controls.html?mode=' + mode);
+      const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+      const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); const view = await rpc(options, 'learning:prepareRecords', { sessionId: scan.sessionId, confirmed: true });
+      // 只填写当前实际扫描的字段，结果必须来自生产后台回读。
+      const fill = async (label, index = 0) => { const row = view.rows.filter((row) => row.field.label === label)[index]; assert.ok(row, label); const result = await rpc(options, 'learning:fill', { sessionId: view.sessionId, scanId: row.field.scanId, confirmed: true }); return result.rows.find((value) => value.field.scanId === row.field.scanId); };
+      return { page, view, fill };
+    };
+    await t.test('工作经验已本地匹配，真实 sd-Menu 项可选且失焦重绘不消失', async () => {
+      const { page, view, fill } = await prepare(); const row = view.rows.find((row) => row.field.label === '工作经验');
+      assert.equal(row.target?.fieldId, 'builtin.workExperience'); assert.equal(row.status, 'matched'); assert.equal(row.field.type, 'combobox');
+      const result = await fill('工作经验'); assert.equal(result.status, 'success', result.reason); await page.locator('#rerender').click(); assert.equal(await page.evaluate(() => acceptedControls.experience), '1-3年'); assert.equal(await page.locator('#experience').evaluate((el) => el.previousElementSibling.textContent), '1-3年'); await page.close();
+    });
+    await t.test('多段年月、异步学校自定义项及专业默认项均真正提交到所属记录', async () => {
+      const { page, fill } = await prepare();
+      for (let index = 0; index < 2; index++) for (const label of ['开始日期','结束日期','学校名称','专业名称']) assert.equal((await fill(label, index)).status, 'success', label + index);
+      await page.locator('#rerender').click(); const values = await page.evaluate(() => acceptedControls);
+      for (const [key, value] of Object.entries({ startYear0:'2020', startMonth0:'09月', endYear0:'2024', endMonth0:'06月', school0:'合成本科大学', major0:'合成专业甲', startYear1:'2018', startMonth1:'09月', endYear1:'2022', endMonth1:'06月', school1:'合成硕士大学', major1:'合成专业乙' })) assert.equal(values[key], value, key);
+      assert.equal((await fill('工作经验')).status, 'success'); assert.equal((await fill('出生日期 (年龄)')).status, 'success');
+      assert.equal(await page.evaluate(() => submissions), 0); await page.screenshot({ path: path.join(testRoot, 'moka-sugar-selections.png'), fullPage: true }); await page.close();
+    });
+    for (const [mode, source, expected] of [['month','2000年 6月','2000-06'],['month','2000-06-15','2000-06'],['day','2000-06-15','2000-06-15'],['year','2000年','2000']]) {
+      await t.test(`${mode} 日历按来源 ${source} 的有效精度选择并保留`, async () => {
+        await set('birthDate', source); const { page, fill } = await prepare(mode); const result = await fill('出生日期 (年龄)'); assert.equal(result.status, 'success', result.reason);
+        await page.locator('#rerender').click(); assert.equal(await page.locator('#birth').inputValue(), expected); assert.equal(await page.evaluate(() => acceptedControls.birth), expected); assert.equal(await page.evaluate(() => rejectedClicks), 0); await page.close();
+      });
+    }
+    await t.test('日历确实要求日而来源只有年月时不补日、不假报成功', async () => {
+      await set('birthDate', '2000-06'); const { page, fill } = await prepare('day-missing'); assert.equal((await fill('出生日期 (年龄)')).status, 'needs_confirmation');
+      assert.equal(await page.locator('#birth').inputValue(), ''); assert.equal(await page.evaluate(() => acceptedControls.birth), undefined); await page.close();
+    });
+    await t.test('菜单或日历已手动打开时仍能重新关联并提交选择', async () => {
+      const { page, fill } = await prepare(); await page.locator('#experience').click(); assert.equal((await fill('工作经验')).status, 'success');
+      await page.locator('#birth').click(); assert.equal((await fill('出生日期 (年龄)')).status, 'success'); assert.equal(await page.locator('#birth').inputValue(), '2000-06'); await page.close();
+    });
+    for (const [mode, status] of [['disabled','unsupported'],['duplicate','unsupported'],['ambiguous','unsupported'],['rejected','failed'],['calendar-rejected','failed'],['stuck-year','unsupported'],['unsafe-calendar','unsupported']]) {
+      await t.test(`${mode} 不得假报成功或点击禁用项`, async () => {
+        const { page, fill } = await prepare(mode); const label = ['calendar-rejected','stuck-year','unsafe-calendar'].includes(mode) ? '出生日期 (年龄)' : '工作经验'; const result = await fill(label); assert.equal(result.status, status, result.reason); assert.equal(await page.evaluate(() => rejectedClicks), 0); assert.equal(await page.evaluate(() => submissions), 0); if (['disabled','duplicate','ambiguous'].includes(mode)) assert.equal(await page.evaluate(() => optionClicks), 0); await page.close();
+      });
+    }
+    await t.test('已有不同年月和工作经验保留，缺工作经验资料不猜值，日志脱敏', async () => {
+      const { page, fill } = await prepare(); await page.evaluate(() => { acceptedControls.birth = '1999-09'; acceptedControls.experience = '3-5年'; document.getElementById('rerender').click(); });
+      assert.equal(await page.locator('#birth').inputValue(), '1999-09');
+      for (const label of ['出生日期 (年龄)','工作经验']) { const result = await fill(label); assert.equal(result.status, 'needs_confirmation', label + ': ' + result.reason); }
+      assert.equal(await page.locator('#birth').inputValue(), '1999-09'); assert.equal(await page.evaluate(() => acceptedControls.experience), '3-5年'); assert.equal(await page.evaluate(() => optionClicks), 0); await page.close();
+      await set('workExperience', ''); const missing = await prepare(); assert.equal(missing.view.rows.find((row) => row.field.label === '工作经验').status, 'missing_value'); await missing.page.close();
+      const logs = await rpc(options, 'diagnostics:read'); for (const secret of ['合成本科大学','合成专业甲','2000-06','1-3年','1999-09']) assert.ok(!JSON.stringify(logs).includes(secret)); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+// 用户反馈回归：正式标签/同义经验、同条职责、联动结束年月，以及真实标签切换中的暂停续填。
+test('Moka反馈：正式候选、工作职责、动态结束年月和切页保留续填', { timeout: 120000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); const profile = await fs.mkdtemp(path.join(testRoot, 'moka-feedback-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId; const errors = [];
+    // 合成资料只通过生产仓库入口写入；不借用真实档案、API 或招聘站点。
+    const set = async (key, value, entryId = null) => rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.' + key, value, entryId } } });
+    const second = {};
+    for (const kind of ['education', 'employment']) second[kind] = (await rpc(options, 'localapply:command', { request: { action: 'createEntry', payload: { profileId, kind, title: '合成第二条' } } })).result;
+    await set('workExperience', '1年以下'); await set('birthDate', '');
+    for (const [key, first, next] of [['school','合成本科大学','合成硕士大学'], ['major','合成专业甲','合成专业乙'], ['educationStartDate','2020-09','2018-09'], ['graduationDate','2024-06-15','2022-06']]) { await set(key, first); await set(key, next, second.education); }
+    await set('employmentDescription', '合成第一条工作职责'); await set('employmentDescription', '合成第二条工作职责', second.employment);
+    // 新页面保留全部内容脚本/授权校验，适配器不能依赖测试专用 ID。
+    const prepare = async (mode = 'feedback') => {
+      const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(api.base + '/test-pages/moka-sugar-controls.html?mode=' + mode);
+      const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+      const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); const view = await rpc(options, 'learning:prepareRecords', { sessionId: scan.sessionId, confirmed: true });
+      return { page, tabId, view };
+    };
+    await t.test('候选正式名称排除说明，经验同义词和学校专业均真正点选', async () => {
+      const { page, view } = await prepare();
+      for (const label of ['工作经验', '学校名称', '专业名称']) for (const row of view.rows.filter((row) => row.field.label === label)) {
+        const result = await rpc(options, 'learning:fill', { sessionId: view.sessionId, scanId: row.field.scanId, confirmed: true }); const filled = result.rows.find((item) => item.field.scanId === row.field.scanId); assert.equal(filled.status, 'success', label + ': ' + filled.reason);
+      }
+      await page.locator('#rerender').click(); const actual = await page.evaluate(() => acceptedControls);
+      assert.equal(actual.experience, '一年以下工作经验'); assert.equal(actual.school0, '合成本科大学'); assert.equal(actual.major1, '合成专业乙'); await page.close();
+    });
+    await t.test('两个等价候选仍拒绝猜选，不因同义规则而覆盖歧义', async () => {
+      const { page, view } = await prepare('equivalent-duplicate'); const row = view.rows.find((item) => item.field.label === '工作经验');
+      const result = await rpc(options, 'learning:fill', { sessionId: view.sessionId, scanId: row.field.scanId, confirmed: true }); const filled = result.rows.find((item) => item.field.scanId === row.field.scanId);
+      assert.equal(filled.status, 'unsupported'); assert.equal(filled.diagnostic.reasonCode, 'ambiguous_option'); assert.equal(await page.evaluate(() => optionClicks), 0); await page.close();
+    });
+    const { page, tabId } = await prepare(); await worker.evaluate((id) => chrome.tabs.update(id, { active: true }), tabId); await page.bringToFront();
+    const loaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); await worker.evaluate((id) => floatingPanel.open(id), tabId); const frame = await loaded;
+    await frame.locator('#profileSel option').first().waitFor({ state: 'attached' }); await frame.locator('#smartScan').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false' && !!document.getElementById('tab-smart').dataset.sessionId);
+    const sessionId = await frame.locator('#tab-smart').getAttribute('data-session-id');
+    await t.test('切换浏览器标签保留未填清单、来源和未保存编辑草稿', async () => {
+      const unknown = frame.locator('.smart-row').filter({ has: frame.getByRole('heading', { name: '合成未知补充 · 待处理', exact: true }) });
+      await unknown.locator('summary').click(); await unknown.locator('.smart-field-label').fill('合成尚未保存草稿');
+      const before = await frame.locator('.smart-row').count(); const other = await context.newPage(); await other.goto(api.base + '/test-pages/login-mock.html'); await other.bringToFront();
+      // headless 不保证 document.hidden 改变，使用真实 chrome.tabs 激活状态验证浏览器标签切换。
+      await worker.evaluate(async (url) => { const tab = (await chrome.tabs.query({})).find((item) => item.url === url); await chrome.tabs.update(tab.id, { active: true }); }, other.url());
+      await page.waitForTimeout(300); await worker.evaluate((id) => chrome.tabs.update(id, { active: true }), tabId); await page.bringToFront();
+      assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), sessionId); assert.equal(await frame.locator('.smart-row').count(), before); assert.equal(await unknown.locator('.smart-field-label').inputValue(), '合成尚未保存草稿');
+      await unknown.locator('summary').click(); await other.close();
+    });
+    await t.test('填写中切页暂停后续项，返回继续并补齐后来启用的结束年月及同条职责', async () => {
+      const initial = await rpc(options, 'learning:session', { sessionId }); assert.equal(initial.rows.filter((row) => row.field.label === '结束日期').length, 0);
+      await worker.evaluate((id) => chrome.tabs.update(id, { active: true }), tabId); await page.bringToFront(); await frame.locator('#smartFillAll').click(); await page.waitForFunction(() => !!acceptedControls.experience);
+      const other = await context.newPage(); await other.goto(api.base + '/test-pages/login-mock.html'); await other.bringToFront();
+      await worker.evaluate(async (url) => { const tab = (await chrome.tabs.query({})).find((item) => item.url === url); await chrome.tabs.update(tab.id, { active: true }); }, other.url());
+      await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('已暂停')); const count = await page.evaluate(() => optionClicks); await page.waitForTimeout(300); assert.equal(await page.evaluate(() => optionClicks), count);
+      assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), sessionId); await worker.evaluate((id) => chrome.tabs.update(id, { active: true }), tabId); await page.bringToFront();
+      await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('填写完成') && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', null, { timeout: 40000 });
+      const view = await rpc(options, 'learning:session', { sessionId });
+      for (const label of ['工作经验','学校名称','专业名称','开始日期','结束日期','工作职责']) assert.ok(view.rows.filter((row) => row.field.label === label).every((row) => row.status === 'success'), label + ': ' + JSON.stringify(view.rows.filter((row) => row.field.label === label).map((row) => [row.status, row.reason])));
+      const values = await page.evaluate(() => acceptedControls); assert.equal(values.endYear0, '2024'); assert.equal(values.endMonth0, '06月'); assert.equal(values.endYear1, '2022'); assert.equal(values.endMonth1, '06月');
+      assert.equal(await page.locator('#duties0').inputValue(), '合成第一条工作职责'); assert.equal(await page.locator('#duties1').inputValue(), '合成第二条工作职责'); assert.equal(await page.evaluate(() => submissions), 0);
+      assert.equal(view.rows.filter((row) => row.status === 'success').length, 11); assert.equal(await frame.locator('.smart-row[data-status="success"]').count(), 0);
+      assert.equal(await page.locator('.sd-Dropdown-dropdown-synthetic:visible').count(), 0);
+      await page.screenshot({ path: path.join(testRoot, 'moka-feedback-completed.png'), fullPage: true }); await other.close();
+    });
+    await t.test('标签保留不放宽导航权限，日志不含资料或候选文字且未调用 AI', async () => {
+      const logs = await rpc(options, 'diagnostics:read'); for (const secret of ['合成第一条工作职责','合成本科大学','一年以下工作经验']) assert.ok(!JSON.stringify(logs).includes(secret));
+      const token = new URL(frame.url()).searchParams.get('token');
+      await page.evaluate(() => history.pushState({}, '', '?mode=navigated')); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').style.display === 'none');
+      const denied = await worker.evaluate(async ({ id, url, token }) => floatingPanel.authorize({ id: chrome.runtime.id, url: chrome.runtime.getURL('panel/panel.html'), tab: { id }, frameId: 1 }, { panelToken: token }), { id: tabId, url: page.url(), token });
+      assert.equal(denied, null); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 上传页的第二轮回归使用 portal 和多段记录，检查真正点选、整条对应及非空保护。
 test('Moka多段补全：portal下拉、日历、项目获奖、自动添加及已有内容保护', {timeout:120000}, async(t)=>{
   const testRoot=path.join(ROOT,'.browser-tests');await fs.mkdir(testRoot,{recursive:true});const profile=await fs.mkdtemp(path.join(testRoot,'moka-experiences-'));const api=await serve();let context;
