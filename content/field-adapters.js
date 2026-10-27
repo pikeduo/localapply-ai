@@ -5,6 +5,14 @@
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const selections = new WeakMap();
   const popups = new WeakMap();
+  const traces = new WeakMap();
+
+  // 单次填写轨迹只含控件状态和数量；复合控件优先返回失败子项，节点和候选内容不离开本页。
+  function diagnostic(item, reset = false) {
+    const parts = Object.entries(item.compound?.parts || { control: item.el }); let last = null;
+    for (const [part, el] of parts) { const trace = traces.get(el); if (reset) traces.delete(el); else if (trace) { const current = { ...trace, ...(part !== 'control' ? { part } : {}) }; if (trace.reasonCode !== 'option_selected') return current; last = current; } }
+    return last;
+  }
 
   // 只枚举明确的列表/日历弹层；用于将一次主动打开中新出现的唯一弹层绑定回输入框。
   function popupRoots() { return [...document.querySelectorAll('[role="listbox"],[role="dialog"],[class*="sd-Dropdown-popup-"],[class*="sd-Dropdown-overlay-"],[class*="sd-picker-panel-"],.rc-picker-dropdown,.ant-picker-dropdown')].filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'); }
@@ -37,22 +45,28 @@
 
   // 精确点选才登记本次选择证据；仅输入文字即使暂时显示相同也不能算填写成功。
   async function fillDropdown(el, value, unit = '') {
-    const desired = String(value); const before = new Set(popupRoots()); selections.delete(el); popups.delete(el); el.focus(); el.click();
-    if (!el.readOnly && !dropdown(el).classList.contains('select')) {
+    const started = Date.now(); const desired = String(value); const before = new Set(popupRoots()); const searchable = !el.readOnly && !dropdown(el).classList.contains('select');
+    const trace = { adapter: 'moka-dropdown', phase: 'open', candidateCount: 0, matchCount: 0, searchable, popupRelation: 'none', associatedPopup: false };
+    selections.delete(el); popups.delete(el); el.focus(); el.click();
+    if (searchable) {
       // 搜索时保持弹层焦点，不能复用会立即 blur 的普通文本填写路径。
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, desired);
       el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
     }
     for (let attempt = 0; attempt < 30; attempt++) {
       await sleep(60);
-      popupFor(el, before);
-      const found = dropdownOptions(el).filter((node) => node.textContent.trim() === desired || node.getAttribute('data-value') === desired || unit && new RegExp('^\\d+' + unit + '?$').test(node.textContent.trim()) && Number(node.textContent.trim().replace(unit, '')) === Number(desired));
+      const popup = popupFor(el, before); const visible = popupRoots(); const candidates = dropdownOptions(el);
+      const found = candidates.filter((node) => node.textContent.trim() === desired || node.getAttribute('data-value') === desired || unit && new RegExp('^\\d+' + unit + '?$').test(node.textContent.trim()) && Number(node.textContent.trim().replace(unit, '')) === Number(desired));
+      Object.assign(trace, { phase: 'options', popupRelation: popup ? el.getAttribute('aria-controls') || el.getAttribute('aria-owns') ? 'aria' : 'portal' : candidates.length ? 'local' : 'none', associatedPopup: !!popup || candidates.length > 0, candidateCount: candidates.length, matchCount: found.length, popupCount: visible.length, newPopupCount: visible.filter((node) => !before.has(node)).length, focused: document.activeElement === el || dropdown(el).contains(document.activeElement), elapsedMs: Date.now() - started });
       if (found.length > 1) break;
       if (found.length === 1) {
         const text = found[0].textContent.trim(); found[0].click(); el.blur();
+        traces.set(el, { ...trace, phase: 'select', reasonCode: 'option_selected' });
         selections.set(el, { expected: desired, text }); return { ok: true };
       }
     }
+    const reasonCode = trace.matchCount > 1 ? 'ambiguous_option' : !trace.focused && !trace.associatedPopup ? 'focus_lost' : !trace.associatedPopup ? 'popup_not_found' : !trace.candidateCount ? 'options_not_found' : 'no_exact_option';
+    traces.set(el, { ...trace, phase: trace.associatedPopup ? 'options' : 'open', reasonCode });
     el.blur(); return { ok: false, status: 'unsupported', reason: '下拉未出现属于此字段的唯一精确选项，请在网页选择' };
   }
 
@@ -285,5 +299,5 @@
     }
     return { ok: true };
   }
-  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, fillDropdown, dropdownAccepted };
+  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, fillDropdown, dropdownAccepted, diagnostic };
 })(globalThis);

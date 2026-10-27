@@ -245,6 +245,76 @@ test('Moka多段补全：portal下拉、日历、项目获奖、自动添加及�
   }finally{if(context)await context.close();await new Promise((resolve)=>api.server.close(resolve));await fs.rm(profile,{recursive:true,force:true,maxRetries:3});}
 });
 
+// 只在合成页面制造下拉故障，验证生产扫描/填写/日志链路和整个浏览器重启后的持久化。
+test('下拉诊断：失败原因、落盘故障、导出及浏览器重启', { timeout: 90000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'dropdown-diagnostics-')); const api = await serve(); let context; let options; let worker; let retainedId;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); ({ worker } = await extension(context));
+    const extensionId = (await extension(context)).extensionId; options = await context.newPage();
+    await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.workExperience', value: '1-3年' } } });
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/moka-experiences.html');
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    // 保留同一份真实文档，逐次替换合成控件，不使用生产站点 HTML 或任何私人值。
+    const prepare = async (scenario) => {
+      await page.evaluate((mode) => {
+        document.getElementById('application').hidden = true; document.getElementById('diagnosticFixture')?.remove();
+        const fixture = document.createElement('div'); fixture.id = 'diagnosticFixture';
+        fixture.innerHTML = '<div class="apply-field-synthetic"><div class="title-synthetic">工作经验</div><div class="sd-Dropdown-container-synthetic"><label class="sd-Select-container-synthetic select"><span class="sd-Input-display-value-synthetic"></span><input placeholder="请选择"></label></div></div><button type="button">合成焦点</button>';
+        document.body.append(fixture); const input = fixture.querySelector('input'); const display = fixture.querySelector('span');
+        if (mode === 'existing') display.textContent = '3-5年';
+        const popup = document.createElement('div'); popup.id = 'syntheticDiagnosticPopup'; popup.setAttribute('role', 'listbox'); popup.hidden = true; fixture.append(popup);
+        if (!['closed','focus'].includes(mode)) input.setAttribute('aria-controls', popup.id);
+        const values = mode === 'empty' ? [] : mode === 'mismatch' ? ['3-5年'] : mode === 'duplicate' ? ['1-3年','1-3年'] : ['1-3年'];
+        for (const value of values) {
+          const option = document.createElement('div'); option.setAttribute('role', 'option'); option.textContent = value; popup.append(option);
+          option.addEventListener('click', () => { if (mode !== 'rejected') display.textContent = value; input.value = ''; popup.hidden = true; });
+        }
+        // 关闭和失焦场景的候选完全移出局部容器，防止测试意外留下可点击选项。
+        if (['closed','focus'].includes(mode)) popup.remove();
+        input.addEventListener('click', () => { if (!['closed','focus'].includes(mode)) popup.hidden = false; if (mode === 'focus') fixture.querySelector('button').focus(); });
+      }, scenario);
+      const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true });
+      const row = scan.rows.find((row) => row.field.label === '工作经验'); assert.ok(row); assert.equal(row.target?.fieldId, 'builtin.workExperience');
+      return { scan, row };
+    };
+    for (const [scenario, status, reasonCode] of [['closed','unsupported','popup_not_found'],['empty','unsupported','options_not_found'],['mismatch','unsupported','no_exact_option'],['duplicate','unsupported','ambiguous_option'],['focus','unsupported','focus_lost'],['rejected','failed','value_not_accepted'],['existing','needs_confirmation','existing_value_preserved'],['accepted','success','verified']]) {
+      await t.test(`合成下拉 ${scenario} 返回 ${reasonCode} 并在响应前保存`, async () => {
+        const { scan, row } = await prepare(scenario); const result = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true });
+        const filled = result.rows.find((value) => value.field.scanId === row.field.scanId); assert.equal(filled.status, status); assert.equal(filled.diagnostic.reasonCode, reasonCode);
+        const logs = await rpc(options, 'diagnostics:read'); const log = logs.rows.filter((value) => value.operation === 'learning.fill').at(-1);
+        assert.equal(log.fill.reasonCode, reasonCode); assert.equal(log.fill.adapter, 'moka-dropdown'); assert.equal(log.fill.traceAvailable, true); assert.equal(log.level, status === 'success' ? 'INFO' : 'WARNING');
+        assert.equal(log.unsupported, Number(status === 'unsupported')); assert.equal(log.needsConfirmation, Number(status === 'needs_confirmation')); assert.equal(log.failed, Number(status === 'failed')); retainedId = log.id;
+        if (scenario === 'mismatch') { assert.equal(log.fill.candidateCount, 1); assert.equal(log.fill.matchCount, 0); }
+        if (scenario === 'duplicate') assert.equal(log.fill.matchCount, 2);
+        if (scenario === 'existing') assert.equal(await page.locator('#diagnosticFixture span').textContent(), '3-5年');
+        for (const secret of ['1-3年','3-5年','工作经验','syntheticDiagnosticPopup',api.base]) assert.ok(!JSON.stringify(logs).includes(secret));
+      });
+    }
+    await t.test('日志写入失败明确返回状态，成功填写保留且后续可继续记录', async () => {
+      const { scan, row } = await prepare('accepted');
+      await worker.evaluate(() => { globalThis.savedDiagnosticAppend = diagnostics.append; diagnostics.append = async (operation, detail) => { if (operation === 'learning.fill') throw new Error('合成日志故障'); return savedDiagnosticAppend(operation, detail); }; });
+      try {
+        const result = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true }); assert.equal(result.diagnosticsSaved, false); assert.equal(result.rows[0].status, 'success');
+      } finally { await worker.evaluate(() => { diagnostics.append = savedDiagnosticAppend; delete globalThis.savedDiagnosticAppend; }); }
+      const again = await prepare('accepted'); await rpc(options, 'learning:fill', { sessionId: again.scan.sessionId, scanId: again.row.field.scanId, confirmed: true });
+      assert.equal((await rpc(options, 'diagnostics:read')).rows.filter((value) => value.operation === 'learning.fill').at(-1).fill.reasonCode, 'verified');
+    });
+    await t.test('整个浏览器重启后可查看并导出自动保存的诊断', async () => {
+      await context.close(); context = await launch(profile); context.setDefaultTimeout(10000); const restarted = await extension(context); options = await context.newPage();
+      await options.goto(`chrome-extension://${restarted.extensionId}/options/options.html#diagnosticsPanel`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+      await options.locator('#logsRefresh').click(); await options.waitForFunction(() => document.getElementById('logsOutput').textContent.includes('no_exact_option'));
+      assert.ok((await rpc(options, 'diagnostics:read')).rows.some((row) => row.id === retainedId)); assert.ok((await options.locator('#logsStorageStatus').textContent()).includes('chrome.storage.local'));
+      const downloadPromise = options.waitForEvent('download'); await options.locator('#logsExport').click(); const download = await downloadPromise;
+      const artifact = path.join(testRoot, 'dropdown-diagnostics-export.json'); await download.saveAs(artifact); const report = JSON.parse(await fs.readFile(artifact, 'utf8'));
+      assert.equal(report.version, 2); assert.equal(report.storage.key, 'localapply.diagnostics'); assert.ok(report.rows.some((row) => row.fill?.reasonCode === 'value_not_accepted'));
+      await options.screenshot({ path: path.join(testRoot, 'dropdown-diagnostics.png'), fullPage: true });
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 使用损坏、歧义及缺失元数据验证保守回退，所有页面修改只作用于合成夹具。
 test('阶段五岗位边界：DOM回退、标题、缺失信息及异步成功', { timeout: 60000 }, async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'stage5-job-boundaries-')); const api = await serve(); let context;
@@ -1604,7 +1674,8 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
       const forgedLoaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().endsWith('?token=forged') });
       await page.evaluate((url) => { const iframe = document.createElement('iframe'); iframe.id = 'forged'; iframe.src = url; document.body.append(iframe); }, `chrome-extension://${extensionId}/panel/panel.html?token=forged`);
       const forged = await forgedLoaded;
-      await forged.waitForFunction(() => typeof sendMessage === 'function');
+      // 伪造 iframe 位于视口外，定时检查脚本就绪，避免默认 rAF 被浏览器节流；权限断言保持不变。
+      await forged.waitForFunction(() => typeof sendMessage === 'function', null, { polling: 100 });
       assert.ok(forged); const denied = await forged.evaluate(() => sendMessage('localapply:read')); assert.equal(denied.ok, false);
       await page.locator('#forged').evaluate((item) => item.remove());
       const blocked = await worker.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: () => chrome.runtime.sendMessage({ type: 'diagnostics:read' }) }))[0].result, tabId);

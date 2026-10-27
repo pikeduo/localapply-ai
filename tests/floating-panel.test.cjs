@@ -35,6 +35,35 @@ test('诊断仅记录白名单与安全错误分类，保留上限且可清空',
   await env.diagnostics.clear(); assert.equal((await env.diagnostics.read()).rows.length, 0);
 });
 
+// 控件诊断只能带固定原因和数量，恶意或含个人资料的附加属性必须丢弃。
+test('下拉诊断保留阶段和精确候选统计，拒绝任意文字与个人内容', async () => {
+  const env = fixture(); const secret = 'sk-synthetic-dropdown-private';
+  const detail = { adapter: 'moka-dropdown', phase: 'options', status: 'unsupported', reasonCode: 'no_exact_option', candidateCount: 4, matchCount: 0,
+    associatedPopup: true, searchable: false, fieldNumber: 7, popupRelation: 'portal', message: secret, value: secret, label: secret, options: [secret], url: secret, token: secret, selector: secret };
+  await env.diagnostics.append('learning.fill', { fill: detail, unsupported: 1, needsConfirmation: 2 });
+  const report = await env.diagnostics.read(); const row = report.rows[0];
+  assert.equal(report.version, 2); assert.equal(report.storage.area, 'chrome.storage.local'); assert.equal(report.storage.key, 'localapply.diagnostics'); assert.equal(report.storage.maxRows, 400); assert.equal(report.storage.retentionDays, 7);
+  assert.equal(row.fill.reasonCode, 'no_exact_option'); assert.equal(row.fill.candidateCount, 4); assert.equal(row.fill.fieldNumber, 7); assert.equal(row.fill.associatedPopup, true); assert.equal(row.unsupported, 1); assert.equal(row.needsConfirmation, 2);
+  assert.ok(!JSON.stringify(report).includes(secret));
+  for (const reasonCode of ['popup_not_found','options_not_found','ambiguous_option','value_not_accepted','existing_value_preserved']) {
+    const result = env.context.LocalApplyDiagnostics.fillInfo({ ...detail, reasonCode }); assert.equal(result.reasonCode, reasonCode); assert.notEqual(result.message, row.fill.message);
+  }
+  const invalid = env.context.LocalApplyDiagnostics.fillInfo({ adapter: secret, phase: secret, reasonCode: secret, candidateCount: -1, matchCount: '2', focused: secret }); assert.equal(invalid, null);
+  await env.diagnostics.append('runtime.request', { fill: detail }); assert.equal((await env.diagnostics.read()).rows.at(-1).fill, undefined);
+});
+
+// 写入故障不得伪报已持久化；已有记录仍可导出，存储恢复后继续串行写入。
+test('诊断写入失败可见且恢复后继续保存，不影响其他本地数据', async () => {
+  const env = fixture(); const storage = env.browser.storage.session; const save = storage.set; const logger = env.diagnostics;
+  await logger.append('learning.scanPage', { count: 1 }); env.disk.privateSyntheticData = 'keep';
+  storage.set = async () => { throw new Error('合成磁盘写入失败'); };
+  await assert.rejects(logger.append('learning.fill', { fill: { status: 'failed', reasonCode: 'value_not_accepted' } }));
+  const failed = await logger.read(); assert.equal(failed.storage.lastWriteFailed, true); assert.equal(failed.rows.length, 1);
+  await assert.rejects(logger.clear()); assert.equal((await logger.read()).rows.length, 1);
+  storage.set = save; await logger.append('learning.fill', { fill: { status: 'success', reasonCode: 'verified' } });
+  assert.equal((await logger.read()).storage.lastWriteFailed, false); assert.equal((await logger.read()).rows.length, 2); assert.equal(env.disk.privateSyntheticData, 'keep');
+});
+
 // 私有页面不能凭地址提升权限，必须与用户打开的文档会话相符。
 test('悬浮卡片令牌绑定标签/URL/文档/有效期，后台重建可恢复且关闭撤销', async () => {
   const env = fixture(); assert.equal(await env.manager.authorize(env.sender, { panelToken: 'forged' }), null);

@@ -94,18 +94,22 @@ function formatTs(ts) {
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   const started = Date.now();
   const operation = String(msg?.type || '').replace(':', '.');
-  const quiet = ['wsa:ping','wsa:getState','wsa:contentSettings','localapply:read','learning:session','learning:changed','learning:rules','panel:context','panel:layout','diagnostics:read','diagnostics:clear','diagnostics:presence'].includes(msg?.type);
-  // 完成响应后串行落盘，避免记录高频轮询或消息 payload。
-  function sendResponse(response, logError) {
+  const quiet = ['wsa:ping','wsa:getState','wsa:contentSettings','localapply:read','learning:session','learning:changed','learning:rules','panel:context','panel:layout','diagnostics:read','diagnostics:clear','diagnostics:presence','diagnostics:uiError'].includes(msg?.type);
+  // 关键结果先等待脱敏日志落盘再响应；日志故障仅提示，不改变已经完成的填表结果。
+  async function sendResponse(response, logError) {
     const count = response?.rows?.length ?? response?.data?.items?.length;
     // 岗位缺失和控件拒绝虽可正常返回，仍需警告日志，便于区分业务失败与通信成功。
     const outcome = msg?.type === 'learning:fill' ? response?.rows?.find((row) => row.field.scanId === msg.scanId) : null;
     const incomplete = response?.ok && (msg?.type === 'jobs:scan' && !response.recognized || outcome && outcome.status !== 'success');
-    if (!quiet) diagnostics.append(operation, { level: response?.ok ? incomplete ? 'WARNING' : 'INFO' : 'ERROR', durationMs: Date.now() - started, count,
-      ...(response?.rows ? { success: response.rows.filter((row) => row.status === 'success').length, failed: response.rows.filter((row) => row.status === 'failed').length } : {}),
+    if (!quiet) try { await diagnostics.append(operation, { level: response?.ok ? incomplete ? 'WARNING' : 'INFO' : 'ERROR', durationMs: Date.now() - started, count,
+      ...(response?.rows ? { success: response.rows.filter((row) => row.status === 'success').length, failed: response.rows.filter((row) => row.status === 'failed').length,
+        unsupported: response.rows.filter((row) => row.status === 'unsupported').length, needsConfirmation: response.rows.filter((row) => row.status === 'needs_confirmation').length } : {}),
+      ...(outcome?.diagnostic ? { fill: outcome.diagnostic } : {}),
       ...(incomplete ? { error: new Error(msg.type === 'jobs:scan' ? '缺少岗位元数据' : outcome.status === 'unsupported' ? '控件格式暂不支持' : outcome.status === 'needs_confirmation' ? '网页内容需要确认' : '网页填写校验失败') } : {}),
-      ...(!response?.ok ? { error: logError || response?.error } : {}) }).catch(() => {});
-    respond(response);
+      ...(!response?.ok ? { error: logError || response?.error } : {}) }); }
+    catch { response = { ...response, diagnosticsSaved: false }; }
+    // 调用页可能已关闭；响应通道失效不能产生新的未处理异常。
+    try { respond(response); } catch {}
   }
   (async () => {
     try {
@@ -140,7 +144,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const probe = await chrome.tabs.sendMessage(panelSession.tabId, { type: 'wsa:floatingProbe' }, { frameId: 0 });
         sendResponse({ ok: true, tabId: panelSession.tabId, presence: probe.presence }); return;
       }
-      if (msg?.type === 'panel:close') { if (!panelSession) throw new Error('悬浮会话无效'); sendResponse({ ok: true }); await floatingPanel.close(panelSession.tabId); return; }
+      if (msg?.type === 'panel:close') { if (!panelSession) throw new Error('悬浮会话无效'); await sendResponse({ ok: true }); await floatingPanel.close(panelSession.tabId); return; }
       // 布局命令仅由已授权的扩展卡片发送，不能让网页伪造拖动或取得资料。
       if (msg?.type === 'panel:layout') {
         if (!panelSession || typeof msg.collapsed !== 'boolean' && !(Number.isFinite(msg.dx) && Number.isFinite(msg.dy) && Math.abs(msg.dx) <= 2000 && Math.abs(msg.dy) <= 2000)) throw new Error('悬浮布局参数无效');

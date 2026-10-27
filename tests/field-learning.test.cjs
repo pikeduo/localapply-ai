@@ -9,9 +9,9 @@ const ROOT = path.resolve(__dirname, '..');
 
 // 构建与生产相同的 repository/匹配/学习服务，网络和网页只由明确桩响应。
 async function fixture() {
-  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let completion = []; let recordBlocks = []; let onAdd = () => {};
+  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let completion = []; let recordBlocks = []; let onAdd = () => {};
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
-  for (const file of ['templates','providers','key-vault','resume','field-matching','field-suggestions','applications','local-store','field-learning']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
+  for (const file of ['templates','providers','key-vault','resume','field-matching','field-suggestions','applications','local-store','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
   const repo = context.LocalApplyStore.createRepository(storage); const initial = await repo.readLegacy(); const configured = structuredClone(initial);
   configured.settings.model = 'synthetic-field-model'; await repo.saveLegacy(initial, configured);
@@ -21,7 +21,7 @@ async function fixture() {
     if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', origin: new URL(url).origin, fields: structuredClone(fields), completion, recordBlocks } };
     if (msg.type === 'learning:addRecord') { await onAdd(); return { ok: true }; }
     if (msg.type === 'learning:read') return { ok: true, value: actual };
-    if (msg.type === 'learning:fill') { if (fillGate) await fillGate; actual = failFill ? '' : msg.value; return { ok: true, result: { status: failFill ? 'failed' : 'success', reason: failFill ? '受控组件回退' : '', verifiedAt: new Date().toISOString() } }; }
+    if (msg.type === 'learning:fill') { if (fillGate) await fillGate; actual = failFill ? '' : msg.value; return { ok: true, result: { status: failFill ? 'failed' : 'success', reason: failFill ? '受控组件回退' : '', diagnostic: fillDiagnostic, verifiedAt: new Date().toISOString() } }; }
     if (msg.type === 'learning:verify') return { ok: true, result: { status: actual === msg.value ? 'success' : 'failed', verifiedAt: new Date().toISOString() } };
     return { ok: true };
   } } };
@@ -36,7 +36,7 @@ async function fixture() {
   const setValue = (fieldId, value, entryId = null) => repo.command({ action: 'setValue', payload: { profileId, fieldId, entryId, value } });
   return { context, repo, disk, profileId, calls, aiCalls, field, scan, send, service, setValue,
     response: (next) => { response = next; }, navigate: () => { url += '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, completion: (value) => { completion = value; },
-    recordBlocks: (value) => { recordBlocks = value; }, pageFields: (value) => { fields = value; }, onAdd: (callback) => { onAdd = callback; },
+    recordBlocks: (value) => { recordBlocks = value; }, pageFields: (value) => { fields = value; }, onAdd: (callback) => { onAdd = callback; }, diagnostic: (value) => { fillDiagnostic = value; },
     holdFill: () => { let release; fillGate = new Promise((resolve) => { release = resolve; }); return release; } };
 }
 
@@ -52,6 +52,16 @@ test('已有标准字段本地直接匹配，不调用 AI；0 和 false 不是�
   const env = await fixture(); await env.setValue('builtin.name', '合成姓名');
   const view = await env.scan(env.field('姓名')); assert.equal(view.rows[0].status, 'matched'); assert.equal(view.rows[0].target.fieldId, 'builtin.name');
   assert.equal(env.aiCalls.length, 0); assert.equal(env.context.FieldMatchingEngine.hasValue(false), true); assert.equal(env.context.FieldMatchingEngine.hasValue(0), true);
+});
+
+// 内容脚本轨迹经后台二次白名单过滤，轮询保留；旧脚本明确缺少轨迹，不虚构失败原因。
+test('填写诊断跨轮询保留且不进入个人库，兼容旧内容脚本结果', async () => {
+  const env = await fixture(); await env.setValue('builtin.name', '合成姓名'); const field = env.field('姓名'); let view = await env.scan(field);
+  env.diagnostic({ adapter: 'text', phase: 'verify', reasonCode: 'verified', value: '禁止入日志的个人值', label: '禁止入日志的标签' });
+  view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true });
+  assert.equal(view.rows[0].diagnostic.fieldNumber, 1); assert.equal(view.rows[0].diagnostic.traceAvailable, true); assert.equal(view.rows[0].diagnostic.reasonCode, 'verified'); assert.ok(!JSON.stringify(view.rows[0].diagnostic).includes('禁止入日志'));
+  const refreshed = await env.send(view, 'session'); assert.deepEqual(refreshed.rows[0].diagnostic, view.rows[0].diagnostic); assert.ok(!JSON.stringify(await env.repo.exportBackup()).includes('traceAvailable'));
+  env.diagnostic(undefined); env.fail(true); view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true }); assert.equal(view.rows[0].status, 'failed'); assert.equal(view.rows[0].diagnostic.traceAvailable, false); assert.equal(view.rows[0].diagnostic.reasonCode, undefined);
 });
 
 // 完成标记只含是否有值；重新清空已验证字段后恢复为 matched，不保留假成功。

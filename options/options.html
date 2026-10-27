@@ -240,6 +240,7 @@
     <section class="workspace-page" data-workspace-page="diagnosticsPanel" hidden>
     <section class="card" id="diagnosticsPanel">
       <h2>运行日志与错误诊断</h2>
+      <p id="logsStorageStatus" class="muted">日志自动保存在本浏览器扩展的 chrome.storage.local（localapply.diagnostics），重启后保留；可导出为 JSON 文件。</p>
       <p class="muted">仅保留本机最近七天、最多 400 条操作、耗时、数量和错误分类；不记录 API Key、个人字段值、简历正文或完整网页地址。日志不进入档案备份。</p>
       <div class="row"><button id="logsRefresh" class="btn ghost">刷新日志</button><button id="logsExport" class="btn ghost">导出日志</button><button id="logsClear" class="btn ghost">清空日志</button></div><pre id="logsOutput" style="max-height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere"></pre>
       <p id="fileDiagnosticsNotice" class="muted" hidden>本地文件模式无法读取扩展运行日志，请从浏览器扩展设置页查看。</p>

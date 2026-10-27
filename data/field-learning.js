@@ -66,6 +66,7 @@
           Object.assign(row, { target: previous.target, chosen: true, status: previous.status, reason: row.source === 'memory' ? '填写已验证，已记住本地网站映射' : previous.reason, source: row.source === 'memory' ? 'memory' : previous.source });
           if (previous.verification) row.verification = previous.verification;
           if (previous.conflict) row.conflict = previous.conflict;
+          if (previous.diagnostic) row.diagnostic = previous.diagnostic;
         }
         if (previous?.suggestion && !row.target) {
           const suggestion = previous.suggestion;
@@ -284,7 +285,7 @@
         // 覆盖令牌只允许当前项、当前资料版本及五分钟内已展示的差异，不能用布尔开关绕过。
         const overwrite = msg.overwriteToken !== undefined;
         if (overwrite) check(row.conflict?.token === msg.overwriteToken && row.conflict.revision === db.revision && Date.now() - row.conflict.createdAt < 300000 && JSON.stringify(value) === JSON.stringify(row.conflict.after), '覆盖确认已失效，请重新填写并预览差异');
-        row.status = 'filling';
+        row.status = 'filling'; delete row.diagnostic;
         try {
           const result = await pageMessage(item.tabId, { type: 'learning:fill', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId, value, ...(overwrite ? { overwrite: true, expectedCurrent: row.conflict.before } : {}) });
           check(['success', 'failed', 'unsupported', 'needs_confirmation'].includes(result.result.status), '网页返回无效填写结果');
@@ -292,7 +293,14 @@
           row.chosen = true;
           row.conflict = result.result.conflict ? { ...result.result.conflict, token: crypto.randomUUID(), revision: db.revision, createdAt: Date.now() } : null;
           row.verification = row.status === 'success' ? { target: clone(row.target), value: clone(value), verifiedAt: result.result.verifiedAt } : null;
-        } catch (error) { row.status = 'failed'; row.reason = error.message; row.verification = null; }
+          // 旧内容脚本可能没有轨迹，显式标记可用性；后台补编号并再次过滤个人值和网页文字。
+          row.diagnostic = global.LocalApplyDiagnostics.fillInfo({ ...result.result.diagnostic, traceAvailable: !!result.result.diagnostic,
+            fieldNumber: item.fields.findIndex((field) => field.scanId === row.field.scanId) + 1, controlType: row.field.type, fieldKind: row.field.kind, status: row.status });
+        } catch (error) {
+          row.status = 'failed'; row.reason = error.message; row.verification = null; row.chosen = true;
+          row.diagnostic = global.LocalApplyDiagnostics.fillInfo({ phase: 'write', reasonCode: 'operation_error', status: 'failed', traceAvailable: false,
+            fieldNumber: item.fields.findIndex((field) => field.scanId === row.field.scanId) + 1, controlType: row.field.type, fieldKind: row.field.kind });
+        }
         return view(item, db);
       }
       if (msg.type === 'learning:remember') {
