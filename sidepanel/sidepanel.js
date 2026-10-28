@@ -167,7 +167,7 @@ async function injectContentScripts(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'],
+      files: ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/fill-session.js', 'content/detector.js', 'content/filler.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'],
     });
     await new Promise((r) => setTimeout(r, 700)); // 等detector完成首次检测
     return true;
@@ -603,6 +603,7 @@ function manualItem(f, prof) {
   return div;
 }
 
+// 开放题起草仍独立保留；未经资料确认的草稿只复制，不绕过规范来源直接写网页。
 function openItem(f, prof) {
   const div = document.createElement('div');
   div.className = 'fitem';
@@ -628,16 +629,14 @@ function openItem(f, prof) {
   l2.className = 'l2';
   const bFill = document.createElement('button');
   bFill.className = 'btn';
-  bFill.textContent = '填入';
+  bFill.textContent = '复制草稿';
   bFill.addEventListener('click', async () => {
     const text = (openPreviews[f.id] || '').trim();
     if (!text) return toastMsg('草稿为空', 'err');
     bFill.disabled = true;
-    const res = await sendToTab(detectionTabId, 'wsa:fillOne', {
-      item: { id: f.id, label: f.label, value: text, inputType: f.inputType },
-    });
-    bFill.disabled = false;
-    handleFillResponse(res, { label: f.label, value: text, pfSensitive: false });
+    // 起草文本不是规范资料来源，复制后由用户核对粘贴，不绕过填写意图契约。
+    try{await navigator.clipboard.writeText(text);toastMsg('草稿已复制，请核对后在网页粘贴','ok');}
+    catch{toastMsg('复制失败，请手动选择草稿复制','err');}finally{bFill.disabled=false;}
   });
   const bAgain = document.createElement('button');
   bAgain.className = 'btn ghost';
@@ -730,7 +729,7 @@ async function draftOpen(f, btn) {
 
 // ============ 填充执行 ============
 
-// 将当前档案的非空值交给原引擎，持久化交给统一数据入口。
+// 旧批量入口只提供规范字段标识，实际来源/计划/回读/取消共用智能填写链路。
 async function onAutoFill() {
   const btn = $('#btnAutoFill');
   if (btn) {
@@ -746,8 +745,8 @@ async function onAutoFill() {
       if (!fieldText(pf.value).trim()) continue; // 没值就跳过，不进复查清单制造噪音
       items.push({
         id: f.id,
-        label: pf.label,
-        value: pf.value,
+        label: f.label,
+        fid: pf.fid,
         inputType: f.inputType,
         options: f.options,
         masked: pf.sensitive,
@@ -757,7 +756,8 @@ async function onAutoFill() {
       toastMsg('档案里没有可自动填的值；长文本请在下方点选区手动填', 'err');
       return;
     }
-    const res = await sendToTab(detectionTabId, 'wsa:autofill', { items });
+    const res = await globalThis.LocalApplyLearningUI.legacyFill(detectionTabId,items,true);
+    if(!res.ok)throw new Error(res.error);
     review = (res.results || []).map((r) => ({ ...r, pfSensitive: !!items.find((i) => i.id === r.id && i.masked) }));
     const okCount = review.filter((r) => r.ok).length;
     addLedger({ autoCount: okCount, manualCount: 0 });
@@ -781,19 +781,11 @@ async function onAutoFill() {
   }
 }
 
+// 旧单项来源由绑定 fid 重新解析，不把旧投影值直接发往网页。
 async function doFillOne(f, pf, btn) {
   if (btn) btn.disabled = true;
   try {
-    const res = await sendToTab(detectionTabId, 'wsa:fillOne', {
-      item: {
-        id: f.id,
-        label: pf.label,
-        value: pf.value,
-        inputType: f.inputType,
-        options: f.options,
-        masked: pf.sensitive,
-      },
-    });
+    const res = await globalThis.LocalApplyLearningUI.legacyFill(detectionTabId,[{id:f.id,label:f.label,fid:pf.fid}]);
     handleFillResponse(res, { label: pf.label, value: pf.value, pfSensitive: pf.sensitive });
   } finally {
     if (btn) btn.disabled = false;
@@ -1040,17 +1032,18 @@ window.WSA = {
     renderFillTab();
     return detection;
   },
+  // 验收入口复用真实批量按钮路径。
   async autoFill() {
     await onAutoFill();
     return review;
   },
+  // 验收单项同样受规范来源与统一计划约束。
   async fillOne(id, value) {
     const f = detection.fields.find((x) => x.id === id);
     const prof = getActiveProfile(state);
     const pf = findProfileFieldByKey(prof, f && f.key);
-    const res = await sendToTab(detectionTabId, 'wsa:fillOne', {
-      item: { id, label: pf ? pf.label : (f ? f.label : id), value, inputType: f ? f.inputType : 'text', options: f ? f.options : undefined, masked: pf ? pf.sensitive : false },
-    });
+    if(!f||!pf||JSON.stringify(value)!==JSON.stringify(pf.value))throw new Error('请先将内容保存到档案，再选择规范来源填写');
+    const res=await globalThis.LocalApplyLearningUI.legacyFill(detectionTabId,[{id:f.id,label:f.label,fid:pf.fid}]);
     // 与真实 UI 路径（handleFillResponse）一致的台账与复查逻辑
     const r = res && res.results && res.results[0];
     if (r && r.ok) {

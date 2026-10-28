@@ -14,6 +14,8 @@
     if (writing && (el.readOnly || el.getAttribute('aria-readonly') === 'true')) return { ok: false, status: 'unsupported', reason: '只读控件需要网页手动操作' };
     if (el.getAttribute('role') === 'combobox' || /^(list|both)$/.test(el.getAttribute('aria-autocomplete') || '')
       || /^(true|listbox|tree|grid|dialog)$/.test(el.getAttribute('aria-haspopup') || '')) return { ok: false, status: 'unsupported', reason: '此控件需要选项适配器，未按普通文本填写' };
+    // 旧补全框未提供关联/选中证据时也不能按文本假报成功；仅检查同一父容器的直接列表。
+    if(el.tagName==='INPUT'&&el.parentElement?.querySelector(':scope > ul,:scope > ol')&&el.parentElement.querySelectorAll('input,textarea,select,[role="combobox"]').length===1)return {ok:false,status:'unsupported',reason:'此输入包含未关联的候选列表，请在网页手动选择'};
     return null;
   }
 

@@ -8,6 +8,62 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 第十步从实际卡片/旧侧栏点击开始，连接断开必须终止正在等待的候选，不以后台桩替代。
+test('分层第十步：双入口批次停止、连接关闭及页面生命周期', {timeout:120000}, async(t)=>{
+  const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'session-'));const api=await serve();let context;let worker;let extensionId;let page;let frame;let options;let tabId;const errors=[];
+  try{
+    context=await launch(profile);context.setDefaultTimeout(10000);({worker,extensionId}=await extension(context));options=await context.newPage();await options.goto(`chrome-extension://${extensionId}/options/options.html`);await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
+    for(const [fieldId,value]of[['builtin.gender','男'],['builtin.name','合成批次姓名']])await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId,value}}});
+    page=await context.newPage();page.on('pageerror',(error)=>errors.push(error.message));await page.goto(api.base+'/test-pages/session-controls.html');tabId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((row)=>row.url===url).id,page.url());
+    // 卡片经真实内容脚本点击请求打开，不能手造 token 或绕过后台授权。
+    async function open(){await page.bringToFront();const attached=page.waitForEvent('framenavigated',{predicate:(next)=>next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});await worker.evaluate(async(tabId)=>chrome.scripting.executeScript({target:{tabId},func:()=>chrome.runtime.sendMessage({type:'wsa:openPanel'})}),tabId);frame=await attached;await frame.locator('#profileSel option').first().waitFor({state:'attached'});}
+    // 只等待已实际发起的异步候选请求，停止前不抢焦点或手动点候选。
+    async function start(){await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')!=='true');const count=await page.evaluate(()=>__sessionQueries);await frame.locator('#smartFillAll').click();await page.waitForFunction((count)=>__sessionQueries>count,count);await frame.locator('#smartStopFill').waitFor({state:'visible'});}
+    await open();
+    await t.test('停止按钮中止当前候选等待和后续姓名，保留搜索文字但不记成功',async()=>{
+      await start();await frame.locator('#smartStopFill').click();await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('已停止填写'));await page.waitForTimeout(800);assert.equal(await page.evaluate(()=>__sessionClicks),0);assert.equal(await page.locator('#session-name').inputValue(),'');assert.equal((await rpc(options,'localapply:read')).database.mappingRules.length,0);
+    });
+    await t.test('新批次可继续，记忆写入不错误取消下一项，当前网页非空值保留',async()=>{
+      await page.evaluate(()=>__sessionReset());await frame.locator('#smartRememberAfter').check();await frame.locator('#smartFillAll').click();await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('填写完成：')&&document.getElementById('smartStopFill').hidden);assert.equal(await page.locator('#session-gender').getAttribute('data-value'),'M');assert.equal(await page.locator('#session-name').inputValue(),'合成批次姓名');assert.ok((await rpc(options,'localapply:read')).database.mappingRules.length>=2);
+      await page.locator('#session-name').fill('网页原有姓名');await frame.locator('#smartFillAll').click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='true');await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')!=='true');assert.equal(await page.locator('#session-name').inputValue(),'网页原有姓名');
+    });
+    await t.test('关闭卡片触发后台取消，候选晚到不点选，重新打开可重新授权',async()=>{
+      await page.evaluate(()=>{__sessionReset();window.__sessionHold=true;});const clicks=await page.evaluate(()=>__sessionClicks);await start();const detached=page.waitForEvent('framedetached',{predicate:(next)=>next===frame});await frame.locator('#panelClose').click();await detached;await page.evaluate(()=>__sessionRelease?.());await page.waitForTimeout(150);const after=await page.evaluate(()=>__sessionClicks);const name=await page.locator('#session-name').inputValue();await open();assert.equal(after,clicks);assert.equal(name,'');
+    });
+    await t.test('仅移除 iframe 也可靠断开租约，不能依赖关闭按钮才能停止',async()=>{
+      await page.evaluate(()=>{__sessionReset();window.__sessionHold=true;});const clicks=await page.evaluate(()=>__sessionClicks);await start();
+      // 通过实际 iframe 导航触发断连，保留宿主表单；没有发送取消消息来冒充连接清理。
+      await frame.goto('about:blank');await page.evaluate(()=>__sessionRelease?.());await page.waitForTimeout(150);const after=await page.evaluate(()=>__sessionClicks);const name=await page.locator('#session-name').inputValue();await page.reload();await open();assert.equal(after,clicks);assert.equal(name,'');
+    });
+    await t.test('切换浏览器标签暂停后续字段，停止可释放暂停，返回不会再写下一项',async()=>{
+      await page.evaluate(()=>__sessionReset());const queries=await page.evaluate(()=>__sessionQueries);await frame.locator('#smartFillAll').click();await page.waitForFunction((queries)=>__sessionQueries>queries,queries);const other=await context.newPage();await other.goto(api.base+'/test-pages/session-controls.html?other=1');await worker.evaluate(async(id)=>chrome.tabs.update(id,{active:true}),await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((row)=>row.url===url).id,other.url()));
+      await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('暂停'));await frame.locator('#smartStopFill').click();await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('已停止填写'));await page.bringToFront();await other.close();await page.waitForTimeout(100);assert.equal(await page.locator('#session-name').inputValue(),'');
+    });
+    await t.test('旧侧栏预览与同一停止按钮走统一计划，关闭旧侧栏后也无迟到点选',async()=>{
+      const sidebar=await context.newPage();await sidebar.goto(`chrome-extension://${extensionId}/sidepanel/sidepanel.html`);await sidebar.locator('#profileSel option').first().waitFor({state:'attached'});await page.bringToFront();await sidebar.evaluate(()=>WSA.refresh());await sidebar.locator('#tabSmartBtn').click();await page.evaluate(()=>{__sessionReset();window.__sessionHold=true;});const clicks=await page.evaluate(()=>__sessionClicks);
+      // 使用真实扫描按钮建立界面状态，不注入 UI current 变量。
+      await sidebar.locator('#smartPageConsent').check();await sidebar.locator('#smartScan').click();await sidebar.waitForFunction(()=>document.querySelectorAll('.smart-row').length>0||document.getElementById('smartStatus').className==='err');assert.ok(await sidebar.locator('.smart-row').count(),await sidebar.locator('#smartStatus').textContent());await sidebar.locator('#tabSmartBtn').click();await sidebar.locator('#smartFillAll').click();await sidebar.locator('#smartFillConsent').check();const queries=await page.evaluate(()=>__sessionQueries);await sidebar.locator('#smartFillConfirm').click();await page.waitForFunction((queries)=>__sessionQueries>queries,queries);await sidebar.close();await page.evaluate(()=>__sessionRelease?.());await page.waitForTimeout(150);assert.equal(await page.evaluate(()=>__sessionClicks),clicks);assert.equal(await page.locator('#session-name').inputValue(),'');
+    });
+    await t.test('宿主 SPA 导航撤销批次；伪造跨页面会话不能写入或停止另一页面',async()=>{
+      await page.reload();await open();await page.evaluate(()=>__sessionReset());const clicks=await page.evaluate(()=>__sessionClicks);await start();await page.evaluate(()=>history.pushState({},'',location.pathname+'?changed=1'));await page.waitForTimeout(850);assert.equal(await page.evaluate(()=>__sessionClicks),clicks);assert.equal(await page.locator('#session-name').inputValue(),'');
+      const other=await context.newPage();await other.goto(api.base+'/test-pages/session-controls.html');const otherId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((row)=>row.url===url).id,other.url());const scan=await rpc(options,'learning:scanPage',{tabId:otherId,confirmed:true});const scoped=await worker.evaluate((request)=>fieldLearning.handle(request,{tabId:-1,documentId:'other'}).then(()=>false,()=>true),{type:'learning:beginFill',sessionId:scan.sessionId,confirmed:true});assert.equal(scoped,true);await other.close();
+    });
+    await t.test('外部切档案立即清空旧字段和取消等待，不再发布旧来源结果',async()=>{
+      await page.reload();await open();await page.evaluate(()=>{__sessionReset();window.__sessionHold=true;});const clicks=await page.evaluate(()=>__sessionClicks);await start();
+      const created=await rpc(options,'localapply:command',{request:{action:'createProfile',payload:{name:'合成切换档案'}}});await frame.waitForFunction((id)=>document.getElementById('profileSel').value===id,created.result);await page.evaluate(()=>__sessionRelease?.());await page.waitForTimeout(150);assert.equal(await page.evaluate(()=>__sessionClicks),clicks);assert.equal(await page.locator('#session-name').inputValue(),'');assert.equal(await frame.locator('.smart-row').count(),0);
+      const db=(await rpc(options,'localapply:read')).database;await rpc(options,'localapply:command',{request:{action:'deleteProfile',payload:{profileId:created.result,confirmed:true},expectedRevision:db.revision}});
+    });
+    await t.test('无选中证据的旧补全拒绝按文本假报成功；有关联的 mousedown 控件仍真实选中',async()=>{
+      await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.ethnic',value:'汉族'}}});const other=await context.newPage();
+      for(const unlabeled of [true,false]){await other.goto(api.base+'/test-pages/moka-autocomplete.html'+(unlabeled?'?unlabeled=1':''));const id=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((tab)=>tab.url===url).id,other.url());const scan=await rpc(options,'learning:scanPage',{tabId:id,confirmed:true});const row=scan.rows.find((row)=>row.field.label==='民族');assert.ok(row);const view=await rpc(options,'learning:fill',{sessionId:scan.sessionId,scanId:row.field.scanId,confirmed:true});const result=view.rows.find((next)=>next.field.scanId===row.field.scanId);assert.equal(result.status,unlabeled?'unsupported':'success',result.reason);assert.equal(await other.evaluate(()=>__mokaAutoProbe().picked),unlabeled?'':'汉族');}
+      await other.close();
+    });
+    await t.test('批次/操作标识不进入个人库、备份或日志，无真实 API 和提交',async()=>{
+      const logs=JSON.stringify(await rpc(options,'diagnostics:read'));const backup=JSON.stringify((await rpc(options,'localapply:exportBackup')).backup);for(const secret of ['合成批次姓名','网页原有姓名','operation.','batchId','session-gender',page.url()])assert.ok(!logs.includes(secret),secret);for(const secret of ['operation.','batchId'])assert.ok(!backup.includes(secret),secret);assert.equal(api.calls.length,0);assert.equal(await page.evaluate(()=>__submitCount),0);assert.deepEqual(errors,[]);await page.screenshot({path:path.join(root,'fill-session-controls.png'),fullPage:true});
+    });
+  }finally{await context?.close();api.server.closeAllConnections();await new Promise((resolve)=>api.server.close(resolve));assert.ok(path.resolve(profile).startsWith(path.resolve(root)+path.sep));await fs.rm(profile,{recursive:true,force:true,maxRetries:3});}
+});
+
 // 第九步仅操作合成页面；规则通过真实确认/填写/验证产生，不伪造旧验证或个人来源。
 test('分层第九步：跨控件语义记忆、管理失效、备份及进程重启', {timeout:120000}, async(t)=>{
   const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'mapping-'));const api=await serve();const otherApi=await serve();let context;let extensionId;let options;let page;let worker;let profileId;let tabId;let scan;let oldRule;const errors=[];
@@ -1063,7 +1119,8 @@ test('Moka多段补全：portal下拉、日历、项目获奖、自动添加及�
     });
     await t.test('只含出生年月不能补日，已有陌生项目保留，超过自动添加上限仍可扫描',async()=>{
       await set('birthDate','2000-06');await page.locator('#birth').evaluate((input)=>{input.value='';});await frame.locator('#smartRefresh').click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
-      const birth=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'出生日期 (年龄)'})});await birth.getByRole('button',{name:'单项填写',exact:true}).click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');assert.equal(await page.locator('#birth').inputValue(),'');assert.ok((await birth.textContent()).includes('不自动补日'));
+      // 第08步已统一精度不足原因码；保留不补日及网页仍为空的原安全断言。
+      const birth=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'出生日期 (年龄)'})});await birth.getByRole('button',{name:'单项填写',exact:true}).click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');assert.equal(await page.locator('#birth').inputValue(),'');assert.match(await birth.textContent(),/精度不足/);
       const guarded=await context.newPage();await guarded.goto(api.base+'/test-pages/moka-experiences.html?guarded=1');await guarded.getByPlaceholder('项目名称',{exact:true}).fill('网页原有项目');const tabId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((tab)=>tab.url===url).id,guarded.url());const scan=await rpc(options,'learning:scanPage',{tabId,confirmed:true});const view=await rpc(options,'learning:prepareRecords',{sessionId:scan.sessionId,confirmed:true});assert.ok(view.notice.includes('保留原记录'));assert.equal(await guarded.locator('[data-kind="project"] .apply-fields-synthetic').count(),1);assert.equal(await guarded.getByPlaceholder('项目名称',{exact:true}).inputValue(),'网页原有项目');assert.equal(await guarded.evaluate(()=>additions.project||0),0);
       // 模拟用户已创建的大量记录，限制自动增补不能让正常扫描失败或丢失分组。
       await guarded.evaluate(()=>{const add=document.querySelector('[data-kind="project"] button');for(let index=0;index<20;index++)add.click();});const large=await rpc(options,'learning:session',{sessionId:scan.sessionId});assert.equal(large.rows.filter((row)=>row.field.kind==='project').length,126);await guarded.close();
@@ -2038,7 +2095,7 @@ test('真实浏览器：迁移、UI、隔离、旧填充、备份和进程重启
         await WSA.save();
       });
       const detection = await detect(sidebar, page); assert.ok(detection.counts.auto >= 8);
-      const review = await sidebar.evaluate(() => WSA.autoFill()); assert.ok(review.filter((row) => row.ok).length >= 8);
+      const review = await sidebar.evaluate(() => WSA.autoFill()); assert.ok(review.filter((row) => row.ok).length >= 8,await sidebar.locator('#smartStatus').textContent());
       const probe = await page.evaluate(() => __genericProbe()); assert.equal(probe.name, '合成测试姓名'); assert.equal(probe.grad, '2028-06'); assert.equal(probe.openQ, '');
       assert.equal(await page.evaluate(() => window.__testSubmitCount), 0);
       const security = await worker.evaluate(async () => {

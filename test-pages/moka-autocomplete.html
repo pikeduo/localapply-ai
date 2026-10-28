@@ -44,6 +44,9 @@
   const input = document.getElementById('ethnicInput');
   const drop = document.getElementById('ethnicDrop');
   const compState = { picked: '' };
+  // 新契约要求可验证的关联/选中证据；标记仅由真实选择事件根据已有组件 state 更新。
+  const accessible = !new URLSearchParams(location.search).has('unlabeled');
+  if(accessible){input.setAttribute('role','combobox');input.setAttribute('aria-controls',drop.id);drop.setAttribute('role','listbox');}
 
   function show(filter) {
     const f = (filter || '').trim();
@@ -52,9 +55,11 @@
     list.forEach((o) => {
       const li = document.createElement('li');
       li.textContent = o;
+      if(accessible){li.setAttribute('role','option');li.setAttribute('data-value',o);li.setAttribute('aria-selected','false');}
       li.addEventListener('mousedown', (e) => {
         e.preventDefault();
         compState.picked = o;          // state 只在这里更新
+        if(accessible){li.setAttribute('aria-selected','true');input.setAttribute('data-value',o);}
         input.value = o;
         drop.hidden = true;
       });

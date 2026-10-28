@@ -126,13 +126,21 @@
       check(state); const saved = choices.get(selection); const current = candidates(state); const found = current.rows.filter((node) => matches(node, state));
       if (!saved || saved.used || saved.state !== state || state.choice !== selection || Date.now() - saved.at > 3000 || current.menu !== saved.menu || found.length !== 1 || found[0] !== saved.node || !safe(saved.node)
         || D.optionLabel(saved.node) !== saved.label || saved.node.getAttribute('data-value') !== saved.code) throw failure('准备的候选已变化，未执行点选', 'write_rejected', 'failed');
-      saved.used = true; saved.node.click(); state.committed = true; changed(state);
+      saved.used = true;
+      // 沿用成熟填写器的鼠标事件顺序；mousedown 已确认选中时不再补 click，每次动作前仍复核取消。
+      if(saved.node.dispatchEvent&&global.MouseEvent){
+        for(const type of ['mousedown','mouseup']){check(state);checkCandidate(state,saved);saved.node.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));changed(state);if(accepted(state.el,state.value))break;}
+      }
+      if(!accepted(state.el,state.value)){check(state);checkCandidate(state,saved);saved.node.click();changed(state);}
+      state.committed = true;
       receipts.set(state.el, { value: state.value, label: saved.label, code: saved.code, node: saved.node });
       await delay(60, state.signal); check(state, false); state.el.blur(); changed(state);
       state.trace.phase = 'select'; state.trace.reasonCode = 'option_selected';
       return { ok: true };
     } catch (error) { close(state); throw error; }
   }
+  // 鼠标事件之间也复核唯一候选和原节点；重绘/标签变化不能继续向已脱离的旧节点发动作。
+  function checkCandidate(state,saved){const current=candidates(state);const found=current.rows.filter((node)=>matches(node,state));if(current.menu!==saved.menu||found.length!==1||found[0]!==saved.node||!safe(saved.node)||D.optionLabel(saved.node)!==saved.label||saved.node.getAttribute('data-value')!==saved.code)throw failure('点选期间候选已变化，已停止选择','write_rejected','failed');}
   // 释放本次活动候选，迟到响应不能重新激活旧会话；不点击网页关闭/提交按钮。
   function close(state) { state.closed = true; state.choice = null; }
   // 旧日期/电话子项也复用相同三阶段管线，失败不转入原单体路径。

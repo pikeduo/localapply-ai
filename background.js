@@ -1,7 +1,7 @@
 // Service Worker：复用资料/AI 服务，编排右上角悬浮卡片及本地脱敏诊断。
 'use strict';
 
-importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/mapping-compat.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/field-suggestions.js', 'data/applications.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js', 'data/job-tracking.js'); // 填写契约、岗位与字段学习复用唯一仓库，不读回密钥。
+importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/mapping-compat.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/field-suggestions.js', 'data/applications.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/record-coordinator.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js', 'data/job-tracking.js'); // 填写契约、岗位与字段学习复用唯一仓库，不读回密钥。
 
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local, { cache: true, changes: chrome.storage.onChanged });
@@ -94,7 +94,7 @@ function formatTs(ts) {
 chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   const started = Date.now();
   const operation = String(msg?.type || '').replace(':', '.');
-  const quiet = ['wsa:ping','wsa:getState','wsa:contentSettings','localapply:read','learning:session','learning:changed','learning:rules','panel:context','panel:layout','diagnostics:read','diagnostics:clear','diagnostics:presence','diagnostics:uiError'].includes(msg?.type);
+  const quiet = ['wsa:ping','wsa:getState','wsa:contentSettings','localapply:read','learning:session','learning:changed','learning:rules','learning:leaseFill','panel:context','panel:layout','diagnostics:read','diagnostics:clear','diagnostics:presence','diagnostics:uiError'].includes(msg?.type);
   // 关键结果先等待脱敏日志落盘再响应；日志故障仅提示，不改变已经完成的填表结果。
   async function sendResponse(response, logError) {
     const count = response?.rows?.length ?? response?.data?.items?.length;
@@ -144,7 +144,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         const probe = await chrome.tabs.sendMessage(panelSession.tabId, { type: 'wsa:floatingProbe' }, { frameId: 0 });
         sendResponse({ ok: true, tabId: panelSession.tabId, presence: probe.presence }); return;
       }
-      if (msg?.type === 'panel:close') { if (!panelSession) throw new Error('悬浮会话无效'); await sendResponse({ ok: true }); await floatingPanel.close(panelSession.tabId); return; }
+      if (msg?.type === 'panel:close') { if (!panelSession) throw new Error('悬浮会话无效'); await floatingPanel.close(panelSession.tabId); await sendResponse({ ok: true }); return; } // 先停止页面任务，日志落盘不能延迟用户关闭。
       // 布局命令仅由已授权的扩展卡片发送，不能让网页伪造拖动或取得资料。
       if (msg?.type === 'panel:layout') {
         if (!panelSession || typeof msg.collapsed !== 'boolean' && !(Number.isFinite(msg.dx) && Number.isFinite(msg.dy) && Math.abs(msg.dx) <= 2000 && Math.abs(msg.dy) <= 2000)) throw new Error('悬浮布局参数无效');
@@ -167,7 +167,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
       if (msg?.type === 'jobs:acknowledge') { if (!panelSession) throw new Error('悬浮会话无效'); await jobTracking.close(panelSession.tabId); await chrome.tabs.sendMessage(panelSession.tabId, { type: 'jobs:notice' }, { frameId: 0 }); sendResponse({ ok: true }); return; }
       if (msg?.type === 'diagnostics:clear') { if (msg.confirmed !== true) throw new Error('清理日志需要确认'); await diagnostics.clear(); sendResponse({ ok: true }); return; }
       if (msg?.type === 'diagnostics:uiError') { await diagnostics.append('ui.error', { level: 'ERROR', error: { message: msg.error, stack: msg.stack } }); sendResponse({ ok: true }); return; }
-      if (msg?.type?.startsWith('learning:')) { sendResponse({ ok: true, ...await fieldLearning.handle(msg) }); return; }
+      if (msg?.type?.startsWith('learning:')) { sendResponse({ ok: true, ...await fieldLearning.handle(msg,panelSession?{tabId:panelSession.tabId,documentId:panelSession.documentId}:undefined) }); return; }
       switch (msg && msg.type) {
         case 'wsa:ping':
           sendResponse({ ok: true, pong: true });
@@ -249,6 +249,25 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
   })();
   return true; // 所有分支都异步回复
 });
+
+// 填写页面保持一条已授权租约；关闭 iframe/旧侧栏或刷新 UI 时由断连可靠停止批次。
+chrome.runtime.onConnect?.addListener((port)=>{
+  if(port.name!=='localapply:fill')return;
+  let lease=null;let disconnected=false;
+  port.onDisconnect.addListener(()=>{disconnected=true;if(lease)void fieldLearning.handle({...lease.message,type:'learning:cancelFill'},lease.access).catch(()=>{});});
+  port.onMessage.addListener(async(message)=>{
+    try{
+      if(lease)throw new Error('填写连接已绑定');
+      const sender=port.sender;const panel=sender?.url?.split(/[?#]/)[0]===chrome.runtime.getURL('panel/panel.html')?await floatingPanel.authorize(sender,message):null;
+      if(!trustedPage(sender)&&!panel)throw new Error('填写连接未授权');
+      const request={type:'learning:leaseFill',sessionId:message.sessionId,batchId:message.batchId};const access=panel?{tabId:panel.tabId,documentId:panel.documentId}:undefined;
+      await fieldLearning.handle(request,access);lease={message:request,access};
+      if(disconnected)await fieldLearning.handle({...request,type:'learning:cancelFill'},access);else port.postMessage({ok:true});
+    }catch{try{port.postMessage({ok:false,error:'填写会话已失效，请重新扫描'});}catch{}}
+  });
+});
+// 档案切换属于权限边界；不读取或记录通知中的个人字段值。
+chrome.storage.onChanged?.addListener((changes,area)=>{const row=changes['localapply.database'];if(area==='local'&&row?.newValue?.activeProfileId!==row?.oldValue?.activeProfileId&&row?.newValue?.activeProfileId)fieldLearning.profileChanged(row.newValue.activeProfileId);});
 
 // ============ 生命周期 ============
 

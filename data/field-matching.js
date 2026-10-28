@@ -93,6 +93,14 @@
     return /博士/.test(text) ? 4 : /硕士|研究生/.test(text) ? 3 : /本科|学士/.test(text) ? 2 : /大专|专科/.test(text) ? 1 : 0;
   }
 
+  // 显式学历角色只核对已有枚举，供记忆及整条记录编排共同使用，不按院校名称推断。
+  function sourceRole(db, profileId, target, degree) {
+    if (!degree) return true;
+    const rank=degreeOf(db,{profileId,entryId:target.entryId});
+    const expected=degree==='highest'?Math.max(0,...[null,...db.entries.filter((row)=>row.profileId===profileId&&row.kind==='education').map((row)=>row.entryId)].map((entryId)=>degreeOf(db,{profileId,entryId}))):({first:2,undergrad:2,master:3,doctor:4})[degree];
+    return rank>0&&rank===expected;
+  }
+
   // 网页“工作职责”可复用同一条工作经历的详细内容；有专门职责时优先它，绝不跨条或套用实习资料。
   function targetForRecord(db, profileId, field, fieldId, entryId = null) {
     const target = { fieldId, entryId };
@@ -172,5 +180,5 @@
   }
 
   global.FieldMappingMemory = { find: memory };
-  global.FieldMatchingEngine = { redact, features, semanticId, semanticDescriptor, controlDescriptor, validateField, restricted, hasValue, valueOf, match, degreeOf, definitionFor, targetForRecord };
+  global.FieldMatchingEngine = { redact, features, semanticId, semanticDescriptor, controlDescriptor, validateField, restricted, hasValue, valueOf, match, degreeOf, sourceRole, definitionFor, targetForRecord };
 })(globalThis);

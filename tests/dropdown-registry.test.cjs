@@ -32,6 +32,13 @@ test('查询、准备及点选分离：前两阶段零点击，真实选中才�
   await assert.rejects(env.U.commitChoice(state, choice)); assert.equal(env.clicks(), 1);
 });
 
+test('鼠标按下时取消或重绘候选，不再向旧节点发送抬起/点击',async()=>{
+  for(const mode of ['cancel','replace']){const env=fixture();env.context.window={};env.context.MouseEvent=class{constructor(type){this.type=type;}};const controller=new AbortController();const events=[];
+    const state=await env.U.query(env.el,'男',{signal:controller.signal,lifecycle:{check(){}}});const choice=await env.U.prepareChoice(state);const node=env.nodes[0];node.dispatchEvent=(event)=>{events.push(event.type);if(mode==='cancel')controller.abort();else{env.nodes[0]=env.option();node.isConnected=false;}};
+    await assert.rejects(env.U.commitChoice(state,choice));assert.deepEqual(events,['mousedown']);assert.equal(env.clicks(),0);
+  }
+});
+
 test('伪造/跨会话候选、准备后替换/标签变化及重复候选都不点击', async () => {
   for (const mode of ['copy', 'replace', 'label', 'duplicate']) {
     const env = fixture(); const state = await env.U.query(env.el, '男'); const choice = await env.U.prepareChoice(state);

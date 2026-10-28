@@ -9,17 +9,17 @@ const ROOT = path.resolve(__dirname, '..');
 
 // 构建与生产相同的 repository/匹配/学习服务，网络和网页只由明确桩响应。
 async function fixture() {
-  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let completion = []; let recordBlocks = []; let onAdd = () => {}; let fillContractVersion = 1;
+  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let completion = []; let recordBlocks = []; let onAdd = () => {}; let fillContractVersion = 1;let fillSessionVersion=1;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
-  for (const file of ['templates','providers','key-vault','resume','field-matching','mapping-compat','fill-contract','fill-result','field-suggestions','applications','local-store','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
+  for (const file of ['templates','providers','key-vault','resume','field-matching','mapping-compat','fill-contract','fill-result','field-suggestions','applications','local-store','record-coordinator','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
   const repo = context.LocalApplyStore.createRepository(storage); const initial = await repo.readLegacy(); const configured = structuredClone(initial);
   configured.settings.model = 'synthetic-field-model'; await repo.saveLegacy(initial, configured);
   const db = await repo.read(); const profileId = db.activeProfileId;
   const browser = { tabs: { get: async () => ({ id: 42, url }), sendMessage: async (tabId, msg) => {
     calls.push({ type: msg.type, ...msg });
-    if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', fillContractVersion, origin: new URL(url).origin, fields: structuredClone(fields), completion, recordBlocks } };
-    if (msg.type === 'learning:addRecord') { await onAdd(); return { ok: true }; }
+    if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', fillContractVersion, fillSessionVersion, origin: new URL(url).origin, fields: structuredClone(fields), completion, recordBlocks } };
+    if (msg.type === 'learning:addRecord') { await onAdd(msg); return { ok: true }; }
     if (msg.type === 'learning:read') return { ok: true, value: actual };
     if (msg.type === 'learning:fill') { if (fillGate) await fillGate; actual = failFill ? '' : msg.value; return { ok: true, result: { status: failFill ? 'failed' : 'success', reason: failFill ? '受控组件回退' : '', diagnostic: fillDiagnostic, verifiedAt: new Date().toISOString() } }; }
     if (msg.type === 'learning:verify') return { ok: true, result: { status: actual === msg.value ? 'success' : 'failed', verifiedAt: new Date().toISOString() } };
@@ -37,6 +37,7 @@ async function fixture() {
   return { context, repo, disk, profileId, calls, aiCalls, field, scan, send, service, setValue,
     response: (next) => { response = next; }, navigate: () => { url += '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, completion: (value) => { completion = value; },
     recordBlocks: (value) => { recordBlocks = value; }, pageFields: (value) => { fields = value; }, onAdd: (callback) => { onAdd = callback; }, diagnostic: (value) => { fillDiagnostic = value; }, protocol: (value) => { fillContractVersion = value; },
+    sessionProtocol:(version)=>{fillSessionVersion=version;},
     holdFill: () => { let release; fillGate = new Promise((resolve) => { release = resolve; }); return release; } };
 }
 
@@ -53,6 +54,56 @@ async function learnMapping(env, field, fieldId = 'builtin.gender', entryId = nu
   let view=await env.scan(field);view=await env.send(view,'select',{scanId:field.scanId,fieldId,entryId});
   view=await env.send(view,'fill',{scanId:field.scanId,confirmed:true});return env.send(view,'remember',{scanId:field.scanId,confirmed:true});
 }
+
+test('分层第十步：批次须当前文档/版本，拒绝伪批次、重复开始及缺少取消组件',async()=>{
+  const env=await fixture();await env.setValue('builtin.name','合成姓名');const field=env.field('姓名');let view=await env.scan(field);const before=await env.repo.read();const batch=await env.send(view,'beginFill',{confirmed:true});
+  await assert.rejects(env.send(view,'beginFill',{confirmed:true}),/已有/);await assert.rejects(env.send(view,'fill',{scanId:field.scanId,batchId:'operation.fake',confirmed:true}),/批次/);
+  await assert.rejects(env.service.handle({type:'learning:leaseFill',sessionId:view.sessionId,batchId:batch.batchId},{tabId:99,documentId:'document.test'}),/其他页面/);
+  await env.send(view,'leaseFill',{batchId:batch.batchId});await env.send(view,'endFill',{batchId:batch.batchId});assert.deepEqual(await env.repo.read(),before);assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
+  env.sessionProtocol(undefined);view=await env.scan(field);await assert.rejects(env.send(view,'beginFill',{confirmed:true}),/刷新招聘页/);
+});
+
+test('分层第十步：取消不等待进行中项，晚到成功不发布、不记忆，结束批次不能重放',async()=>{
+  const env=await fixture();await env.setValue('builtin.name','合成姓名');const field=env.field('姓名');let view=await env.scan(field);const before=await env.repo.read();const {batchId}=await env.send(view,'beginFill',{confirmed:true});const release=env.holdFill();
+  const pending=env.send(view,'fill',{scanId:field.scanId,batchId,confirmed:true});while(!env.calls.some((call)=>call.type==='learning:fill'))await new Promise((resolve)=>setTimeout(resolve,1));
+  await env.send(view,'cancelFill',{batchId});assert.ok(env.calls.some((call)=>call.type==='learning:cancelFill'&&call.operationId===batchId));release();view=await pending;assert.equal(view.rows[0].status,'failed');assert.equal(view.rows[0].diagnostic.reasonCode,'cancelled');assert.equal(view.rows[0].verification,null);
+  await assert.rejects(env.send(view,'remember',{scanId:field.scanId,batchId,confirmed:true}),/取消/);await env.send(view,'endFill',{batchId});await assert.rejects(env.send(view,'fill',{scanId:field.scanId,batchId,confirmed:true}),/批次/);assert.deepEqual(await env.repo.read(),before);
+});
+
+test('分层第十步：本批次记忆写入推进版本，外部资料变化必须重新扫描而非继续使用旧确认',async()=>{
+  const env=await fixture();await env.setValue('builtin.name','合成姓名');const field=env.field('姓名');let view=await env.scan(field);const {batchId}=await env.send(view,'beginFill',{confirmed:true});
+  view=await env.send(view,'fill',{scanId:field.scanId,batchId,confirmed:true});view=await env.send(view,'remember',{scanId:field.scanId,batchId,confirmed:true});view=await env.send(view,'fill',{scanId:field.scanId,batchId,confirmed:true});assert.equal(view.rows[0].status,'success');
+  await env.setValue('builtin.name','合成修改姓名');await env.send(view,'session');await assert.rejects(env.send(view,'fill',{scanId:field.scanId,batchId,confirmed:true}),/资料已变化/);await env.send(view,'endFill',{batchId});assert.ok(!JSON.stringify(await env.repo.exportBackup()).includes(batchId));
+});
+
+test('分层第十步：关闭或切档案使单项停止，旧连接断开不能取消后来新建的批次',async()=>{
+  const env=await fixture();await env.setValue('builtin.name','合成姓名');const field=env.field('姓名');let view=await env.scan(field);const release=env.holdFill();const pending=env.send(view,'fill',{scanId:field.scanId,confirmed:true});while(!env.calls.some((call)=>call.type==='learning:fill'))await new Promise((resolve)=>setTimeout(resolve,1));
+  env.service.profileChanged('profile.other');release();assert.equal((await pending).rows[0].status,'failed');await assert.rejects(env.send(view,'session'),/过期|关闭/);
+  view=await env.scan(field);const old=await env.send(view,'beginFill',{confirmed:true});await env.send(view,'endFill',{batchId:old.batchId});const next=await env.send(view,'beginFill',{confirmed:true});await env.send(view,'cancelFill',{batchId:old.batchId});await env.send(view,'leaseFill',{batchId:next.batchId});await env.send(view,'endFill',{batchId:next.batchId});
+});
+
+test('分层第十步：直接撤销也先取消正在等待的项，不必排队等它完成',async()=>{
+  const env=await fixture();await env.setValue('builtin.name','合成姓名');const field=env.field('姓名');const view=await env.scan(field);const release=env.holdFill();const pending=env.send(view,'fill',{scanId:field.scanId,confirmed:true});while(!env.calls.some((call)=>call.type==='learning:fill'))await new Promise((resolve)=>setTimeout(resolve,1));
+  const revoked=env.send(view,'revoke');while(!env.calls.some((call)=>call.type==='learning:cancelFill'))await new Promise((resolve)=>setTimeout(resolve,1));release();assert.equal((await pending).rows[0].status,'failed');await revoked;await assert.rejects(env.send(view,'session'),/过期|关闭/);assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,1);
+});
+
+test('分层第十步：添加预算跨多次准备共用，重复准备幂等且单模块仍不超过20条',async()=>{
+  const env=await fixture();await env.setValue('builtin.school','合成首条学校');await env.setValue('builtin.projectName','合成首条项目');
+  for(const [kind,fieldId,count]of[['education','builtin.school',20],['project','builtin.projectName',2]])for(let index=0;index<count;index++){const entryId=(await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind,title:'合成记录'}})).result;await env.setValue(fieldId,'合成值'+index,entryId);}
+  const education=[env.field('学校名称',{kind:'education',group:'教育经历'})];const project=[env.field('项目名称',{kind:'project',group:'项目经历'})];
+  // 只模拟网站收到一次添加后新增一条空槽，生产编排负责是否继续添加和来源分配。
+  function blocks(includeProject){return [['education',education],...(includeProject?[['project',project]]:[])].map(([kind,fields])=>({blockId:'scan.block.'+kind,kind,canAdd:true,records:fields.map((field,index)=>({recordId:'scan.record.'+kind+index,scanIds:[field.scanId]}))}));}
+  let includeProject=false;env.recordBlocks(blocks(false));env.onAdd((message)=>{const fields=message.blockId.endsWith('education')?education:project;const kind=fields===education?'education':'project';fields.push(env.field(kind==='education'?'学校名称':'项目名称',{kind,group:kind==='education'?'教育经历':'项目经历',index:fields.length}));env.pageFields([...education,...(includeProject?project:[])]);env.recordBlocks(blocks(includeProject));});
+  let view=await env.scan(...education);const {batchId}=await env.send(view,'beginFill',{confirmed:true});view=await env.send(view,'prepareRecords',{batchId,confirmed:true});assert.equal(education.length,20);assert.equal(env.calls.filter((call)=>call.type==='learning:addRecord').length,19);
+  includeProject=true;env.pageFields([...education,...project]);env.recordBlocks(blocks(true));view=await env.send(view,'prepareRecords',{batchId,confirmed:true});assert.equal(project.length,2);assert.equal(env.calls.filter((call)=>call.type==='learning:addRecord').length,20);await env.send(view,'prepareRecords',{batchId,confirmed:true});assert.equal(env.calls.filter((call)=>call.type==='learning:addRecord').length,20);await env.send(view,'endFill',{batchId});
+});
+
+test('分层第十步：整条记录遵循明确学历，取消已发起添加后重试复用现有空槽',async()=>{
+  const env=await fixture();await env.setValue('builtin.school','合成硕士');await env.setValue('builtin.degree','硕士');const entryId=(await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'education',title:'合成本科'}})).result;await env.setValue('builtin.school','合成本科',entryId);await env.setValue('builtin.degree','本科',entryId);
+  const field=env.field('学校名称',{kind:'education',group:'本科教育',degree:'undergrad'});env.recordBlocks([{blockId:'scan.block',kind:'education',canAdd:true,records:[{recordId:'scan.record',scanIds:[field.scanId]}]}]);let view=await env.scan(field);view=await env.send(view,'prepareRecords',{confirmed:true});assert.equal(view.rows[0].target.entryId,entryId);assert.equal(env.calls.filter((call)=>call.type==='learning:addRecord').length,0);
+  const fields=[env.field('学校名称',{kind:'education',group:'教育经历'})];const block={blockId:'scan.block',kind:'education',canAdd:true,records:[{recordId:'scan.record',scanIds:[fields[0].scanId]}]};env.recordBlocks([block]);view=await env.scan(...fields);const {batchId}=await env.send(view,'beginFill',{confirmed:true});let release;env.onAdd(async()=>{await new Promise((resolve)=>{release=resolve;});fields.push(env.field('学校名称',{kind:'education',group:'教育经历',index:1}));block.records.push({recordId:'scan.record1',scanIds:[fields[1].scanId]});env.pageFields(fields);});
+  const pending=env.send(view,'prepareRecords',{batchId,confirmed:true});while(!release)await new Promise((resolve)=>setTimeout(resolve,1));await env.send(view,'cancelFill',{batchId});release();await assert.rejects(pending,/取消/);await env.send(view,'endFill',{batchId});view=await env.send(view,'prepareRecords',{confirmed:true});assert.equal(view.rows.length,2);assert.equal(env.calls.filter((call)=>call.type==='learning:addRecord').length,1);
+});
 
 test('分层第九步：跨控件只复用来源，当前验证成功并主动记忆后才保存独立变体',async()=>{
   const env=await fixture();await env.setValue('builtin.gender','男');const original=env.field('合成映射代号',{type:'select',group:'个人信息'});await learnMapping(env,original);
@@ -301,7 +352,7 @@ test('经历增补限制数量，导航或关闭后不再继续扫描和添加',
   assert.ok(view.notice.includes('另有 1 条')); assert.equal(new Set(view.rows.map((row) => row.target.entryId)).size, 20); assert.equal(env.calls.filter((msg) => msg.type === 'learning:addRecord').length, 0);
   block.records = block.records.slice(0, 1); env.onAdd(() => env.service.invalidate(42)); view = await env.scan(fields[0]);
   const before = env.calls.length; await assert.rejects(env.send(view, 'prepareRecords', { confirmed: true }), /过期|关闭/);
-  assert.deepEqual(env.calls.slice(before).map((msg) => msg.type), ['learning:scan', 'learning:addRecord']);
+  assert.deepEqual(env.calls.slice(before).map((msg) => msg.type), ['learning:scan', 'learning:addRecord', 'learning:cancelFill']);
 });
 
 // 已有网页经历缺乏可靠绑定时不得重新分配或继续追加，结构描述不能夹带个人内容。

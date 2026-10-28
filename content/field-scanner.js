@@ -173,7 +173,8 @@
   }
 
   // 一次只点当前模块唯一的“添加”，必须观察到恰好新增一条；不点击删除/提交或无限重试。
-  async function addRecord(blockId, expectedDocument) {
+  async function addRecord(blockId, expectedDocument, { signal } = {}) {
+    if(signal?.aborted)throw new Error('已取消添加记录');
     if (!granted || currentUrl !== location.href || documentId !== expectedDocument) throw new Error('页面已变化，请重新扫描');
     const block = [...document.querySelectorAll('[class^="apply-block-"],[class*=" apply-block-"]')].find((node) => nodeIds.get(node) === blockId);
     const group = recordBlocks().find((item) => item.blockId === blockId);
@@ -183,7 +184,8 @@
     button.click();
     for (let attempt = 0; attempt < 30; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 50));
-      if (!block.isConnected || currentUrl !== location.href) throw new Error('添加时页面结构已变化，请重新扫描');
+      if(signal?.aborted)throw new Error('已取消添加记录');
+      if (!granted || documentId!==expectedDocument || !block.isConnected || currentUrl !== location.href) throw new Error('添加时页面结构已变化，请重新扫描');
       const count = [...block.children].filter((node) => node.matches('[class^="apply-fields-"],[class*=" apply-fields-"]')).length;
       if (count === group.records.length + 1) return;
       if (count !== group.records.length) break;

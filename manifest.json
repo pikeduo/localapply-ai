@@ -60,6 +60,7 @@
         "data/applications.js",
         "content/field-adapters.js",
         "content/field-scanner.js",
+        "content/fill-session.js",
         "content/detector.js",
         "content/filler.js",
         "content/controls/verification.js",

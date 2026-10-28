@@ -36,15 +36,6 @@
     return target.entryId === null || db.entries.some((row) => row.entryId === target.entryId && row.profileId === profileId && (!kind || row.kind === kind));
   }
 
-  // 来源学历只核对档案中明确已有的枚举；未知/不符即交给人工，不按学校名或历史序号猜测。
-  function educationRole(db, profileId, target, degree) {
-    if (!degree) return true;
-    const rank = M.degreeOf(db, { profileId, entryId:target.entryId });
-    const expected = degree === 'highest' ? Math.max(0, ...[null, ...db.entries.filter((row) => row.profileId === profileId && row.kind === 'education').map((row) => row.entryId)]
-      .map((entryId) => M.degreeOf(db, { profileId, entryId }))) : ({ first:2, undergrad:2, master:3, doctor:4 })[degree];
-    return rank > 0 && rank === expected;
-  }
-
   // 非精确命中只有当前控件确实变化时才参与；不凭历史 index 推断新记录配对。
   function find(db, profileId, origin, field, fields = [field], bindings = {}) {
     const semantic = M.semanticDescriptor(field); const control = M.controlDescriptor(field);
@@ -71,7 +62,7 @@
       target = targets[0];
     }
     if (!owned(db, profileId, target, kind) || rules.some((row) => !owned(db, profileId, row, kind))) return { ...base, reason:'历史来源已移除或不属于当前档案/模块，请重新选择' };
-    if (kind === 'education' && !educationRole(db, profileId, target, semantic.degree)) return { ...base, reason:'当前绑定来源的学历不明确或不符合网页角色，请重新选择' };
+    if (kind === 'education' && !M.sourceRole(db, profileId, target, semantic.degree)) return { ...base, reason:'当前绑定来源的学历不明确或不符合网页角色，请重新选择' };
     return { ...base, target, candidates:[target], confirmed:true, reason:'已复用本地字段语义；当前控件尚未验证，填写后独立回读' };
   }
 

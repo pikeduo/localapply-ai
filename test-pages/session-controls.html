@@ -1,0 +1,15 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>填写批次与取消 · 合成招聘</title>
+<style>body{font:16px/1.8 system-ui;max-width:800px;margin:35px auto}fieldset{padding:24px;border:1px solid #ccd7e6;border-radius:12px}label{display:block;margin:10px}input{padding:10px;border:1px solid #aabbd0}[role=listbox]{background:#eef3ff;padding:12px}[role=option]{padding:8px;cursor:pointer}</style></head><body><h1>合成招聘申请</h1><p>验证等待期间停止、关闭、切页；插件不会提交申请。</p><form><fieldset><legend>个人信息</legend>
+<label for="session-gender">性别</label><input id="session-gender" role="combobox" aria-controls="session-options"><div id="session-options" role="listbox" hidden></div>
+<label for="session-name">姓名</label><input id="session-name"><button type="submit">提交申请</button></fieldset></form><script>
+window.__sessionClicks=0;window.__sessionQueries=0;window.__submitCount=0;let queryTimer;const gender=document.getElementById('session-gender');const menu=document.getElementById('session-options');
+// 重置只供测试用户重新开始，取消本身不清空任何已写网页内容。
+window.__sessionReset=function(){clearTimeout(queryTimer);window.__sessionHold=false;window.__sessionRelease=null;gender.value='';gender.removeAttribute('data-value');menu.hidden=true;menu.replaceChildren();menu.setAttribute('aria-busy','false');document.getElementById('session-name').value='';};
+gender.addEventListener('click',()=>{menu.hidden=false;});
+gender.addEventListener('input',()=>{clearTimeout(queryTimer);window.__sessionQueries++;menu.replaceChildren();menu.setAttribute('aria-busy','true');
+  // 可显式释放的候选代替抢650ms窗口，稳定验证关闭/断连后的迟到响应。
+  const ready=()=>{const option=document.createElement('div');option.setAttribute('role','option');option.setAttribute('data-value','M');option.setAttribute('aria-selected','false');option.textContent='男';option.addEventListener('click',()=>{window.__sessionClicks++;option.setAttribute('aria-selected','true');gender.value='男';gender.setAttribute('data-value','M');menu.hidden=true;});menu.append(option);menu.setAttribute('aria-busy','false');};
+  if(window.__sessionHold)window.__sessionRelease=ready;else queryTimer=setTimeout(ready,650);
+});
+document.querySelector('form').addEventListener('submit',(event)=>{event.preventDefault();window.__submitCount++;});
+</script></body></html>

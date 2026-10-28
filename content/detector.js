@@ -413,14 +413,17 @@
             if (!msg.url?.startsWith(chrome.runtime.getURL('panel/panel.html') + '?token=')) throw new Error('悬浮地址无效');
             globalThis.WangshenFloatbar.open(msg.url); sendResponse({ ok: true }); return;
           case 'wsa:floatingClose':
+            globalThis.LocalApplyPageTasks.cancelAll(); globalThis.LocalApplyPageScanner.revoke(); authorized=false;
             globalThis.WangshenFloatbar?.close(); sendResponse({ ok: true }); return;
           // 布局只修改隔离卡片的位置和大小，不接触网页表单。
           case 'wsa:floatingLayout':
             globalThis.WangshenFloatbar?.layout(msg); sendResponse({ ok: true }); return;
           case 'learning:scan': {
             if (msg.authorize === true && msg.expectedUrl !== location.href) throw new Error('页面已导航，请重新授权扫描');
+            if(msg.authorize===true)globalThis.LocalApplyPageTasks.cancelAll();
             const snapshot = globalThis.LocalApplyPageScanner.scan(msg.authorize === true);
             snapshot.fillContractVersion = globalThis.LocalApplyFillContract.VERSION;
+            snapshot.fillSessionVersion = globalThis.LocalApplyPageTasks.VERSION;
             // 完成标记与结构元数据分开，AI 契约不会接收网页输入值或完成状态。
             snapshot.completion = globalThis.LocalApplyPageScanner.completion();
             snapshot.recordBlocks = globalThis.LocalApplyPageScanner.recordBlocks();
@@ -428,8 +431,14 @@
             sendResponse({ ok: true, snapshot }); return;
           }
           case 'learning:addRecord':
-            await globalThis.LocalApplyPageScanner.addRecord(msg.blockId, msg.documentId); sendResponse({ ok: true }); return;
+            if(msg.documentId!==globalThis.LocalApplyPageScanner.documentId)throw new Error('页面已变化');
+            await globalThis.LocalApplyPageTasks.run(msg.operationId,(signal)=>globalThis.LocalApplyPageScanner.addRecord(msg.blockId,msg.documentId,{signal}));sendResponse({ok:true});return;
+          case 'learning:cancelFill':
+            if(sender.url&&sender.url.split(/[?#]/)[0]!==chrome.runtime.getURL('background.js'))throw new Error('停止任务只接受后台发送');
+            if(msg.documentId!==globalThis.LocalApplyPageScanner.documentId)throw new Error('页面已变化');
+            globalThis.LocalApplyPageTasks.cancel(msg.operationId);sendResponse({ok:true});return;
           case 'learning:revoke':
+            globalThis.LocalApplyPageTasks.cancelAll();
             authorized = false; globalThis.LocalApplyPageScanner.revoke(); detect(); sendResponse({ ok: true }); return;
           case 'learning:read':
           case 'learning:fill':
@@ -443,7 +452,7 @@
             if (Object.hasOwn(msg, 'plan')) throw new Error('填写计划只能在当前页面生成');
             filling = true;
             // 覆盖只接受后台差异令牌核验后的许可，并在页面再次比较原值防止确认后变化。
-            try { const result = await globalThis.LocalApplyVerifiedFill[msg.type === 'learning:fill' ? 'fill' : 'verify'](record, msg.value, { overwrite: msg.overwrite === true, expectedCurrent: msg.expectedCurrent, intent: msg.intent }); sendResponse({ ok: true, result }); }
+            try { const result = await globalThis.LocalApplyPageTasks.run(msg.operationId,(signal)=>globalThis.LocalApplyVerifiedFill[msg.type === 'learning:fill' ? 'fill' : 'verify'](record, msg.value, { overwrite: msg.overwrite === true, expectedCurrent: msg.expectedCurrent, intent: msg.intent,signal })); sendResponse({ ok: true, result }); }
             finally { filling = false; }
             return;
           }

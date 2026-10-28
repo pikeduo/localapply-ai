@@ -8,7 +8,7 @@
         <h3>当前招聘页面</h3>
         <p class="muted">点击使用本地资料填写，支持的空白经历按简历顺序补充，网页已有内容保留。未知字段先勾选再使用 AI；不会提交申请。</p>
         <div class="smart-actions"><button id="smartFillAll" class="btn">自动填写此页面</button><button id="smartScan" class="btn ghost">仅扫描字段</button></div>
-        <p id="smartStatus" role="status"></p>
+        <button id="smartStopFill" class="btn ghost" type="button" hidden>停止填写</button><p id="smartStatus" role="status"></p>
         <div class="smart-actions"><button id="smartAI" class="btn ghost" aria-expanded="false">AI 识别未知字段（可选）</button><button id="smartRefresh" class="btn ghost">刷新结果</button><button id="smartRevoke" class="btn ghost">清除扫描结果</button><button id="smartRules" class="btn ghost">历史映射规则</button></div>
         <label class="filter-toggle"><input type="checkbox" id="smartOnlyUnknown">只看未知字段</label><div id="smartMetrics" class="metrics" aria-label="扫描结果统计"></div>
         <label><input id="smartRememberAfter" type="checkbox" /> 填写验证成功后记住映射</label>

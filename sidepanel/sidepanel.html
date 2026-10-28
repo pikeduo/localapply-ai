@@ -47,7 +47,7 @@
         <label><input type="checkbox" id="smartPageConsent" /> 我授权扫描当前招聘页的表单标签及结构</label>
         <p class="muted">扫描不读取密码、验证码或已有输入值。网页已填内容仅在点击“读取此字段”时读取。</p>
         <div class="smart-actions"><button id="smartScan" class="btn">授权并扫描当前页</button><button id="smartRefresh" class="btn ghost">刷新结果</button><button id="smartRevoke" class="btn ghost">撤销页面授权</button></div>
-        <p id="smartStatus" role="status"></p>
+        <button id="smartStopFill" class="btn ghost" type="button" hidden>停止填写</button><p id="smartStatus" role="status"></p>
         <div class="smart-actions"><button id="smartAI" class="btn ghost">检测到未知字段，是否使用 AI 识别？</button><button id="smartFillAll" class="btn">一键填写预览</button><button id="smartRules" class="btn ghost">历史映射规则</button></div>
       </div>
       <div id="smartAIReview" class="card" hidden><h3>确认模型接收方与发送内容</h3><p id="smartRecipient"></p><p>仅发送以下脱敏元数据及本地来源引用，不发送实际值、完整简历或网页 HTML。</p><pre id="smartAIPayload"></pre><label><input type="checkbox" id="smartAIConsent" /> 我确认向该服务商发送上述内容（可能计费）</label><button id="smartAISend" class="btn">确认发送并识别</button><button id="smartAICancel" class="btn ghost">取消</button></div>
