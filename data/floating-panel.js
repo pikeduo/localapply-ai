@@ -12,7 +12,7 @@
     async function page(tabId, message) {
       try { return await browser.tabs.sendMessage(tabId, message, { frameId: 0 }); }
       catch {
-        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js','data/field-matching.js','data/fill-contract.js', 'data/applications.js', 'content/field-adapters.js','content/field-scanner.js','content/detector.js','content/filler.js','content/verified-fill.js','content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'] });
+        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js','data/field-matching.js','data/fill-contract.js', 'data/applications.js', 'content/field-adapters.js','content/field-scanner.js','content/detector.js','content/filler.js', 'content/controls/text.js', 'content/controls/registry.js','content/verified-fill.js','content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'] });
         return browser.tabs.sendMessage(tabId, message, { frameId: 0 });
       }
     }

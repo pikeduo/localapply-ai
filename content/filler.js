@@ -287,5 +287,15 @@
     el.dataset.wsaFilled = '1';
   }
 
-  globalThis.WangshenFiller = { fillElement, markFilled, setValue };
+  // 新文本适配器的最小入口：复用原生 setter/事件和富文本赋值，绝不进入候选搜索。
+  function fillTextOnly(el, value) {
+    if (el.isContentEditable) return fillContentEditable(el, String(value));
+    setValue(el, String(value));
+    return { ok: el.value === String(value) };
+  }
+
+  // 只回读当前编辑器可见文本；浏览器将换行编码为 div/br 时不能用 textContent 丢掉分行。
+  function readText(el) { return el.isContentEditable ? (typeof el.innerText === 'string' ? el.innerText : el.textContent) : el.value; }
+
+  globalThis.WangshenFiller = { fillElement, fillTextOnly, readText, markFilled, setValue };
 })();

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成文本控件 · 分层第三步</title>
+<style>body{font:15px/1.6 system-ui;max-width:850px;margin:28px auto}fieldset{margin:18px 0;padding:18px;border:1px solid #ccc;border-radius:12px}label{display:block}input,textarea,[contenteditable=true]{box-sizing:border-box;width:100%;padding:10px;margin:6px 0 12px;border:1px solid #bbb;border-radius:6px}textarea,[contenteditable=true]{min-height:90px;white-space:pre-wrap}[role=listbox]{background:#eef2ff;padding:12px}</style></head>
+<body><h1>合成招聘申请：文本控件矩阵</h1><form>
+<fieldset><legend>基本资料</legend>
+<label for="text-name">姓名</label><input id="text-name">
+<label for="text-note">自我介绍</label><textarea id="text-note"></textarea>
+<label for="text-editable">补充说明</label><div id="text-editable" contenteditable="true" role="textbox"></div>
+<label for="text-readonly">只读姓名</label><input id="text-readonly" readonly>
+<label for="text-list">候选输入</label><input id="text-list" aria-autocomplete="list">
+<label for="text-switch">结构切换</label><input id="text-switch">
+</fieldset>
+<div role="listbox" aria-label="不属于文本框的独立候选"><div role="option" class="option">合成文本姓名</div></div>
+<div id="real-react"></div><div id="real-vue"></div>
+<fieldset><legend>受保护操作</legend><label for="private-password">密码</label><input id="private-password" type="password" value="synthetic-auth">
+<label for="captcha">验证码</label><input id="captcha" autocomplete="one-time-code" value="synthetic-captcha">
+<label><input type="checkbox" id="agreement">我同意隐私协议</label><label><input type="checkbox" id="sync">同步更新在线简历</label>
+<button type="submit">提交申请</button></fieldset></form>
+<script>
+// 只统计合成页的事件和提交，不访问任何真实站点或 API。
+window.__textEvents = {}; window.__trapClicks = 0; window.__submitCount = 0;
+for (const node of document.querySelectorAll('#text-name,#text-note,#text-editable')) {
+  window.__textEvents[node.id] = [];
+  for (const event of ['focus','input','change','blur']) node.addEventListener(event, () => window.__textEvents[node.id].push(event));
+}
+document.querySelector('[role=option]').addEventListener('click', () => { window.__trapClicks++; });
+document.querySelector('form').addEventListener('submit', (event) => { event.preventDefault(); window.__submitCount++; });
+// 写入中途变成认证控件，后续回读必须中止，不能报告填写成功。
+document.getElementById('text-switch').addEventListener('change', (event) => { event.target.type = 'password'; });
+</script><script src="/test-pages/phase3-frameworks.js"></script></body></html>

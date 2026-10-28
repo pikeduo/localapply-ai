@@ -4,12 +4,13 @@
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const A = global.LocalApplyFieldAdapters;
   const C = global.LocalApplyFillContract;
+  const R = global.LocalApplyAdapterRegistry;
   const preparedPlans = new WeakMap();
 
   // 扫描器提供独立控件描述；兼容旧的本页调用封套，不使用语义 key 选择写入方式。
   function controlOf(item) { return item.control || global.FieldMatchingEngine.controlDescriptor(item.field); }
 
-  // 按控件描述比较实际选中状态，避免仅显示文本变化而未选中有效 option 的假成功。
+  // 按控件描述比较真实选中状态和编辑器分行文本，显示变化不能代替控件接受。
   function accepted(item, expected) {
     const { el, members } = item; const control = controlOf(item);
     if (!el.isConnected || el.getAttribute('aria-invalid') === 'true' || el.validity?.valid === false) return false;
@@ -27,7 +28,7 @@
       return selected.some((option) => option.textContent.trim() === String(expected) || option.getAttribute('data-value') === String(expected))
         && ('value' in el ? el.value === String(expected) : el.textContent.trim() === String(expected));
     }
-    return (el.isContentEditable ? el.textContent : el.value) === String(expected);
+    return (el.isContentEditable ? (global.WangshenFiller?.readText?.(el) ?? el.textContent) : el.value) === String(expected);
   }
 
   // 复读跨过框架事件和延迟重渲染，DOM 回退或校验失败不记成功。
@@ -55,18 +56,35 @@
   function structure(item) {
     const type = controlOf(item).type;
     return JSON.stringify({ field: global.FieldMatchingEngine.features(item.field), control: controlOf(item),
-      attributes: ['type', 'readonly', 'min', 'max', 'placeholder', 'aria-controls', 'aria-owns', 'aria-disabled'].map((name) => item.el.getAttribute(name)),
+      attributes: ['type', 'readonly', 'contenteditable', 'role', 'min', 'max', 'placeholder', 'aria-controls', 'aria-owns', 'aria-disabled', 'aria-readonly', 'aria-autocomplete', 'aria-haspopup'].map((name) => item.el.getAttribute(name)),
       candidates: ['select', 'radio'].includes(type) ? nativeCandidates(item).map((node) => ({ value: node.value,
         label: (type === 'select' ? node.textContent : node.closest('label')?.textContent)?.trim() || '', disabled: !!node.disabled || !!node.closest('optgroup[disabled]') })) : [] });
+  }
+
+  // 适配器只持有当前项和固定守卫；每次执行/回读重新检查文档授权及原节点。
+  function adapterContext(item, intent, options = {}) {
+    return { item, intent, signal: options.signal,
+      // 扫描器复核 URL/授权/类型/可见性；节点替换不能沿用先前计划。
+      assertActive() {
+        const current = global.LocalApplyPageScanner.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId);
+        if (current.el !== item.el || controlOf(current).fingerprint !== controlOf(item).fingerprint) throw new Error('填写控件已变化');
+      },
+      // 状态读取沿用已有真实性及校验检查，不读取框架私有对象。
+      accepted(value) { return accepted(item, value); },
+      // 执行器须消费原计划，不能绕过私有身份、来源和非空快照检查。
+      consumePlan(plan) { return validatePrepared(plan, item, intent, true); }
+    };
   }
 
   // 只准备计划不点击；复杂控件明确委托旧链路，不把未发现的异步选项冒充已解析目标。
   function prepare(item, intent, options = {}) {
     C.validateIntent(intent, { binding: { scanId: item.field.scanId, semanticId: item.field.semanticId } });
-    const value = intent.value; const control = controlOf(item); const adapted = A.handles(item);
+    const value = intent.value; const control = controlOf(item); const adapted = A.handles(item); const adapter = R.resolve(control, { item });
+    const prepared = adapter?.prepare(control, intent, adapterContext(item, intent, options));
+    if (prepared?.error) return prepared;
     if (adapted) { const existing = A.plan(item, value); if (existing.error) return { error: { ...existing.error, diagnostic: { phase: 'plan' } } }; }
     const blocked = conflict(item, value, options); if (blocked) return { error: { ...blocked, diagnostic: { phase: 'protect', reasonCode: 'existing_value_preserved' } } };
-    let operation = adapted || ['checkbox', 'combobox'].includes(control.type) ? 'legacy-interaction' : 'write-value'; let targetOption; let optionNode;
+    let operation = prepared?.operation || (adapted || ['checkbox', 'combobox'].includes(control.type) ? 'legacy-interaction' : 'write-value'); let targetOption; let optionNode;
     if (accepted(item, value)) operation = 'verify-existing';
     else if (!adapted && ['select', 'radio'].includes(control.type)) {
       const candidates = nativeCandidates(item); const found = candidates.filter((node) => node.value === String(value)
@@ -80,7 +98,7 @@
     const plan = { version: C.VERSION, planId: 'plan.' + crypto.randomUUID(), intentId: intent.intentId,
       binding: { ...intent.binding }, source: { ...intent.source }, controlFingerprint: control.fingerprint, operation,
       verification: ({ 'write-value': 'value', 'select-option': 'selected-option' })[operation] || 'legacy-delayed', state: operation === 'legacy-interaction' ? 'delegated' : 'ready',
-      ...(targetOption ? { targetOption } : {}), ...(date ? { datePrecision: date.precision } : {}) };
+      ...(adapter ? { adapterId: adapter.id } : {}), ...(targetOption ? { targetOption } : {}), ...(date ? { datePrecision: date.precision } : {}) };
     C.validatePlan(plan, intent);
     preparedPlans.set(plan, { item, optionNode, structure: structure(item), current: JSON.stringify(global.LocalApplyPageScanner.readValue(item)),
       intent: JSON.stringify(intent), encoded: JSON.stringify(plan), createdAt: Date.now(), used: false });
@@ -95,6 +113,7 @@
     if (saved.item.el !== item.el || current.el !== item.el || structure(current) !== saved.structure
       || JSON.stringify(global.LocalApplyPageScanner.readValue(current)) !== saved.current
       || saved.optionNode && !nativeCandidates(current).includes(saved.optionNode)) throw new Error('填写控件或候选已变化，请重新准备');
+    if (plan.adapterId && R.resolve(controlOf(current), { item: current }) !== R.get(plan.adapterId)) throw new Error('填写适配器已变化');
     if (consume) saved.used = true;
     return plan;
   }
@@ -134,13 +153,19 @@
     if (result.ok) global.WangshenFiller.markFilled(el);
     return { ...result, diagnostic: { phase: 'verify', reasonCode: result.ok ? 'verified' : 'value_not_accepted' } };
   }
-  // 意图通过最小计划守卫后仍调用旧写入器；诊断只含旧白名单，不返回意图、计划或来源值。
+  // 文本意图交固定注册表执行；尚未接入的控件保留旧路径，失败不再双重执行。
   async function fill(item, value, options = {}) {
     A.diagnostic?.(item, true); let result;
     if (options.intent) {
       C.validateIntent(options.intent, { value }); const prepared = prepare(item, options.intent, options);
       if (prepared.error) result = prepared.error;
-      else { validatePrepared(prepared.plan, item, options.intent, true); result = await write(item, value, options); }
+      else if (prepared.plan.adapterId) {
+        const adapter = R.get(prepared.plan.adapterId); const context = adapterContext(item, options.intent, options);
+        const attempt = await adapter.execute(prepared.plan, context);
+        result = attempt.ok ? await adapter.verify(prepared.plan, context) : attempt;
+        if (result.ok) global.WangshenFiller.markFilled(item.el);
+        result = { ...result, diagnostic: { phase: attempt.ok ? 'verify' : 'write' } };
+      } else { validatePrepared(prepared.plan, item, options.intent, true); result = await write(item, value, options); }
     } else result = await write(item, value, options); // 保留本页旧调用兼容，消息入口始终要求后台意图。
     const trace = A.diagnostic?.(item) || {};
     const control = controlOf(item);

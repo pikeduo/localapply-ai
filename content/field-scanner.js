@@ -130,7 +130,7 @@
     return registry.get(scanId);
   }
 
-  // 主动读取单项按控件描述分派；旧调用者临时投影，实际值不进入结构扫描封套。
+  // 主动读取单项按控件描述分派；编辑器保留块级换行，实际值不进入结构扫描封套。
   function readValue(item) {
     const control = item.control || M.controlDescriptor(item.field);
     if (item.compound) return A.read(item);
@@ -138,7 +138,7 @@
     if (control.type === 'radio') return item.members.find((el) => el.checked)?.value || '';
     if (control.type === 'checkbox') return item.members.length === 1 ? item.el.checked : item.members.filter((el) => el.checked).map((el) => el.value);
     if (control.type === 'combobox' && !('value' in item.el)) return item.el.textContent.trim();
-    return item.el.isContentEditable ? item.el.textContent : item.el.value;
+    return item.el.isContentEditable ? (global.WangshenFiller?.readText?.(item.el) ?? item.el.textContent) : item.el.value;
   }
 
   // 用户主动扫描后仅读取是否已有内容；兼容显示节点的多类名顺序，仅返回布尔标记。

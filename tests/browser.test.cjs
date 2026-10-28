@@ -8,6 +8,84 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 文本注册表使用真实后台意图和受控框架；只操作独立合成页，绝不触碰用户浏览器。
+test('分层第三步：固定注册表与文本执行路径', { timeout: 90000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'text-registry-')); const api = await serve(); let context;
+  const name = '合成文本姓名'; const note = '第一行合成说明\n第二行合成说明\n<script>window.__textInjected=true</script>'; const errors = [];
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    for (const [fieldId, value] of [['builtin.name', name], ['builtin.selfIntroduction', note]]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId, entryId: null, value } } });
+    const before = (await rpc(options, 'localapply:read')).database; const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto(api.base + '/test-pages/text-controls.html'); await page.locator('#real-react-name').waitFor(); await page.locator('#real-vue-name').waitFor();
+    await page.evaluate(() => { window.__protectedReads = 0; for (const id of ['private-password', 'captcha']) Object.defineProperty(document.getElementById(id), 'value', { get() { window.__protectedReads++; return 'must-not-read'; }, set() {} }); });
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    // 捕获仅本测试的合成意图，仍由真实 API 发送并通过生产授权检查。
+    await worker.evaluate(() => { const original = chrome.tabs.sendMessage; globalThis.__textMessages = {}; chrome.tabs.sendMessage = function (...args) { if (args[1]?.type === 'learning:fill') globalThis.__textMessages[args[1].scanId] = structuredClone(args[1]); return original.apply(chrome.tabs, args); }; });
+    let scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true });
+    // 显式选择来源模拟用户操作，不能用测试私有函数绕过来源确认。
+    async function fill(label, fieldId = 'builtin.name') {
+      const row = scan.rows.find((item) => item.field.label === label); assert.ok(row, label);
+      await rpc(options, 'learning:select', { sessionId: scan.sessionId, scanId: row.field.scanId, fieldId, entryId: null });
+      const view = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true }); return view.rows.find((item) => item.field.scanId === row.field.scanId);
+    }
+    // 观察实际文本原语并使旧通用入口报错，证明新路径没有暗中执行候选搜索。
+    await worker.evaluate(async (tabId) => chrome.scripting.executeScript({ target: { tabId }, func: () => {
+      const filler = globalThis.WangshenFiller; const original = filler.fillTextOnly; const mark = filler.markFilled; globalThis.__textWrites = 0; globalThis.__textMarks = 0; globalThis.__legacyTextCalls = 0;
+      filler.fillTextOnly = (...args) => { globalThis.__textWrites++; return original(...args); }; filler.markFilled = (...args) => { globalThis.__textMarks++; return mark(...args); };
+      filler.fillElement = () => { globalThis.__legacyTextCalls++; throw new Error('文本不得进入旧候选探测'); };
+    } }), tabId);
+    await t.test('三类文本实际写入并保留换行和字面脚本，不触发独立候选', async () => {
+      for (const [label, fieldId] of [['姓名', 'builtin.name'], ['自我介绍', 'builtin.selfIntroduction'], ['补充说明', 'builtin.selfIntroduction']]) { const row = await fill(label, fieldId); assert.equal(row.status, 'success', label + '：' + row.reason); }
+      assert.equal(await page.locator('#text-name').inputValue(), name); assert.equal(await page.locator('#text-note').inputValue(), note); assert.equal(await page.locator('#text-editable').innerText(), note);
+      assert.equal(await page.locator('#text-editable script').count(), 0); assert.equal(await page.evaluate(() => window.__textInjected), undefined);
+      const events = await page.evaluate(() => __textEvents); for (const eventList of Object.values(events)) for (const type of ['focus', 'input', 'change', 'blur']) assert.ok(eventList.includes(type));
+      // 相同富文本只回读，不因 div/br 的结构差异误判冲突或再次赋值。
+      const writes = await worker.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.__textWrites }))[0].result, tabId);
+      assert.equal((await fill('补充说明', 'builtin.selfIntroduction')).status, 'success');
+      assert.equal(await worker.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.__textWrites }))[0].result, tabId), writes);
+      assert.equal(await page.evaluate(() => __trapClicks), 0);
+    });
+    await t.test('真实 React/Vue 状态接受新值且重绘保持，拒绝组件准确报告回退', async () => {
+      for (const label of ['React受控姓名', 'Vue受控姓名']) assert.equal((await fill(label)).status, 'success');
+      for (const label of ['React拒绝回退姓名', 'Vue拒绝回退姓名']) { const row = await fill(label); assert.equal(row.status, 'failed'); assert.match(row.reason, /回退/); }
+      assert.equal(await page.evaluate(() => __frameworkProbe.react()), name); assert.equal(await page.evaluate(() => __frameworkProbe.vue()), name);
+      await page.evaluate(() => { __frameworkProbe.rerenderReact(); __frameworkProbe.rerenderVue(); });
+      assert.equal(await page.locator('#real-react-name').inputValue(), name); assert.equal(await page.locator('#real-vue-name').inputValue(), name);
+      assert.equal(await page.locator('#real-react-reject').inputValue(), ''); assert.equal(await page.locator('#real-vue-reject').inputValue(), '');
+    });
+    await t.test('网页非空保护、只读和未适配候选拒绝，中途变成密码控件不报成功', async () => {
+      await page.locator('#text-name').fill('网页已有内容'); assert.equal((await fill('姓名')).status, 'needs_confirmation'); assert.equal(await page.locator('#text-name').inputValue(), '网页已有内容');
+      assert.equal((await fill('只读姓名')).status, 'unsupported'); assert.equal((await fill('候选输入')).status, 'unsupported'); assert.equal(await page.locator('#text-list').inputValue(), '');
+      assert.equal((await fill('结构切换')).status, 'failed');
+      assert.ok(!scan.rows.some((row) => /密码|验证码|同意|同步更新|提交/.test(row.field.label))); assert.equal(await page.evaluate(() => __protectedReads), 0);
+    });
+    await t.test('真实私有计划引用固定文本能力；取消和撤销使回读停止且没有迟到写入', async () => {
+      const row = scan.rows.find((item) => item.field.label === '姓名'); const encoded = await worker.evaluate((id) => JSON.stringify(globalThis.__textMessages[id].intent), row.field.scanId);
+      const result = await worker.evaluate(async ({ tabId, encoded }) => (await chrome.scripting.executeScript({ target: { tabId }, args: [encoded], func: async (encodedIntent) => {
+        const intent = JSON.parse(encodedIntent); const S = globalThis.LocalApplyPageScanner; const V = globalThis.LocalApplyVerifiedFill; const P = globalThis.LocalApplyFillPlanner; const R = globalThis.LocalApplyAdapterRegistry;
+        const item = S.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId); item.el.value = '';
+        const plan = P.prepare(item, intent).plan; const adapterId = plan.adapterId; const writes = globalThis.__textWrites; const marks = globalThis.__textMarks;
+        const before = new AbortController(); before.abort(); const stopped = await V.fill(item, intent.value, { intent, signal: before.signal }); const beforeWrites = globalThis.__textWrites - writes;
+        const during = new AbortController(); const pending = V.fill(item, intent.value, { intent, signal: during.signal }); setTimeout(() => during.abort(), 20); const cancelled = await pending;
+        item.el.value = ''; const revokePending = V.fill(item, intent.value, { intent }); setTimeout(() => S.revoke(), 20); const revoked = await revokePending;
+        await new Promise((resolve) => setTimeout(resolve, 600)); S.scan(true);
+        return { ids: R.ids, frozen: Object.isFrozen(R), register: typeof R.register, adapterId, stopped: stopped.status, beforeWrites, cancelled: cancelled.status, revoked: revoked.status, writes: globalThis.__textWrites - writes, marks: globalThis.__textMarks - marks, legacy: globalThis.__legacyTextCalls };
+      } }))[0].result, { tabId, encoded });
+      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
+    });
+    await t.test('保留个人库、日志白名单及零模型/提交，扫描撤销后可重新使用', async () => {
+      scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); assert.ok(scan.rows.length > 0);
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); const diagnostics = JSON.stringify(await rpc(options, 'diagnostics:read')); const backup = JSON.stringify((await rpc(options, 'localapply:exportBackup')).backup);
+      for (const secret of [name, note, 'must-not-read', 'intent.', 'plan.']) assert.ok(!diagnostics.includes(secret), secret); assert.ok(!backup.includes('plan.'));
+      assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => __trapClicks), 0); assert.equal(await page.evaluate(() => __submitCount), 0); assert.equal(await page.locator('#agreement').isChecked(), false); assert.equal(await page.locator('#sync').isChecked(), false); assert.deepEqual(errors, []);
+      await page.screenshot({ path: path.join(testRoot, 'text-registry-controls.png'), fullPage: true });
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 实际后台签发意图，隔离内容脚本内测试计划身份和结构失效；不使用真实个人资料或 API。
 test('分层第二步：填写意图、私有计划与消息边界', { timeout: 60000 }, async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
