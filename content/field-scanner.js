@@ -81,7 +81,7 @@
     return rows.slice(0, 100).map((option) => ({ value: M.redact(option.value), text: M.redact(option.text) }));
   }
 
-  // 获得授权后仅输出结构元数据，调用期间不触碰任何 input.value/checked。
+  // 授权后输出旧版结构封套；分离语义/控件仅放本页注册表，不读取 input.value/checked。
   function scan(authorize = false) {
     if (authorize) { granted = true; currentUrl = location.href; }
     if (!granted || location.href !== currentUrl) { granted = false; throw new Error('请先主动授权扫描当前招聘页面'); }
@@ -110,7 +110,7 @@
         placeholder: compound ? '' : M.redact(el.getAttribute('placeholder')), options: compound ? [] : options(el, members, type), ...context(el), ...(compound ? { layout: compound.layout } : {}) };
       if (!field.label || M.restricted(field) || /搜索|站内检索|订阅邮件/.test(field.label)) continue;
       field.semanticId = M.semanticId(field);
-      fields.push(field); registry.set(field.scanId, { el, members, field, compound });
+      fields.push(field); registry.set(field.scanId, { el, members, field, compound, semantic: M.semanticDescriptor(field), control: M.controlDescriptor(field) });
     }
     // 指纹相同但有多份相同控件时不能任意合并成一条高置信规则。
     const counts = new Map();
@@ -130,13 +130,14 @@
     return registry.get(scanId);
   }
 
-  // 主动保存/核对时读取单项；主动扫描仅在本页调用它判空，不传出实际值。
+  // 主动读取单项按控件描述分派；旧调用者临时投影，实际值不进入结构扫描封套。
   function readValue(item) {
+    const control = item.control || M.controlDescriptor(item.field);
     if (item.compound) return A.read(item);
     if (A.dropdown(item.el)) return A.dropdownText(item.el);
-    if (item.field.type === 'radio') return item.members.find((el) => el.checked)?.value || '';
-    if (item.field.type === 'checkbox') return item.members.length === 1 ? item.el.checked : item.members.filter((el) => el.checked).map((el) => el.value);
-    if (item.field.type === 'combobox' && !('value' in item.el)) return item.el.textContent.trim();
+    if (control.type === 'radio') return item.members.find((el) => el.checked)?.value || '';
+    if (control.type === 'checkbox') return item.members.length === 1 ? item.el.checked : item.members.filter((el) => el.checked).map((el) => el.value);
+    if (control.type === 'combobox' && !('value' in item.el)) return item.el.textContent.trim();
     return item.el.isContentEditable ? item.el.textContent : item.el.value;
   }
 

@@ -48,6 +48,76 @@ function suggestion(payload, fieldId = null, definition = null) {
 // 创建定义不包含个人值，值只放入 confirmField 的独立字段。
 function definition(label = '附加说明') { return { label, type: 'text', group: '其他', aliases: [], options: [] }; }
 
+// 固定旧指纹样本，防止新描述无声改变历史规则或存储验证。
+test('分层第一步：冻结旧指纹，四类控件共享语义且保留独立控件描述', async () => {
+  const env = await fixture(); const M = env.context.FieldMatchingEngine; await env.setValue('builtin.gender', '男');
+  const fields = ['text', 'select', 'radio', 'combobox'].map((type) => env.field('性别', { type, group: '个人信息' }));
+  assert.equal(fields[1].semanticId, 'semantic.3be13eaeef07a828'); assert.equal(fields[2].semanticId, 'semantic.b545659f37a91bd5');
+  const view = await env.scan(...fields);
+  assert.equal(view.rows.length, 4); assert.equal(new Set(view.rows.map((row) => row.semantic.key)).size, 1);
+  assert.equal(new Set(view.rows.map((row) => row.control.fingerprint)).size, 4);
+  for (const [index, row] of view.rows.entries()) {
+    assert.equal(row.control.type, fields[index].type); assert.equal(row.target.fieldId, 'builtin.gender'); assert.equal(row.status, 'matched');
+    assert.equal(row.semantic.type, undefined); assert.equal(row.control.label, undefined); assert.equal(row.field.semanticId, fields[index].semanticId);
+  }
+  assert.equal(env.aiCalls.length, 0); assert.equal(M.semanticDescriptor(fields[0]).key, view.rows[0].semantic.key);
+});
+
+// 描述只读各自白名单；同语义控件换布局不改 key，模块和学历含义变化则必须区分。
+test('分层第一步：语义与结构互不污染，不读取值、选项或其他任意属性', async () => {
+  const { context, field } = await fixture(); const M = context.FieldMatchingEngine;
+  const base = field('毕业院校', { kind: 'education', group: '教育经历', degree: 'undergrad' }); const semantic = M.semanticDescriptor(base); const control = M.controlDescriptor(base);
+  const varied = { ...base, type: 'combobox', layout: 'address:province-city-district', index: 8 };
+  assert.equal(M.semanticDescriptor(varied).key, semantic.key); assert.notEqual(M.controlDescriptor(varied).fingerprint, control.fingerprint);
+  for (const change of [{ group: '工作经历' }, { kind: 'employment' }, { degree: 'master' }, { label: '专业' }]) assert.notEqual(M.semanticDescriptor({ ...base, ...change }).key, semantic.key);
+  assert.equal(M.controlDescriptor({ ...base, label: '手机号', group: '其他', index: 8 }).fingerprint, control.fingerprint);
+  // 故意让禁止读取的属性抛错，避免仅以结果不含值冒充零读取。
+  const guarded = { ...base };
+  for (const key of ['value', 'checked', 'options', 'html', 'url']) Object.defineProperty(guarded, key, { get() { throw new Error('禁止读取 ' + key); } });
+  assert.deepEqual(M.semanticDescriptor(guarded), semantic); assert.deepEqual(M.controlDescriptor(guarded), control);
+});
+
+// 共享 key 仅代表含义，不能代替 scanId、整条记录绑定及 entryId。
+test('分层第一步：同名多条经历共享语义，来源与网页字段仍独立', async () => {
+  const env = await fixture(); await env.setValue('builtin.school', '合成首条学校');
+  const entryId = (await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'education', title: '合成第二条' } })).result;
+  await env.setValue('builtin.school', '合成第二条学校', entryId);
+  const fields = [0, 1].map((index) => env.field('学校名称', { group: '教育经历', kind: 'education', index }));
+  env.recordBlocks([{ blockId: 'scan.block', kind: 'education', canAdd: false, records: fields.map((field, index) => ({ recordId: 'scan.record' + index, scanIds: [field.scanId] })) }]);
+  let view = await env.scan(...fields); assert.equal(view.rows[0].semantic.key, view.rows[1].semantic.key);
+  assert.ok(view.rows.every((row) => row.status === 'needs_confirmation' && row.target === null));
+  view = await env.send(view, 'prepareRecords', { confirmed: true });
+  assert.equal(view.rows.length, 2); assert.notEqual(view.rows[0].field.scanId, view.rows[1].field.scanId);
+  assert.equal(view.rows[0].target.entryId, null); assert.equal(view.rows[1].target.entryId, entryId);
+  assert.equal(view.rows[0].value, '合成首条学校'); assert.equal(view.rows[1].value, '合成第二条学校'); assert.equal(env.aiCalls.length, 0);
+});
+
+// 新描述仅驻留会话；旧规则精确命中及备份往返不变，跨控件复用留待独立授权步骤。
+test('分层第一步：旧规则不改写，运行时描述不进入 v5 备份和个人资料', async () => {
+  const env = await fixture(); await env.setValue('builtin.gender', '男'); const field = env.field('合成自定义称谓', { type: 'select' });
+  let view = await env.scan(field); view = await env.send(view, 'select', { scanId: field.scanId, fieldId: 'builtin.gender' });
+  view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true }); await env.send(view, 'remember', { scanId: field.scanId, confirmed: true });
+  const before = await env.repo.read(); const rule = before.mappingRules[0];
+  assert.equal(rule.semanticId, field.semanticId); assert.deepEqual(rule.features, env.context.FieldMatchingEngine.features(field));
+  assert.equal((await env.scan(field)).rows[0].source, 'memory');
+  const changed = env.field(field.label, { type: 'radio' }); view = await env.scan(changed);
+  assert.equal(view.rows[0].target, null); assert.equal(view.rows[0].semantic.key, env.context.FieldMatchingEngine.semanticDescriptor(field).key);
+  assert.deepEqual(await env.repo.read(), before);
+  const backup = await env.repo.exportBackup(); assert.equal(backup.database.schemaVersion, 5);
+  for (const word of ['semantic.v1.', 'control.v1.', 'fingerprint']) assert.ok(!JSON.stringify(backup).includes(word));
+  const plan = await env.repo.previewImport(backup, 'replace'); await env.repo.command({ action: 'importBackup', payload: { backup, mode: 'replace' }, expectedRevision: plan.revision });
+  const restored = await env.repo.read(); assert.deepEqual(restored.fieldValues, before.fieldValues); assert.deepEqual(restored.mappingRules, before.mappingRules);
+  assert.equal((await env.scan(field)).rows[0].source, 'memory');
+});
+
+// 不扩大内容消息及 AI 契约，客户端不得夹带自制的描述或额外数据。
+test('分层第一步：扫描封套与 AI 元数据白名单保持原样', async () => {
+  const env = await fixture(); const field = env.field('合成待识别字段'); const view = await env.scan(field);
+  const preview = await env.send(view, 'prepareAI'); assert.deepEqual(preview.payload.fields[0], field);
+  assert.equal(preview.payload.fields[0].semantic, undefined); assert.equal(preview.payload.fields[0].control, undefined); assert.equal(env.aiCalls.length, 0);
+  for (const extra of [{ semantic: view.rows[0].semantic }, { control: view.rows[0].control }, { value: '禁止传出值' }]) await assert.rejects(env.scan({ ...field, ...extra }), /扫描字段格式/);
+});
+
 test('已有标准字段本地直接匹配，不调用 AI；0 和 false 不是空值', async () => {
   const env = await fixture(); await env.setValue('builtin.name', '合成姓名');
   const view = await env.scan(env.field('姓名')); assert.equal(view.rows[0].status, 'matched'); assert.equal(view.rows[0].target.fieldId, 'builtin.name');

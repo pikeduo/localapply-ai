@@ -8,6 +8,46 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 通过真实后台/内容脚本验证独立描述，复用原填写器，不以私有函数或内存桩代替执行。
+test('分层第一步：字段语义与控件描述独立', { timeout: 60000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'field-descriptors-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.gender', value: '男', entryId: null } } });
+    const before = (await rpc(options, 'localapply:read')).database; const page = await context.newPage(); const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto(api.base + '/test-pages/field-control-variants.html');
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); const rows = scan.rows;
+    assert.equal(rows.length, 4); assert.equal(new Set(rows.map((row) => row.semantic.key)).size, 1); assert.equal(new Set(rows.map((row) => row.control.fingerprint)).size, 4);
+    for (const type of ['text', 'select', 'radio', 'combobox']) {
+      // 同一个已确认来源按当前真实控件执行，编码与标签不同时检查实际选中项。
+      await t.test(`${type} 使用同一 builtin.gender 并完成实际写入与回读`, async () => {
+        const row = rows.find((item) => item.control.type === type); assert.equal(row.target.fieldId, 'builtin.gender'); assert.equal(row.status, 'matched');
+        const result = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true });
+        const filled = result.rows.find((item) => item.field.scanId === row.field.scanId); assert.equal(filled.status, 'success', filled.reason); assert.equal(filled.diagnostic.controlType, type);
+        if (type === 'text') assert.equal(await page.locator('#gender-text').inputValue(), '男');
+        if (type === 'select') { assert.equal(await page.locator('#gender-select').inputValue(), 'M'); assert.equal(await page.locator('#gender-select option:checked').textContent(), '男'); }
+        if (type === 'radio') assert.equal(await page.locator('input[name="genderRadio"]:checked').inputValue(), 'M');
+        if (type === 'combobox') { assert.equal(await page.locator('#gender-combobox').textContent(), '男'); assert.equal(await page.locator('#gender-options [aria-selected="true"]').getAttribute('data-value'), 'M'); }
+      });
+    }
+    // 独立描述不能放宽已有不同值保护，也不能导致写库、模型调用或受保护操作。
+    await t.test('保留网页已有不同值，零 AI、零提交且个人库不变', async () => {
+      await page.locator('#gender-select').selectOption('F'); const row = rows.find((item) => item.control.type === 'select');
+      const result = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true });
+      assert.equal(result.rows.find((item) => item.field.scanId === row.field.scanId).status, 'needs_confirmation'); assert.equal(await page.locator('#gender-select').inputValue(), 'F');
+      assert.equal(await page.locator('#agreement').isChecked(), false); assert.equal(await page.evaluate(() => submitCount), 0); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before);
+      await page.screenshot({ path: path.join(testRoot, 'field-descriptors-controls.png'), fullPage: true });
+    });
+  } finally {
+    if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
 // 阶段五在两种真实存储入口验证申请管理、导出导入和整个浏览器重启。
 for (const withExtension of [true, false]) {
   test(`阶段五管理：${withExtension ? '扩展' : 'file://'}申请、筛选、看板、备份与重启`, { timeout: 120000 }, async (t) => {

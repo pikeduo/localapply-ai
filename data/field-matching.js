@@ -28,6 +28,26 @@
     return 'semantic.' + (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0');
   }
 
+  // 新描述使用独立版本前缀；旧 semanticId 的算法和持久化契约保持原样。
+  function descriptorId(prefix, description) {
+    const text = JSON.stringify(description); let a = 2166136261; let b = 3339675911;
+    for (const char of text) { a = Math.imul(a ^ char.charCodeAt(0), 16777619); b = Math.imul(b ^ char.charCodeAt(0), 2246822519); }
+    return prefix + (a >>> 0).toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0');
+  }
+
+  // 语义只描述字段和明确上下文，不含控件、序号或个人值；key 不能代替记录来源及 scanId。
+  function semanticDescriptor(field) {
+    const description = { label: redact(field.label), group: redact(field.group), kind: kinds.includes(field.kind) ? field.kind : '',
+      degree: ['first', 'undergrad', 'master', 'doctor', 'highest'].includes(field.degree) ? field.degree : '' };
+    return { key: descriptorId('semantic.v1.', description), ...description };
+  }
+
+  // 控件描述只投影已识别的类型/复合布局，不读取 DOM 或值；指纹不代表选项与节点仍然有效。
+  function controlDescriptor(field) {
+    const description = { type: types.includes(field.type) ? field.type : 'text', ...(layouts.includes(field.layout) ? { layout: field.layout } : {}) };
+    return { fingerprint: descriptorId('control.v1.', description), ...description };
+  }
+
   // 仅允许经过白名单和脱敏的扫描元数据跨消息边界，绝不接受 value/html 属性。
   function validateField(field) {
     const allowed = ['scanId', 'semanticId', 'label', 'name', 'type', 'placeholder', 'options', 'group', 'kind', 'degree', 'index', 'layout'];
@@ -128,22 +148,23 @@
     return definition && key ? { definition, reason: '标准词典与明确上下文匹配' } : null;
   }
 
-  // 生成完整状态列表；匹配仅计算建议，任何网页写入仍需要后续用户确认。
+  // 新匹配只消费语义描述；旧规则仍按原封套精确查询，控件描述留给本页执行及验证。
   function match(db, profileId, origin, fields) {
     return fields.map((field) => {
       validateField(field);
-      const base = { field, target: null, candidates: [], status: 'needs_confirmation', reason: '未知字段，请手动选择或主动使用 AI', source: 'unknown' };
-      if (restricted(field)) return { ...base, status: 'unsupported', reason: '认证或同意条款不自动处理' };
-      if (/家庭|紧急|联系人|家属/.test(field.group + field.label)) return { ...base, reason: '联系人与申请人语义不同，请人工选择' };
+      const semantic = semanticDescriptor(field); const control = controlDescriptor(field);
+      const base = { field, semantic, control, target: null, candidates: [], status: 'needs_confirmation', reason: '未知字段，请手动选择或主动使用 AI', source: 'unknown' };
+      if (restricted(semantic)) return { ...base, status: 'unsupported', reason: '认证或同意条款不自动处理' };
+      if (/家庭|紧急|联系人|家属/.test(semantic.group + semantic.label)) return { ...base, reason: '联系人与申请人语义不同，请人工选择' };
       const saved = memory(db, profileId, origin, field);
       if (saved) return { ...base, ...saved, status: saved.target && saved.confirmed ? hasValue(valueOf(db, profileId, saved.target)?.value) ? 'matched' : 'missing_value' : 'needs_confirmation', source: 'memory' };
-      const found = definitionFor(db, field);
+      const found = definitionFor(db, semantic);
       if (!found) return base;
-      const candidates = targetsFor(db, profileId, field, found.definition.fieldId);
+      const candidates = targetsFor(db, profileId, semantic, found.definition.fieldId);
       if (candidates.length !== 1) return { ...base, candidates, reason: candidates.length ? '存在多段经历，请明确选择来源' : '缺少符合该学历或经历语义的资料', source: 'context' };
       const target = candidates[0];
       const privateSuggestion = !db.publicFieldIds.includes(found.definition.fieldId);
-      const languageChoice = /语言能力/.test(field.group) && !/英语/.test(field.label);
+      const languageChoice = /语言能力/.test(semantic.group) && !/英语/.test(semantic.label);
       return { ...base, target, candidates, source: privateSuggestion || languageChoice ? 'definition-suggestion' : 'local',
         reason: languageChoice ? '网页语种未明确，请先选择对应语种的本地来源；不将英语水平套用到其他语言' : privateSuggestion ? '私有字段的通用语义建议，请确认当前网站含义' : found.reason,
         status: hasValue(valueOf(db, profileId, target)?.value) ? privateSuggestion || languageChoice ? 'needs_confirmation' : 'matched' : 'missing_value' };
@@ -151,5 +172,5 @@
   }
 
   global.FieldMappingMemory = { find: memory };
-  global.FieldMatchingEngine = { redact, features, semanticId, validateField, restricted, hasValue, valueOf, match, degreeOf, definitionFor, targetForRecord };
+  global.FieldMatchingEngine = { redact, features, semanticId, semanticDescriptor, controlDescriptor, validateField, restricted, hasValue, valueOf, match, degreeOf, definitionFor, targetForRecord };
 })(globalThis);

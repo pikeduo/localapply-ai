@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成字段与控件分离验收</title>
+<style>body{font:16px/1.7 system-ui;max-width:800px;margin:30px auto}fieldset{margin:15px 0;padding:15px}input,select,[role=combobox]{padding:8px}[role=option]{padding:8px;cursor:pointer}[aria-selected=true]{background:#dbeafe}</style></head>
+<body><h1>合成招聘表单 · 字段语义与控件</h1><form id="application"><section class="form-section"><h2>个人信息</h2>
+<fieldset><legend>性别</legend><label for="gender-text">性别</label><input id="gender-text" name="genderText"></fieldset>
+<fieldset><legend>性别</legend><label for="gender-select">性别</label><select id="gender-select"><option value="">请选择</option><option value="M">男</option><option value="F">女</option></select></fieldset>
+<fieldset><legend>性别</legend><label><input type="radio" name="genderRadio" value="M">男</label><label><input type="radio" name="genderRadio" value="F">女</label></fieldset>
+<fieldset><legend>性别</legend><div role="combobox" id="gender-combobox" aria-label="性别" aria-controls="gender-options" tabindex="0">请选择</div><div role="listbox" id="gender-options"><div role="option" data-value="M" aria-selected="false">男</div><div role="option" data-value="F" aria-selected="false">女</div></div></fieldset>
+<fieldset><legend>受保护区域</legend><label>密码<input type="password" value="synthetic-secret"></label><label>验证码<input autocomplete="one-time-code"></label><label><input id="agreement" type="checkbox">我同意隐私协议</label></fieldset>
+</section><button type="submit">提交申请</button></form>
+<script>
+  window.submitCount = 0;
+  // 合成页面只记录提交事件，测试不得触发投递。
+  document.getElementById('application').addEventListener('submit', (event) => { event.preventDefault(); window.submitCount++; });
+  // 明确点击候选才更新选中状态；M/F 编码仅来自本页候选，不由插件预设。
+  document.getElementById('gender-options').addEventListener('click', (event) => {
+    const option = event.target.closest('[role="option"]'); if (!option) return;
+    for (const row of document.querySelectorAll('#gender-options [role="option"]')) row.setAttribute('aria-selected', String(row === option));
+    document.getElementById('gender-combobox').textContent = option.textContent;
+  });
+</script></body></html>
