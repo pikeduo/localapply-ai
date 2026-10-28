@@ -8,6 +8,70 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 日期/电话桥接经过真实后台授权和真实框架，取消/替换只在独立合成页面中注入。
+test('分层第五步：日期电话计划、子项保护及取消', { timeout: 90000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'date-phone-')); const api = await serve(); let context; const errors = [];
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    for (const [fieldId, value] of [['builtin.birthDate', '2028-06-30'], ['builtin.graduationDate', '2028-06'], ['builtin.educationStartDate', '2028-02'], ['builtin.phone', '+44 2070000000']]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId, value } } });
+    const before = (await rpc(options, 'localapply:read')).database; const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(api.base + '/test-pages/date-phone-controls.html'); await page.locator('#react-month').waitFor(); await page.locator('#vue-month').waitFor();
+    await page.locator('#start-year').selectOption('Y2028'); const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    // 仅观察合成后台意图，原消息仍由实际 tabs API 和内容脚本处理。
+    await worker.evaluate(() => { const original = chrome.tabs.sendMessage; globalThis.__dateMessages = {}; chrome.tabs.sendMessage = function (...args) { if (args[1]?.type === 'learning:fill') globalThis.__dateMessages[args[1].scanId] = structuredClone(args[1]); return original.apply(chrome.tabs, args); }; });
+    const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true });
+    // 来源全部从本地规范库选择，测试不向填写消息携带值、计划或脚本。
+    async function fill(label, fieldId) {
+      const row = scan.rows.find((row) => row.field.label === label); assert.ok(row, label);
+      await rpc(options, 'learning:select', { sessionId: scan.sessionId, scanId: row.field.scanId, fieldId });
+      return (await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true })).rows.find((next) => next.field.scanId === row.field.scanId);
+    }
+    await t.test('开始/结束分别回读，保留同值年份和源日期精度，电话只拆分一次', async () => {
+      for (const [label, fieldId] of [['开始日期', 'builtin.educationStartDate'], ['结束日期', 'builtin.graduationDate'], ['手机号', 'builtin.phone'], ['出生日期', 'builtin.birthDate']]) { const row = await fill(label, fieldId); assert.equal(row.status, 'success', label + '：' + row.reason); }
+      assert.equal(await page.locator('#start-month').inputValue(), 'M2'); assert.equal(await page.locator('#end-year').inputValue(), '2028'); assert.equal(await page.locator('#end-month').inputValue(), '6');
+      assert.equal(await page.locator('#country').inputValue(), 'gb'); assert.equal(await page.locator('#phone').inputValue(), '2070000000'); assert.equal(await page.locator('#birth').inputValue(), '2028-06-30');
+      const events = await page.evaluate(() => __dateChanges); assert.equal(events['start-year'], 1);
+      assert.equal((await fill('开始日期', 'builtin.educationStartDate')).status, 'success'); assert.equal((await fill('手机号', 'builtin.phone')).status, 'success'); assert.deepEqual(await page.evaluate(() => __dateChanges), events);
+      const partial = await fill('出生日期', 'builtin.graduationDate'); assert.equal(partial.status, 'needs_confirmation'); assert.match(partial.reason, /精度/); assert.equal(await page.locator('#birth').inputValue(), '2028-06-30');
+    });
+    await t.test('真实 React/Vue 接受月份和国码电话，重绘保持，拒绝组件失败', async () => {
+      for (const framework of ['React', 'Vue']) {
+        for (const [suffix, fieldId] of [['月份', 'builtin.graduationDate'], ['手机号', 'builtin.phone']]) { const row = await fill(framework + suffix, fieldId); assert.equal(row.status, 'success', framework + suffix + '：' + row.reason); }
+        const rejected = await fill(framework + '拒绝月份', 'builtin.graduationDate'); assert.equal(rejected.status, 'failed'); assert.match(rejected.reason, /回退/);
+      }
+      const expected = { date: '2028-06', country: 'gb', phone: '2070000000' }; assert.deepEqual(await page.evaluate(() => __datePhoneProbe.react()), expected); assert.deepEqual(await page.evaluate(() => __datePhoneProbe.vue()), expected);
+      await page.evaluate(() => { __datePhoneProbe.redrawReact(); __datePhoneProbe.redrawVue(); });
+      for (const framework of ['react', 'vue']) { assert.equal(await page.locator(`#${framework}-month`).inputValue(), '2028-06'); assert.equal(await page.locator(`#${framework}-phone`).inputValue(), '2070000000'); assert.equal(await page.locator(`#${framework}-date-reject`).inputValue(), ''); }
+    });
+    await t.test('已有不同月份/号码不覆盖，明确日历选择成功，不触碰提交按钮', async () => {
+      await page.locator('#end-month').fill('12'); assert.equal((await fill('结束日期', 'builtin.graduationDate')).status, 'needs_confirmation'); assert.equal(await page.locator('#end-month').inputValue(), '12');
+      await page.locator('#phone').fill('2071111111'); assert.equal((await fill('手机号', 'builtin.phone')).status, 'needs_confirmation'); assert.equal(await page.locator('#phone').inputValue(), '2071111111');
+      assert.equal((await fill('日历日期', 'builtin.birthDate')).status, 'success'); assert.equal(await page.locator('#calendar-date').inputValue(), '2028-06-30'); assert.equal(await page.evaluate(() => __dateClicks), 1); assert.equal(await page.evaluate(() => __submitCount), 0);
+    });
+    await t.test('子项替换使计划失效，日历等待期间取消后无迟到日期点击', async () => {
+      const encoded = await worker.evaluate((ids) => ids.map((id) => JSON.stringify(globalThis.__dateMessages[id].intent)), ['开始日期', '日历日期'].map((label) => scan.rows.find((row) => row.field.label === label).field.scanId));
+      const checks = await worker.evaluate(async ({ tabId, encoded }) => (await chrome.scripting.executeScript({ target: { tabId }, args: [encoded], func: async (encoded) => {
+        const [start, calendar] = encoded.map((value) => JSON.parse(value)); const S = globalThis.LocalApplyPageScanner; const P = globalThis.LocalApplyFillPlanner; const V = globalThis.LocalApplyVerifiedFill;
+        const item = S.record(start.binding.scanId, start.binding.documentId, start.binding.semanticId); const plan = P.prepare(item, start).plan; const month = item.compound.parts.month; const clone = month.cloneNode(true); month.replaceWith(clone); let replaced = false;
+        try { P.validate(plan, item, start); } catch { replaced = true; } clone.replaceWith(month);
+        const cal = S.record(calendar.binding.scanId, calendar.binding.documentId, calendar.binding.semanticId); cal.el.value = ''; document.getElementById('calendar').hidden = true;
+        const controller = new AbortController(); cal.el.addEventListener('click', () => { setTimeout(() => controller.abort(), 10); }, { once: true });
+        const result = await V.fill(cal, calendar.value, { intent: calendar, signal: controller.signal }); await new Promise((resolve) => setTimeout(resolve, 350));
+        return { replaced, status: result.status, value: cal.el.value, adapter: plan.adapterId, keys: plan.targetParts.map((part) => part.key), precision: plan.datePrecision };
+      } }))[0].result, { tabId, encoded });
+      assert.deepEqual(checks, { replaced: true, status: 'failed', value: '', adapter: 'date', keys: ['year', 'month'], precision: 'month' }); assert.equal(await page.evaluate(() => __dateClicks), 1);
+    });
+    await t.test('个人库、备份和白名单日志不包含计划/候选，零 AI/提交/协议操作', async () => {
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); const logs = JSON.stringify(await rpc(options, 'diagnostics:read')); const backup = JSON.stringify((await rpc(options, 'localapply:exportBackup')).backup);
+      for (const value of ['intent.', 'plan.', 'targetParts', '2070000000', '2028-06-30', 'Y2028']) assert.ok(!logs.includes(value), value);
+      for (const value of ['intent.', 'plan.', 'targetParts']) assert.ok(!backup.includes(value));
+      assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => __submitCount), 0); assert.equal(await page.locator('#agreement').isChecked(), false); assert.deepEqual(errors, []);
+      await page.screenshot({ path: path.join(root, 'date-phone-controls.png'), fullPage: true });
+    });
+  } finally { await context?.close(); api.server.closeAllConnections(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(root) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 原生选择走真实后台意图和固定注册表；仅合成页面/独立 profile，不调用付费 API。
 test('分层第四步：原生选择注册表与真实框架', { timeout: 90000 }, async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
@@ -216,8 +280,8 @@ test('分层第三步：固定注册表与文本执行路径', { timeout: 90000 
         await new Promise((resolve) => setTimeout(resolve, 600)); S.scan(true);
         return { ids: R.ids, frozen: Object.isFrozen(R), register: typeof R.register, adapterId, stopped: stopped.status, beforeWrites, cancelled: cancelled.status, revoked: revoked.status, writes: globalThis.__textWrites - writes, marks: globalThis.__textMarks - marks, legacy: globalThis.__legacyTextCalls };
       } }))[0].result, { tabId, encoded });
-      // 第四步新增三类固定能力；保留完整列表及全部取消/撤销断言，不降低白名单校验。
-      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
+      // 第五步新增日期/电话桥接；保留完整固定列表及全部取消/撤销断言。
+      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
     });
     await t.test('保留个人库、日志白名单及零模型/提交，扫描撤销后可重新使用', async () => {
       scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); assert.ok(scan.rows.length > 0);
@@ -1112,7 +1176,7 @@ async function serve() {
       if (modelApi.chatHold) { modelApi.releaseChat = respond; modelApi.onChat?.(); } else respond();
       return;
     }
-    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js'].includes(pathname)) {
+    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js'].includes(pathname)) {
       if (!frameworkBundles.has(pathname)) frameworkBundles.set(pathname, require('esbuild').build({ entryPoints: [path.join(ROOT, pathname)], bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"', '__VUE_OPTIONS_API__': 'true', '__VUE_PROD_DEVTOOLS__': 'false', '__VUE_PROD_HYDRATION_MISMATCH_DETAILS__': 'false' } }));
       const output = await frameworkBundles.get(pathname); res.setHeader('Content-Type', 'application/javascript'); res.end(output.outputFiles[0].contents); return;
     }

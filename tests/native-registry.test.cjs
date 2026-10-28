@@ -12,7 +12,7 @@ function fixture(type = 'select', value = '男', multiple = false) {
   const root = {}; let writes = 0; let marks = 0; let active = true;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date, setTimeout, clearTimeout, AbortController,
     Event: class { constructor(type) { this.type = type; } }, HTMLSelectElement: class {}, HTMLOptionElement: class {} });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   // 标签通过原生 labels 暴露，另保留属性供测试模拟禁用/标签变更。
   function node(label, code, tagName = 'INPUT') {
     const attrs = {}; const row = { tagName, type, name: 'synthetic', form: null, textContent: label, labels: [{ textContent: label }], value: code,

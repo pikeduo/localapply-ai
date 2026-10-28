@@ -6,7 +6,7 @@
   "license": "MIT",
   "scripts": {
     "vendor:libs": "node tools/vendor-libs.cjs",
-    "test": "node --test --test-timeout=20000 tests/baseline.test.cjs tests/store.test.cjs tests/storage-cache.test.cjs tests/resume-files.test.cjs tests/model-capabilities.test.cjs tests/field-learning.test.cjs tests/field-adapters.test.cjs tests/fill-contract.test.cjs tests/text-registry.test.cjs tests/native-registry.test.cjs tests/floating-panel.test.cjs tests/profile-view.test.cjs tests/applications.test.cjs",
+    "test": "node --test --test-timeout=20000 tests/baseline.test.cjs tests/store.test.cjs tests/storage-cache.test.cjs tests/resume-files.test.cjs tests/model-capabilities.test.cjs tests/field-learning.test.cjs tests/field-adapters.test.cjs tests/fill-contract.test.cjs tests/text-registry.test.cjs tests/native-registry.test.cjs tests/date-phone-registry.test.cjs tests/floating-panel.test.cjs tests/profile-view.test.cjs tests/applications.test.cjs",
     "test:e2e": "node --test --test-timeout=120000 tests/browser.test.cjs"
   },
   "devDependencies": {

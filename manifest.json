@@ -63,6 +63,7 @@
         "content/filler.js",
         "content/controls/text.js",
         "content/controls/native.js",
+        "content/controls/date-phone.js",
         "content/controls/registry.js",
         "content/verified-fill.js",
         "content/page-presence.js",

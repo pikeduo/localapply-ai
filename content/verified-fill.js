@@ -64,6 +64,7 @@
         if (current.el !== item.el || controlOf(current).fingerprint !== controlOf(item).fingerprint) throw new Error('填写控件已变化');
         if (['radio', 'checkbox'].includes(controlOf(item).type) && (current.members.length !== item.members.length
           || current.members.some((node, index) => node !== item.members[index]))) throw new Error('填写候选已变化');
+        return current;
       },
       // 状态读取沿用已有真实性及校验检查，不读取框架私有对象。
       accepted(value) { return accepted(item, value); },
@@ -93,9 +94,9 @@
     const date = adapted && !['phone', 'address'].includes(item.compound?.kind) ? A.dateValue(value) : null;
     const plan = { version: C.VERSION, planId: 'plan.' + crypto.randomUUID(), intentId: intent.intentId,
       binding: { ...intent.binding }, source: { ...intent.source }, controlFingerprint: control.fingerprint, operation,
-      verification: ({ 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state' })[operation] || 'legacy-delayed', state: operation === 'legacy-interaction' ? 'delegated' : 'ready',
+      verification: ({ 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state', 'fill-date': 'date-parts', 'fill-phone': 'phone-parts' })[operation] || 'legacy-delayed', state: ['legacy-interaction', 'fill-date', 'fill-phone'].includes(operation) ? 'delegated' : 'ready',
       ...(adapter ? { adapterId: adapter.id } : {}), ...(targetOption ? { targetOption } : {}),
-      ...(prepared?.targetOptions ? { targetOptions: prepared.targetOptions } : {}), ...(typeof prepared?.checked === 'boolean' ? { checked: prepared.checked } : {}), ...(date ? { datePrecision: date.precision } : {}) };
+      ...(prepared?.targetOptions ? { targetOptions: prepared.targetOptions } : {}), ...(prepared?.targetParts ? { targetParts: prepared.targetParts } : {}), ...(prepared?.targetPrecision ? { targetPrecision: prepared.targetPrecision } : {}), ...(typeof prepared?.checked === 'boolean' ? { checked: prepared.checked } : {}), ...(date ? { datePrecision: date.precision } : {}) };
     C.validatePlan(plan, intent);
     preparedPlans.set(plan, { item, optionNode, adapterState: prepared?.adapterState, candidates: ['select', 'radio', 'checkbox'].includes(control.type) ? [...nativeCandidates(item)] : null,
       selection: ['select', 'radio', 'checkbox'].includes(control.type) ? nativeCandidates(item).map((node) => control.type === 'select' ? node.selected : node.checked) : null,
@@ -110,6 +111,7 @@
     if (!saved || saved.used || Date.now() - saved.createdAt > 30000 || saved.encoded !== JSON.stringify(plan) || saved.intent !== JSON.stringify(intent)) throw new Error('填写计划已失效，请重新准备');
     const current = global.LocalApplyPageScanner.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId);
     if (saved.item.el !== item.el || current.el !== item.el || structure(current) !== saved.structure
+      || ['date', 'phone'].includes(plan.adapterId) && !global.LocalApplyDatePhoneControls.unchanged(saved.adapterState, current)
       || JSON.stringify(global.LocalApplyPageScanner.readValue(current)) !== saved.current
       || saved.candidates && (nativeCandidates(current).length !== saved.candidates.length || nativeCandidates(current).some((node, index) => node !== saved.candidates[index]
         || (controlOf(current).type === 'select' ? node.selected : node.checked) !== saved.selection[index]))

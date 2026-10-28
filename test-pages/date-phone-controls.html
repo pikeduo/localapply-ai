@@ -1,0 +1,15 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成日期电话 · 分层第五步</title><style>body{font:15px/1.7 system-ui;max-width:900px;margin:24px auto}.form-item,fieldset{border:1px solid #ccd6e2;border-radius:10px;padding:14px;margin:12px 0}input,select{padding:8px;margin:4px}label,.label{margin-right:12px}[hidden]{display:none!important}</style></head><body><h1>日期和电话复合控件</h1><form id="application">
+<div class="form-item"><span class="label">开始日期</span><select id="start-year" aria-label="年"><option value="">年</option><option value="Y2028">2028年</option></select><select id="start-month" aria-label="月"><option value="">月</option><option value="M2">2月</option><option value="M6">6月</option></select></div>
+<div class="form-item"><span class="label">结束日期</span><input id="end-year" placeholder="年"><input id="end-month" placeholder="月"></div>
+<div class="form-item"><label for="phone">手机号</label><select id="country" aria-label="区号"><option value="cn">中国 (+86)</option><option value="gb">英国 (+44)</option></select><input id="phone" type="tel"></div>
+<div class="form-item"><label for="birth">出生日期</label><input id="birth" type="date"></div>
+<div class="form-item"><label for="calendar-date">日历日期</label><input id="calendar-date" readonly aria-haspopup="dialog" aria-controls="calendar"><div id="calendar" role="dialog" hidden><select id="calendar-year" aria-label="年"><option>2026</option><option>2028</option></select><select id="calendar-month" aria-label="月"><option>1</option><option>6</option></select><button id="calendar-day" type="button" data-date="2026-01-30">30</button><button type="submit">提交申请</button></div></div>
+<div id="date-react"></div><div id="date-vue"></div><label><input type="checkbox" id="agreement">同意隐私协议</label><button type="submit">提交申请</button></form><script>
+// 合成日历只有真实候选点击才能提交选中状态，焦点或导航不会写入日期。
+window.__dateClicks=0;window.__submitCount=0;window.__dateChanges={};
+document.getElementById('application').addEventListener('submit',(event)=>{event.preventDefault();window.__submitCount++;});
+document.querySelectorAll('#start-year,#start-month,#end-year,#end-month,#country,#phone').forEach((node)=>node.addEventListener('change',()=>{window.__dateChanges[node.id]=(window.__dateChanges[node.id]||0)+1;}));
+document.getElementById('calendar-date').addEventListener('click',()=>{document.getElementById('calendar').hidden=false;});
+document.querySelectorAll('#calendar select').forEach((node)=>node.addEventListener('change',()=>{document.getElementById('calendar-day').dataset.date=document.getElementById('calendar-year').value+'-'+document.getElementById('calendar-month').value.padStart(2,'0')+'-30';}));
+document.getElementById('calendar-day').addEventListener('click',()=>{window.__dateClicks++;document.getElementById('calendar-date').value=document.getElementById('calendar-day').dataset.date;document.getElementById('calendar').hidden=true;});
+</script><script src="/test-pages/date-phone-frameworks.js"></script></body></html>

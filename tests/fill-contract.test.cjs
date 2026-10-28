@@ -9,7 +9,7 @@ const path = require('node:path');
 // 载入生产契约与填写验证器，保留真实匹配/日期逻辑，只替代原生节点接口。
 function fixture(storageType = 'select', value = '男', controlType = 'select') {
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date, setTimeout });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
   const db = { revision: 7, activeProfileId: 'profile.a', profiles: [{ profileId: 'profile.a' }, { profileId: 'profile.b' }], entries: [{ profileId: 'profile.b', entryId: 'entry.b' }],
     fieldDefinitions: [{ fieldId: 'builtin.synthetic', type: storageType }], fieldValues: [{ profileId: 'profile.a', fieldId: 'builtin.synthetic', entryId: null, value }] };
   const M = context.FieldMatchingEngine; const C = context.LocalApplyFillContract;
@@ -79,5 +79,5 @@ test('私有计划拒绝复制、篡改、候选变化、节点替换和值变�
 // 延用既有日期精度守卫，不为日历补日；复杂链路明确 delegated，不能冒充已确定选项。
 test('年月资料遇到年月日控件时无计划，复杂控件保留明确委托状态', () => {
   const partial = fixture('date', '2001-06', 'date'); const result = partial.planner.prepare(partial.item, partial.intent); assert.equal(result.plan, undefined); assert.match(result.error.reason, /精度不足/); assert.equal(partial.item.el.value, '');
-  const full = fixture('date', '2001-06-15', 'date'); const plan = full.planner.prepare(full.item, full.intent).plan; assert.equal(plan.state, 'delegated'); assert.equal(plan.datePrecision, 'day'); assert.equal(plan.operation, 'legacy-interaction');
+  const full = fixture('date', '2001-06-15', 'date'); const plan = full.planner.prepare(full.item, full.intent).plan; assert.equal(plan.state, 'delegated'); assert.equal(plan.datePrecision, 'day'); assert.equal(plan.operation, 'fill-date'); assert.equal(plan.adapterId, 'date');
 });
