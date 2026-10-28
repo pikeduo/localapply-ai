@@ -9,7 +9,7 @@ const path = require('node:path');
 // 载入生产契约与填写验证器，保留真实匹配/日期逻辑，只替代原生节点接口。
 function fixture(storageType = 'select', value = '男', controlType = 'select') {
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date, setTimeout });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
   const db = { revision: 7, activeProfileId: 'profile.a', profiles: [{ profileId: 'profile.a' }, { profileId: 'profile.b' }], entries: [{ profileId: 'profile.b', entryId: 'entry.b' }],
     fieldDefinitions: [{ fieldId: 'builtin.synthetic', type: storageType }], fieldValues: [{ profileId: 'profile.a', fieldId: 'builtin.synthetic', entryId: null, value }] };
   const M = context.FieldMatchingEngine; const C = context.LocalApplyFillContract;

@@ -2,7 +2,7 @@
 (function (global) {
   'use strict';
   const VERSION = 1;
-  const ADAPTER_IDS = Object.freeze(['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone', 'dropdown']);
+  const ADAPTER_IDS = Object.freeze(['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone', 'dropdown', 'address']);
   const logicalTypes = { text: 'string', textarea: 'string', select: 'enum', number: 'number', boolean: 'boolean', date: 'date', multiSelect: 'string-array' };
   const bindingKeys = ['sessionId', 'tabId', 'documentId', 'scanId', 'semanticId'];
   const sourceKeys = ['profileId', 'fieldId', 'entryId', 'revision'];
@@ -85,14 +85,14 @@
     shape(plan.binding, bindingKeys); shape(plan.source, sourceKeys);
     check(bindingKeys.every((key) => plan.binding[key] === intent.binding[key]) && sourceKeys.every((key) => plan.source[key] === intent.source[key]), '填写来源或文档已变化');
     check(typeof plan.controlFingerprint === 'string' && /^control\.v1\.[a-f0-9]{16}$/.test(plan.controlFingerprint));
-    const pairs = { 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state', 'fill-date': 'date-parts', 'fill-phone': 'phone-parts', 'resolve-option': 'selected-option', 'verify-existing': 'legacy-delayed', 'legacy-interaction': 'legacy-delayed' };
+    const pairs = { 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state', 'fill-date': 'date-parts', 'fill-phone': 'phone-parts', 'fill-address': 'address-parts', 'resolve-option': 'selected-option', 'verify-existing': 'legacy-delayed', 'legacy-interaction': 'legacy-delayed' };
     check(Object.hasOwn(pairs, plan.operation) && plan.verification === pairs[plan.operation]);
-    check(plan.state === (['legacy-interaction', 'fill-date', 'fill-phone', 'resolve-option'].includes(plan.operation) ? 'delegated' : 'ready'));
+    check(plan.state === (['legacy-interaction', 'fill-date', 'fill-phone', 'fill-address', 'resolve-option'].includes(plan.operation) ? 'delegated' : 'ready'));
     // 每种注册能力只能使用其固定操作，选择控件不能冒用文本或旧委托路径。
     if (Object.hasOwn(plan, 'adapterId')) {
-      const operations = { text: ['write-value'], textarea: ['write-value'], contenteditable: ['write-value'], select: ['select-option', 'select-options'], radio: ['select-option'], checkbox: ['set-checked', 'select-options'], date: ['fill-date'], phone: ['fill-phone'], dropdown: ['resolve-option'] };
+      const operations = { text: ['write-value'], textarea: ['write-value'], contenteditable: ['write-value'], select: ['select-option', 'select-options'], radio: ['select-option'], checkbox: ['set-checked', 'select-options'], date: ['fill-date'], phone: ['fill-phone'], dropdown: ['resolve-option'], address: ['fill-address'] };
       check(ADAPTER_IDS.includes(plan.adapterId) && [...operations[plan.adapterId], 'verify-existing'].includes(plan.operation));
-    } else check(!['select-options', 'set-checked', 'fill-date', 'fill-phone', 'resolve-option'].includes(plan.operation));
+    } else check(!['select-options', 'set-checked', 'fill-date', 'fill-phone', 'fill-address', 'resolve-option'].includes(plan.operation));
     // 单项和多项选项共享严格形状，句柄/编码不允许夹带可执行属性。
     function validateOption(option) {
       shape(option, ['handle', 'label', 'value']); reference(option.handle);
@@ -112,13 +112,14 @@
     else check(!Object.hasOwn(plan, 'checked'));
     if (Object.hasOwn(plan, 'datePrecision')) check(['year', 'month', 'day'].includes(plan.datePrecision));
     // 子项只接受固定角色和本页随机句柄；来源精度由日期准备器校验，纯契约不依赖 DOM 模块。
-    if (['date', 'phone'].includes(plan.adapterId)) {
+    if (['date', 'phone', 'address'].includes(plan.adapterId)) {
       check(Array.isArray(plan.targetParts) && plan.targetParts.length > 0 && plan.targetParts.length <= 3);
       for (const part of plan.targetParts) { shape(part, ['key', 'handle']); check(typeof part.handle === 'string' && /^part\.[\w.-]+$/.test(part.handle)); }
       const keys = plan.targetParts.map((part) => part.key).join(',');
       check(new Set(plan.targetParts.map((part) => part.handle)).size === plan.targetParts.length);
       check(typeof intent.value === 'string');
       if (plan.adapterId === 'phone') check(keys === 'country,number' && !Object.hasOwn(plan, 'datePrecision') && !Object.hasOwn(plan, 'targetPrecision'));
+      else if (plan.adapterId === 'address') check(keys === 'province,city,district' && !Object.hasOwn(plan, 'datePrecision') && !Object.hasOwn(plan, 'targetPrecision'));
       else {
         check(['value', 'year,month', 'year,month,day'].includes(keys));
         check(['year', 'month', 'day'].includes(plan.datePrecision));

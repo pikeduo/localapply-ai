@@ -8,6 +8,65 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 地区路径只用合成名称/代码；真实扫描、后台来源与框架状态验证不触碰用户浏览器。
+test('分层第七步：地址级联路径、部分保护与异步取消', { timeout: 90000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'address-')); const api = await serve(); let context; const errors = [];
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId; await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.address', value: '甲省 / 同名市 / 中心区' } } });
+    const before = (await rpc(options, 'localapply:read')).database; const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(api.base + '/test-pages/address-controls.html'); await page.locator('#react-province').waitFor(); await page.locator('#vue-province').waitFor();
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((row) => row.url === url).id, page.url());
+    // 合成消息只供边界验证，仍经真实后台来源和文档校验，不伪造 UI 值或计划。
+    await worker.evaluate(() => { const original = chrome.tabs.sendMessage; globalThis.__addressMessages = {}; chrome.tabs.sendMessage = function (...args) { if (args[1]?.type === 'learning:fill') globalThis.__addressMessages[args[1].scanId] = structuredClone(args[1]); return original.apply(chrome.tabs, args); }; });
+    const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true });
+    // 每项明确选择当前规范档案地址；状态完全由实际填写和回读返回。
+    async function fill(label) {
+      const row = scan.rows.find((row) => row.field.label === label); assert.ok(row, label);
+      await rpc(options, 'learning:select', { sessionId: scan.sessionId, scanId: row.field.scanId, fieldId: 'builtin.address' });
+      return (await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true })).rows.find((next) => next.field.scanId === row.field.scanId);
+    }
+    await t.test('扫描保留初始禁用的市区绑定，部分地址不冒充已完成，子项不单独创建字段', async () => {
+      for (const label of ['地址-native','地址-partial','地址-aria','React地址','Vue地址']) { const row = scan.rows.find((row) => row.field.label === label); assert.ok(row, label); assert.equal(row.field.layout, 'address:province-city-district'); assert.equal(row.webFilled, false); }
+      assert.ok(!scan.rows.some((row) => ['省','市','区','同意隐私协议'].includes(row.field.label))); assert.equal(await page.locator('#native-city').isDisabled(), true); assert.equal(await page.locator('#native-district').isDisabled(), true);
+    });
+    await t.test('当前父级候选换代后才选择，部分相同上级零重写，重复填写零事件', async () => {
+      for (const label of ['地址-native','地址-partial']) { const row = await fill(label); assert.equal(row.status, 'success', row.reason); }
+      for (const mode of ['native','partial']) assert.deepEqual(await page.locator(`#${mode}-province,#${mode}-city,#${mode}-district`).evaluateAll((nodes) => nodes.map((node) => node.value)), ['pa','ca','da']);
+      assert.equal(await page.evaluate(() => __addressWrites.partial.province || 0), 0); const writes = await page.evaluate(() => __addressWrites.native);
+      assert.equal((await fill('地址-native')).status, 'success'); assert.deepEqual(await page.evaluate(() => __addressWrites.native), writes);
+      const view = await rpc(options, 'learning:session', { sessionId: scan.sessionId }); assert.equal(view.rows.find((row) => row.field.label === '地址-native').webFilled, true);
+    });
+    await t.test('异父级同名市、重复候选及错误绑定拒绝，网页已有不同省市区保持', async () => {
+      for (const mode of ['stale','duplicate','binding']) { const row = await fill('地址-' + mode); assert.equal(row.status, 'unsupported', mode + '：' + row.reason); assert.equal(await page.locator(`#${mode}-city`).inputValue(), ''); assert.equal(await page.evaluate((mode) => __addressWrites[mode].city || 0, mode), 0); }
+      await page.locator('#native-province').selectOption('pb'); const row = await fill('地址-native'); assert.equal(row.status, 'needs_confirmation'); assert.equal(await page.locator('#native-province').inputValue(), 'pb');
+      const rejected = await fill('地址-rejected'); assert.equal(rejected.status, 'failed'); assert.equal(rejected.diagnostic.reasonCode, 'value_not_accepted');
+    });
+    await t.test('真实 React/Vue 和明确父级绑定的 ARIA 三级状态正确，重绘保持', async () => {
+      for (const label of ['React地址','Vue地址','地址-aria']) { const row = await fill(label); assert.equal(row.status, 'success', label + '：' + row.reason); }
+      const expected = { province:'pa', city:'ca', district:'da' }; assert.deepEqual(await page.evaluate(() => __addressProbe.react()), expected); assert.deepEqual(await page.evaluate(() => __addressProbe.vue()), expected);
+      await page.evaluate(() => { __addressProbe.redrawReact(); __addressProbe.redrawVue(); });
+      for (const framework of ['react','vue']) assert.deepEqual(await page.locator(`#${framework}-province,#${framework}-city,#${framework}-district`).evaluateAll((nodes) => nodes.map((node) => node.value)), ['pa','ca','da']);
+      assert.deepEqual(await page.locator('#aria-province,#aria-city,#aria-district').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-value'))), ['pa','ca','da']);
+    });
+    await t.test('私有计划绑定所有子项，取消等待后没有迟到下级写入，不清除已完成省份', async () => {
+      assert.equal((await fill('地址-cancel')).status, 'success'); const row = scan.rows.find((row) => row.field.label === '地址-cancel'); const encoded = await worker.evaluate((scanId) => JSON.stringify(globalThis.__addressMessages[scanId].intent), row.field.scanId); await page.evaluate(() => __resetAddress.cancel());
+      const checks = await worker.evaluate(async ({ tabId, encoded }) => (await chrome.scripting.executeScript({ target: { tabId }, args: [encoded], func: async (encoded) => {
+        const intent = JSON.parse(encoded); const S = LocalApplyPageScanner; const P = LocalApplyFillPlanner; const item = S.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId); const plan = P.prepare(item, intent).plan;
+        const city = item.compound.parts.city; const clone = city.cloneNode(true); clone.value = city.value; city.replaceWith(clone); let replaced = false; try { P.validate(plan,item,intent); } catch { replaced = true; } clone.replaceWith(city);
+        const controller = new AbortController(); const pending = LocalApplyVerifiedFill.fill(item,intent.value,{ intent, signal:controller.signal }); setTimeout(()=>controller.abort(),80); const result = await pending; await new Promise((resolve)=>setTimeout(resolve,350));
+        return { replaced, status:result.status, reason:result.reason, values:['province','city','district'].map((key)=>item.compound.parts[key].value), operation:plan.operation, keys:plan.targetParts.map((part)=>part.key) };
+      } }))[0].result,{tabId,encoded});
+      assert.equal(checks.replaced,true); assert.equal(checks.status,'failed'); assert.match(checks.reason,/取消/); assert.deepEqual(checks.values,['pa','','']); assert.equal(checks.operation,'fill-address'); assert.deepEqual(checks.keys,['province','city','district']); assert.equal(await page.evaluate(()=>__addressWrites.cancel.city),1);
+    });
+    await t.test('个人数据/旧规则与备份兼容，诊断不含路径或候选，零 API/提交/协议操作', async () => {
+      assert.deepEqual((await rpc(options,'localapply:read')).database,before); const logs = JSON.stringify(await rpc(options,'diagnostics:read')); const backup = JSON.stringify((await rpc(options,'localapply:exportBackup')).backup);
+      for (const value of ['甲省','同名市','中心区','intent.','plan.','part.']) assert.ok(!logs.includes(value),value); for (const value of ['intent.','plan.','part.']) assert.ok(!backup.includes(value));
+      assert.equal(api.calls.length,0); assert.equal(await page.evaluate(()=>__submitCount),0); assert.equal(await page.locator('#agreement').isChecked(),false); assert.deepEqual(errors,[]); await page.screenshot({path:path.join(root,'address-controls.png'),fullPage:true});
+    });
+  } finally { await context?.close(); api.server.closeAllConnections(); await new Promise((resolve)=>api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(root)+path.sep)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
+});
+
 // 第六步通过真实后台来源及实际 ARIA/框架状态验证，不访问真实岗位或付费 API。
 test('分层第六步：异步下拉三阶段及迟到响应边界', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'dropdown-')); const api = await serve(); let context; const errors = [];
@@ -346,8 +405,8 @@ test('分层第三步：固定注册表与文本执行路径', { timeout: 90000 
         await new Promise((resolve) => setTimeout(resolve, 600)); S.scan(true);
         return { ids: R.ids, frozen: Object.isFrozen(R), register: typeof R.register, adapterId, stopped: stopped.status, beforeWrites, cancelled: cancelled.status, revoked: revoked.status, writes: globalThis.__textWrites - writes, marks: globalThis.__textMarks - marks, legacy: globalThis.__legacyTextCalls };
       } }))[0].result, { tabId, encoded });
-      // 第六步增加固定下拉桥接；保留完整列表及全部取消/撤销断言。
-      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone', 'dropdown'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
+      // 第七步增加固定地址桥接；保留完整列表及全部取消/撤销断言。
+      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone', 'dropdown', 'address'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
     });
     await t.test('保留个人库、日志白名单及零模型/提交，扫描撤销后可重新使用', async () => {
       scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); assert.ok(scan.rows.length > 0);
@@ -1242,7 +1301,7 @@ async function serve() {
       if (modelApi.chatHold) { modelApi.releaseChat = respond; modelApi.onChat?.(); } else respond();
       return;
     }
-    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js'].includes(pathname)) {
+    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js', '/test-pages/address-frameworks.js'].includes(pathname)) {
       if (!frameworkBundles.has(pathname)) frameworkBundles.set(pathname, require('esbuild').build({ entryPoints: [path.join(ROOT, pathname)], bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"', '__VUE_OPTIONS_API__': 'true', '__VUE_PROD_DEVTOOLS__': 'false', '__VUE_PROD_HYDRATION_MISMATCH_DETAILS__': 'false' } }));
       const output = await frameworkBundles.get(pathname); res.setHeader('Content-Type', 'application/javascript'); res.end(output.outputFiles[0].contents); return;
     }

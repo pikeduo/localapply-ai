@@ -1,7 +1,7 @@
 // 注册表只接收打包的固定能力；没有网页、模型或消息可调用的动态注册入口。
 (function (global) {
   'use strict';
-  const adapters = [...global.LocalApplyTextAdapters, ...global.LocalApplyNativeAdapters, ...global.LocalApplyDatePhoneAdapters, ...global.LocalApplyDropdownAdapters];
+  const adapters = [...global.LocalApplyTextAdapters, ...global.LocalApplyNativeAdapters, ...global.LocalApplyDatePhoneAdapters, ...global.LocalApplyDropdownAdapters, ...global.LocalApplyAddressAdapters];
   const allowed = global.LocalApplyFillContract.ADAPTER_IDS;
   const seen = new Set();
   for (const adapter of adapters) {

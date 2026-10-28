@@ -1,0 +1,32 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成地区级联 · 分层第七步</title><style>body{font:15px/1.6 system-ui;max-width:940px;margin:24px auto}.form-item,fieldset{border:1px solid #ccd6e2;border-radius:10px;padding:14px;margin:12px 0}.label{display:block}select,input{padding:8px;margin:4px}[role=listbox]{background:#f0f4ff;padding:8px}[role=option]{cursor:pointer;padding:6px}[hidden]{display:none!important}</style></head><body><h1>省市区路径和已填内容保护</h1><form id="application"></form><script>
+window.__addressWrites={};window.__submitCount=0;window.__resetAddress={};
+// 每个原生区块都有独立选项、异步加载及编码，不能从别的区块借同名城市。
+for(const mode of ['native','partial','stale','duplicate','cancel','edit','rejected','binding']){
+  const box=document.createElement('div');box.className='form-item';const label=document.createElement('span');label.className='label';label.textContent='地址-'+mode;box.append(label);application.append(box);__addressWrites[mode]={};
+  const parts={};for(const [key,text] of [['province','省'],['city','市'],['district','区']]){const node=document.createElement('select');node.id=mode+'-'+key;node.setAttribute('aria-label',text);node.innerHTML='<option value="">请选择</option>';box.append(node);parts[key]=node;node.addEventListener('change',()=>{__addressWrites[mode][key]=(__addressWrites[mode][key]||0)+1;});}
+  const set=(node,values)=>{node.replaceChildren(new Option('请选择',''),...values.map(([code,label])=>new Option(label,code)));};
+  set(parts.province,[['pa','甲省'],['pb','乙省']]);set(parts.city,[['cb','同名市']]);set(parts.district,[['db','中心区']]);parts.city.disabled=true;parts.district.disabled=true;
+  if(mode==='partial'){parts.province.value='pa';set(parts.city,[['ca','同名市']]);parts.city.disabled=false;set(parts.district,[]);}
+  parts.province.addEventListener('change',()=>{
+    const province=parts.province.value;parts.city.value='';parts.district.value='';parts.city.disabled=true;parts.district.disabled=true;
+    setTimeout(()=>{if(mode!=='stale')set(parts.city,province==='pa'?[['ca','同名市'],...(mode==='duplicate'?[['ca2','同名市']]:[])]:[['cb','同名市']]);parts.city.disabled=false;if(mode==='binding')parts.city.setAttribute('data-parent-value','pb');},180);
+  });
+  parts.city.addEventListener('change',()=>{const province=parts.province.value;parts.district.value='';parts.district.disabled=true;setTimeout(()=>{set(parts.district,[[province==='pa'?'da':'db','中心区']]);parts.district.disabled=false;},180);});
+  if(mode==='rejected')parts.district.addEventListener('change',()=>setTimeout(()=>{parts.city.value='';},90));
+  // 仅供独立测试复验取消，保留原节点和事件，不重建控件来冒充新文档。
+  __resetAddress[mode]=()=>{parts.province.value='';set(parts.city,[['cb','同名市']]);set(parts.district,[['db','中心区']]);parts.city.disabled=true;parts.district.disabled=true;};
+}
+// 明确父级编码的 ARIA 三联控件，用实际点选标记而非查询文字提交状态。
+const aria=document.createElement('div');aria.className='form-item';aria.innerHTML='<span class="label">地址-aria</span>';application.append(aria);const ariaParts={};
+for(const [index,key,text] of [[0,'province','省'],[1,'city','市'],[2,'district','区']]){
+  const input=document.createElement('input');input.id='aria-'+key;input.setAttribute('aria-label',text);input.setAttribute('role','combobox');input.setAttribute('aria-controls','aria-menu-'+key);input.setAttribute('aria-autocomplete','list');input.disabled=index>0;
+  const menu=document.createElement('div');menu.id='aria-menu-'+key;menu.setAttribute('role','listbox');menu.hidden=true;aria.append(input,menu);ariaParts[key]=input;
+  input.addEventListener('click',()=>{menu.hidden=false;});input.addEventListener('input',()=>{menu.replaceChildren();setTimeout(()=>{
+    const parent=index?ariaParts[index===1?'province':'city']:null;const values=index===0?[['pa','甲省'],['pb','乙省']]:index===1?[[parent.getAttribute('data-value')==='pa'?'ca':'cb','同名市']]:[[parent.getAttribute('data-value')==='ca'?'da':'db','中心区']];
+    for(const [code,label] of values){const option=document.createElement('div');option.setAttribute('role','option');option.setAttribute('data-value',code);option.setAttribute('aria-selected','false');option.textContent=label;menu.append(option);option.addEventListener('click',()=>{option.setAttribute('aria-selected','true');input.value=label;input.setAttribute('data-value',code);menu.hidden=true;if(index<2){const child=ariaParts[index===0?'city':'district'];child.setAttribute('data-parent-value',code);child.disabled=false;}});}
+  },150);});
+}
+// 真实框架根节点只在本机测试渲染。
+for(const id of ['address-react','address-vue']){const node=document.createElement('div');node.id=id;application.append(node);}application.insertAdjacentHTML('beforeend','<label><input id="agreement" type="checkbox">同意隐私协议</label><button type="submit">提交申请</button>');
+application.addEventListener('submit',(event)=>{event.preventDefault();__submitCount++;});
+</script><script src="/test-pages/address-frameworks.js"></script></body></html>

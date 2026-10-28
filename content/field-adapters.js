@@ -182,9 +182,16 @@
       if (handled.has(el) || (!slot(el) && !country(el))) continue;
       const container = el.closest(containers) || el.parentElement;
       if (!container || container.matches('form,body,html')) continue;
-      const peers = nodes.filter((node) => container.contains(node) && (node.closest(containers) || node.parentElement) === container);
+      let peers = nodes.filter((node) => container.contains(node) && (node.closest(containers) || node.parentElement) === container);
       if (peers.length > 8) continue;
       const heading = global.FieldMatchingEngine.redact(container.querySelector(':scope > label,:scope > .label,:scope > legend,:scope > .el-form-item__label,:scope > .ant-form-item-label,:scope > [class^="title-"]')?.textContent || container.getAttribute('aria-label') || '');
+      // 地址下级常先禁用；仅纳入同一局部容器内明确、省市区各一项的可见安全节点。
+      if (/地址|所在地|居住|地区/.test(heading) && slot(el) === 'province') {
+        const address = [...container.querySelectorAll('input,select,[role="combobox"]')].filter((node) => ['province','city','district'].includes(slot(node))
+          && (node.closest(containers) || node.parentElement) === container && node.isConnected && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'
+          && !exclusion(node, labelOf(node)));
+        if (address.length === 3 && ['province','city','district'].every((key) => address.filter((node) => slot(node) === key).length === 1)) peers = address;
+      }
       const parts = {};
       for (const node of peers) { const key = slot(node); if (key) { if (parts[key]) parts.ambiguous = true; parts[key] = node; } }
       let group = null;
@@ -245,7 +252,7 @@
     const { el, compound } = item;
     const error = (reason, status = 'needs_confirmation') => ({ error: { ok: false, status, reason } });
     if (compound?.kind === 'phone') { const phone = phoneValue(compound, value); return phone ? { parts: phone } : error('号码缺少明确国码、格式不符或页面没有该区号，请手动确认'); }
-    if (compound?.kind === 'address') { const parts = typeof value === 'string' ? value.split(/\s*[/／>]\s*/) : []; return parts.length === 3 && parts.every(Boolean) ? { parts: Object.fromEntries(Object.keys(compound.parts).map((key, index) => [key, parts[index]])) } : error('分级地址需要明确的“省 / 市 / 区”，不能从自由文本猜测'); }
+    if (compound?.kind === 'address') { const parts = typeof value === 'string' ? value.split(/[/／>]/).map((part) => part.trim()) : []; return parts.length === 3 && parts.every(Boolean) ? { parts: Object.fromEntries(['province','city','district'].map((key, index) => [key, parts[index]])) } : error('分级地址需要明确的“省 / 市 / 区”，不能从自由文本猜测'); }
     const date = dateValue(value);
     if (!date) return error('日期无效或格式不明确，请核对年月日');
     if (compound?.kind === 'date') {
@@ -272,6 +279,7 @@
 
   // 比较复合控件中已填写的每个子项；只补空白，已有不同年月/号码必须走单项差异确认。
   function hasConflict(item, value) {
+    if (item.compound?.kind === 'address' && global.LocalApplyAddressControls) return global.LocalApplyAddressControls.hasConflict(item, value);
     const next = plan(item, value); if (next.error || !item.compound) return false;
     // 电话只有默认国码且号码为空时仍是空字段；保留原有国际号码填写能力。
     if (item.compound.kind === 'phone' && !item.compound.parts.number.value) return false;
@@ -286,6 +294,7 @@
 
   // 读取复合字段时仅访问当前授权项的成员，不把默认国码单独当成用户填写内容。
   function read(item) {
+    if (item.compound?.kind === 'address' && global.LocalApplyAddressControls) return global.LocalApplyAddressControls.read(item);
     if (!item.compound) return item.el.isContentEditable ? item.el.textContent : item.el.value;
     const parts = item.compound.parts; const values = Object.fromEntries(Object.entries(parts).map(([key, el]) => {
       const raw = dropdown(el) ? dropdownText(el) : el.value;
@@ -299,6 +308,7 @@
 
   // 复读全部成员和实际日期精度；年月日历只接受真实选中且回读为相同年月的值。
   function accepted(item, value) {
+    if (item.compound?.kind === 'address' && global.LocalApplyAddressControls) return global.LocalApplyAddressControls.accepted(item, value);
     const next = plan(item, value); if (next.error) return false;
     if (!item.compound) {
       if (item.el.value === next.value) return true;
@@ -435,4 +445,6 @@
   global.LocalApplyDropdownDOM = Object.freeze({ openControl, popupFor, popupRoots, optionLabel, usable,
     trace(el, detail) { traces.set(el, detail); }
   });
+  // 地址桥接只复用成熟的局部 setter/事件，选项路径和私有计划由地址模块负责。
+  global.LocalApplyAddressDOM = Object.freeze({ setPart });
 })(globalThis);

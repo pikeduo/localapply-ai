@@ -12,7 +12,7 @@ function fixture(kind = 'date', value = '2028-06', type = 'month') {
   let writes = 0; let marks = 0; let active = true;
   const context = vm.createContext({ Date, setTimeout, clearTimeout, AbortController, crypto: require('node:crypto').webcrypto,
     Event: class { constructor(type) { this.type = type; } }, FocusEvent: class {}, HTMLSelectElement: class {} });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   // 子项属性和选项都可由用例独立改变，验证原地变化不能复用私有计划。
   function input(type, value = '', choices) {
     const attrs = { type }; const node = { tagName: choices ? 'SELECT' : 'INPUT', type, value, attrs, options: choices || [], disabled: false, readOnly: false, isConnected: true,

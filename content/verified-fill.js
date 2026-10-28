@@ -58,7 +58,7 @@
 
   // 适配器只持有当前项和固定守卫；每次执行/回读重新检查文档授权及原节点。
   function adapterContext(item, intent, options = {}) {
-    return { item, intent, signal: options.signal,
+    return { item, intent, signal: options.signal, overwrite: options.overwrite === true,
       // 扫描器复核 URL/授权/类型/可见性；节点替换不能沿用先前计划。
       assertActive() {
         const current = global.LocalApplyPageScanner.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId);
@@ -95,7 +95,7 @@
     const date = adapted && !['phone', 'address'].includes(item.compound?.kind) ? A.dateValue(value) : null;
     const plan = { version: C.VERSION, planId: 'plan.' + crypto.randomUUID(), intentId: intent.intentId,
       binding: { ...intent.binding }, source: { ...intent.source }, controlFingerprint: control.fingerprint, operation,
-      verification: ({ 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state', 'fill-date': 'date-parts', 'fill-phone': 'phone-parts', 'resolve-option': 'selected-option' })[operation] || 'legacy-delayed', state: ['legacy-interaction', 'fill-date', 'fill-phone', 'resolve-option'].includes(operation) ? 'delegated' : 'ready',
+      verification: ({ 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state', 'fill-date': 'date-parts', 'fill-phone': 'phone-parts', 'fill-address': 'address-parts', 'resolve-option': 'selected-option' })[operation] || 'legacy-delayed', state: ['legacy-interaction', 'fill-date', 'fill-phone', 'fill-address', 'resolve-option'].includes(operation) ? 'delegated' : 'ready',
       ...(adapter ? { adapterId: adapter.id } : {}), ...(targetOption ? { targetOption } : {}),
       ...(prepared?.targetOptions ? { targetOptions: prepared.targetOptions } : {}), ...(prepared?.targetParts ? { targetParts: prepared.targetParts } : {}), ...(prepared?.targetPrecision ? { targetPrecision: prepared.targetPrecision } : {}), ...(typeof prepared?.checked === 'boolean' ? { checked: prepared.checked } : {}), ...(date ? { datePrecision: date.precision } : {}) };
     C.validatePlan(plan, intent);
@@ -113,6 +113,7 @@
     const current = global.LocalApplyPageScanner.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId);
     if (saved.item.el !== item.el || current.el !== item.el || structure(current) !== saved.structure
       || ['date', 'phone'].includes(plan.adapterId) && !global.LocalApplyDatePhoneControls.unchanged(saved.adapterState, current)
+      || plan.adapterId === 'address' && !global.LocalApplyAddressControls.unchanged(saved.adapterState, current)
       || JSON.stringify(global.LocalApplyPageScanner.readValue(current)) !== saved.current
       || saved.candidates && (nativeCandidates(current).length !== saved.candidates.length || nativeCandidates(current).some((node, index) => node !== saved.candidates[index]
         || (controlOf(current).type === 'select' ? node.selected : node.checked) !== saved.selection[index]))
