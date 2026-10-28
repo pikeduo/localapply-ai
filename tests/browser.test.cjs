@@ -8,6 +8,80 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 第九步仅操作合成页面；规则通过真实确认/填写/验证产生，不伪造旧验证或个人来源。
+test('分层第九步：跨控件语义记忆、管理失效、备份及进程重启', {timeout:120000}, async(t)=>{
+  const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'mapping-'));const api=await serve();const otherApi=await serve();let context;let extensionId;let options;let page;let worker;let profileId;let tabId;let scan;let oldRule;const errors=[];
+  try{
+    context=await launch(profile);context.setDefaultTimeout(10000);({worker,extensionId}=await extension(context));options=await context.newPage();await options.goto(`chrome-extension://${extensionId}/options/options.html`);await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+    profileId=(await rpc(options,'localapply:read')).database.activeProfileId;await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.gender',value:'男'}}});
+    page=await context.newPage();page.on('pageerror',(error)=>errors.push(error.message));await page.goto(api.base+'/test-pages/mapping-controls.html');tabId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((row)=>row.url===url).id,page.url());
+    // 控件结构只由合成页面重建，后续扫描仍经实际后台授权和文档校验。
+    async function show(mode,group='个人信息',duplicate=false){await page.evaluate(({mode,group,duplicate})=>__mappingShow(mode,group,duplicate),{mode,group,duplicate});scan=await rpc(options,'learning:scanPage',{tabId,confirmed:true});return scan.rows[0];}
+    // 填写响应必须真实 success；记忆仍是独立用户确认动作。
+    async function fill(remember=false){const row=scan.rows[0];scan=await rpc(options,'learning:fill',{sessionId:scan.sessionId,scanId:row.field.scanId,confirmed:true});assert.equal(scan.rows[0].status,'success',scan.rows[0].reason);if(remember)scan=await rpc(options,'learning:remember',{sessionId:scan.sessionId,scanId:row.field.scanId,confirmed:true});return scan.rows[0];}
+    await t.test('首次只学 select 规则，保存旧特征及实际验证时间',async()=>{
+      await show('select');assert.equal(scan.rows[0].target,null);scan=await rpc(options,'learning:select',{sessionId:scan.sessionId,scanId:scan.rows[0].field.scanId,fieldId:'builtin.gender'});await fill(true);assert.equal(await page.locator('#mapping-field-0').inputValue(),'M');oldRule=(await rpc(options,'localapply:read')).database.mappingRules[0];assert.equal(oldRule.features.type,'select');assert.ok(oldRule.lastVerifiedAt);
+    });
+    await t.test('select→radio 自动复用语义但拒绝提前记忆，验证后新增变体且保留原规则',async()=>{
+      const row=await show('radio');assert.equal(row.memoryMatch,'semantic');assert.equal(row.status,'matched');assert.equal(row.target.fieldId,'builtin.gender');assert.equal(row.verification,null);
+      const rejected=await options.evaluate((payload)=>chrome.runtime.sendMessage({type:'learning:remember',...payload}),{sessionId:scan.sessionId,scanId:row.field.scanId,confirmed:true});assert.equal(rejected.ok,false);
+      await fill();assert.equal(await page.locator('input[type=radio][value=M]').isChecked(),true);assert.equal((await rpc(options,'localapply:read')).database.mappingRules.length,1);
+      await rpc(options,'learning:remember',{sessionId:scan.sessionId,scanId:row.field.scanId,confirmed:true});const rules=(await rpc(options,'localapply:read')).database.mappingRules;assert.equal(rules.length,2);assert.deepEqual(rules.find((rule)=>rule.mappingId===oldRule.mappingId),oldRule);assert.notEqual(rules.find((rule)=>rule.features.type==='radio').lastVerifiedAt,oldRule.lastVerifiedAt);
+    });
+    await t.test('同语义自定义下拉仍按当前 M 编码点选，历史状态不代替新验证',async()=>{
+      const row=await show('combobox');assert.equal(row.memoryMatch,'semantic');assert.equal(row.verification,null);const clicks=await page.evaluate(()=>__mappingClicks);await fill(true);assert.equal(await page.locator('#mapping-field-0').getAttribute('data-value'),'M');assert.equal(await page.evaluate(()=>__mappingClicks),clicks+1);assert.equal((await show('combobox')).memoryMatch,'exact');
+    });
+    await t.test('多实例不自动复用，已有非空值保留，缺上下文只提供候选建议',async()=>{
+      await show('text','个人信息',true);assert.equal(scan.rows.length,2);assert.ok(scan.rows.every((row)=>row.target===null&&row.status==='needs_confirmation'));
+      await show('text');await page.locator('#mapping-field-0').fill('网页原值');const result=await rpc(options,'learning:fill',{sessionId:scan.sessionId,scanId:scan.rows[0].field.scanId,confirmed:true});assert.equal(result.rows[0].status,'needs_confirmation');assert.equal(await page.locator('#mapping-field-0').inputValue(),'网页原值');
+      await show('select','');scan=await rpc(options,'learning:select',{sessionId:scan.sessionId,scanId:scan.rows[0].field.scanId,fieldId:'builtin.gender'});await fill(true);const row=await show('radio','');assert.equal(row.memoryMatch,'semantic');assert.equal(row.target,null);assert.equal(row.status,'needs_confirmation');
+    });
+    await t.test('修改/禁用变体即时阻止新控件复用，撤销和删除后重新查询，不复活旧索引',async()=>{
+      let rules=await rpc(options,'learning:rules');await rpc(options,'learning:editRule',{mappingId:oldRule.mappingId,fieldId:'builtin.gender',entryId:null,enabled:false,revision:rules.revision,confirmed:true});assert.equal((await show('text')).target,null);
+      rules=await rpc(options,'learning:rules');await rpc(options,'learning:undoRule',{revision:rules.revision,confirmed:true});assert.equal((await show('text')).status,'matched');
+      rules=await rpc(options,'learning:rules');await rpc(options,'learning:editRule',{mappingId:oldRule.mappingId,fieldId:'builtin.email',entryId:null,enabled:true,revision:rules.revision,confirmed:true});assert.equal((await show('text')).target,null);
+      rules=await rpc(options,'learning:rules');await rpc(options,'learning:deleteRule',{mappingId:oldRule.mappingId,revision:rules.revision,confirmed:true});assert.equal((await show('text')).status,'matched');
+      rules=await rpc(options,'learning:rules');await rpc(options,'learning:undoRule',{revision:rules.revision,confirmed:true});assert.equal((await show('text')).target,null);
+      // 用当前 select 的真实值重新验证同一来源，清除这条规则的待确认状态。
+      await show('select');scan=await rpc(options,'learning:select',{sessionId:scan.sessionId,scanId:scan.rows[0].field.scanId,fieldId:'builtin.gender'});await fill(true);assert.equal((await show('text')).status,'matched');
+    });
+    await t.test('管理入口显示关联变体范围，跨站/跨档案页面不获得这份记忆',async()=>{
+      const sidebar=await context.newPage();await sidebar.goto(`chrome-extension://${extensionId}/sidepanel/sidepanel.html`);await sidebar.locator('#profileSel option').first().waitFor({state:'attached'});await sidebar.locator('#tabSmartBtn').click();await sidebar.locator('#smartRules').click();await sidebar.locator('.smart-rule').first().waitFor();assert.ok((await sidebar.locator('#smartRuleList').textContent()).includes('同语义 3 个变体'));await sidebar.close();
+      const other=await context.newPage();await other.goto(otherApi.base+'/test-pages/mapping-controls.html');await other.evaluate(()=>__mappingShow('radio'));const otherId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((row)=>row.url===url).id,other.url());assert.equal((await rpc(options,'learning:scanPage',{tabId:otherId,confirmed:true})).rows[0].target,null);await other.close();
+      const created=await rpc(options,'localapply:command',{request:{action:'createProfile',payload:{name:'合成独立简历'}}});assert.equal((await show('text')).target,null);const db=(await rpc(options,'localapply:read')).database;await rpc(options,'localapply:command',{request:{action:'deleteProfile',payload:{profileId:created.result,confirmed:true},expectedRevision:db.revision}});assert.equal((await show('text')).target.fieldId,'builtin.gender');
+    });
+    await t.test('重复经历从当前记录绑定选来源，字段移动后重新配对，不沿用历史 index',async()=>{
+      await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.school',value:'合成首条学校'}}});const entryId=(await rpc(options,'localapply:command',{request:{action:'createEntry',payload:{profileId,kind:'education',title:'合成第二条'}}})).result;
+      await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.school',entryId,value:'合成第二条学校'}}});await page.evaluate(()=>__mappingEducation());scan=await rpc(options,'learning:scanPage',{tabId,confirmed:true});scan=await rpc(options,'learning:select',{sessionId:scan.sessionId,scanId:scan.rows[0].field.scanId,fieldId:'builtin.school',entryId});await fill(true);
+      await page.evaluate(()=>__mappingEducation('text',2));scan=await rpc(options,'learning:scanPage',{tabId,confirmed:true});assert.ok(scan.rows.every((row)=>row.target===null));scan=await rpc(options,'learning:prepareRecords',{sessionId:scan.sessionId,confirmed:true});assert.equal(scan.rows[0].target.entryId,null);assert.equal(scan.rows[1].target.entryId,entryId);const ids=scan.rows.map((row)=>row.field.scanId);
+      for(const scanId of ids){scan=await rpc(options,'learning:fill',{sessionId:scan.sessionId,scanId,confirmed:true});assert.equal(scan.rows.find((row)=>row.field.scanId===scanId).status,'success');}
+      assert.equal(await page.locator('#education-field-0').inputValue(),'合成首条学校');assert.equal(await page.locator('#education-field-1').inputValue(),'合成第二条学校');
+      // 仅移动字段节点，保留记录容器身份；清空用于验证新绑定，不覆盖网页不同非空值。
+      await page.evaluate(()=>{const records=document.querySelectorAll('.apply-fields-synthetic');const first=records[0].firstElementChild;const second=records[1].firstElementChild;records[0].append(second);records[1].append(first);for(const input of document.querySelectorAll('[id^=education-field-]'))input.value='';});
+      scan=await rpc(options,'learning:session',{sessionId:scan.sessionId});assert.equal(scan.rows.find((row)=>row.field.scanId===ids[0]).target.entryId,entryId);assert.equal(scan.rows.find((row)=>row.field.scanId===ids[1]).target.entryId,null);
+      for(const scanId of ids){scan=await rpc(options,'learning:fill',{sessionId:scan.sessionId,scanId,confirmed:true});assert.equal(scan.rows.find((row)=>row.field.scanId===scanId).status,'success');}
+      assert.equal(await page.locator('#education-field-0').inputValue(),'合成第二条学校');assert.equal(await page.locator('#education-field-1').inputValue(),'合成首条学校');
+    });
+    await t.test('v4/v5 导入后兼容查询重建，v3 旧降级规则保持未验证且不自动升级',async()=>{
+      const full=(await rpc(options,'localapply:exportBackup')).backup;const snapshot=full.database.mappingRules;
+      for(const version of [4,3,5]){
+        const backup=(await rpc(options,'localapply:exportBackup',{version})).backup;const preview=await rpc(options,'localapply:previewImport',{backup,mode:'replace'});await rpc(options,'localapply:command',{request:{action:'importBackup',payload:{backup,mode:'replace'},expectedRevision:preview.preview.revision}});
+        const db=(await rpc(options,'localapply:read')).database;assert.equal(db.schemaVersion,5);const row=await show('text');if(version===3){assert.equal(db.mappingRules[0].semanticId,undefined);assert.equal(row.target,null);}else{assert.equal(row.memoryMatch,'semantic');assert.equal(row.status,'matched');}
+        // 每轮恢复完整 v5 合成备份，防止下一轮从已降级的规则导出。
+        const restore=await rpc(options,'localapply:previewImport',{backup:full,mode:'replace'});await rpc(options,'localapply:command',{request:{action:'importBackup',payload:{backup:full,mode:'replace'},expectedRevision:restore.preview.revision}});
+      }
+      assert.deepEqual((await rpc(options,'localapply:read')).database.mappingRules,snapshot);
+    });
+    await t.test('日志不含语义标签/来源/意图，备份不持久化索引，零 AI/提交',async()=>{
+      await show('textarea');await fill();const logs=JSON.stringify(await rpc(options,'diagnostics:read'));const backup=JSON.stringify((await rpc(options,'localapply:exportBackup')).backup);
+      for(const secret of ['合成映射代号','就读机构代号','合成首条学校','合成第二条学校','网页原值','intent.','plan.','semantic.v1.',page.url()])assert.ok(!logs.includes(secret),secret);for(const key of ['memoryMatch','control.v1.','semantic.v1.','intent.','plan.'])assert.ok(!backup.includes(key),key);assert.equal(api.calls.length+otherApi.calls.length,0);assert.equal(await page.evaluate(()=>__submitCount),0);assert.deepEqual(errors,[]);await page.screenshot({path:path.join(root,'mapping-controls.png'),fullPage:true});
+    });
+    await t.test('整个浏览器进程重启后原规则继续跨控件匹配，仍需新回读且不覆盖网页值',async()=>{
+      const before=(await rpc(options,'localapply:read')).database;await context.close();context=await launch(profile);({worker}=await extension(context));options=await context.newPage();await options.goto(`chrome-extension://${extensionId}/options/options.html`);await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');page=await context.newPage();await page.goto(api.base+'/test-pages/mapping-controls.html');tabId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((row)=>row.url===url).id,page.url());const row=await show('textarea');assert.equal(row.status,'matched');assert.equal(row.memoryMatch,'semantic');assert.equal(row.verification,null);await fill();assert.equal(await page.locator('textarea').inputValue(),'男');assert.deepEqual((await rpc(options,'localapply:read')).database,before);
+    });
+  }finally{await context?.close();for(const server of [api.server,otherApi.server]){server.closeAllConnections();await new Promise((resolve)=>server.close(resolve));}assert.ok(path.resolve(profile).startsWith(path.resolve(root)+path.sep));await fs.rm(profile,{recursive:true,force:true,maxRetries:3});}
+});
+
 // 第八步使用真实后台来源、独立浏览器及真实 React/Vue；原因码必须来自实际回读。
 test('分层第八步：统一验证、准确原因码与日志持久性', { timeout: 90000 }, async (t) => {
   const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'verification-'));const api=await serve();let context;const errors=[];

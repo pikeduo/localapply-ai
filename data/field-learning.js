@@ -52,7 +52,12 @@
     function rebuild(item, db, fields = item.fields) {
       const old = item.rows || [];
       const oldSources = item.sources || [];
-      item.fields = fields; item.rows = M.match(db, item.profileId, item.origin, fields);
+      // 来源只取已校验网页记录和本会话绑定，不能由 UI/AI 提供 entryId 配对。
+      const bindings = {};
+      for (const block of item.recordBlocks || []) for (const record of block.records) if (Object.hasOwn(item.recordBindings || {}, record.recordId)) {
+        for (const scanId of record.scanIds) bindings[scanId] = { kind:block.kind, entryId:item.recordBindings[record.recordId] };
+      }
+      item.fields = fields; item.rows = M.match(db, item.profileId, item.origin, fields, bindings);
       for (const row of item.rows) {
         // 自动增补只绑定到本次明确分配的整条记录，绝不改变同站已验证的映射优先级。
         const assigned = item.recordTargets?.[row.field.scanId]; const assignedTarget = assigned && { fieldId: assigned.fieldId, entryId: assigned.entryId };
@@ -64,8 +69,12 @@
         const sameTarget = JSON.stringify(row.target) === JSON.stringify(previous?.target);
         const unchanged = source && JSON.stringify(source.value) === JSON.stringify(M.valueOf(db, item.profileId, previous.target)?.value)
           && (previous.source !== 'memory' || row.source === 'memory') && (row.source !== 'memory' || (sameTarget && row.status !== 'needs_confirmation'));
-        if (previous?.chosen && (item.revision === db.revision || unchanged)) {
-          Object.assign(row, { target: previous.target, chosen: true, status: previous.status, reason: row.source === 'memory' ? '填写已验证，已记住本地网站映射' : previous.reason, source: row.source === 'memory' ? 'memory' : previous.source });
+        const compatible = previous?.source !== 'memory' || previous.memoryMatch !== 'semantic' || row.source === 'memory' && row.confirmed && sameTarget;
+        if (previous?.chosen && compatible && (item.revision === db.revision || unchanged)) {
+          // 只有已确认且同目标的记忆能接续状态；保守建议不得吞掉用户本次手选或冒称验证成功。
+          const remembered = row.source === 'memory' && row.confirmed && sameTarget;
+          const memoryReason = previous.verification ? row.memoryMatch === 'semantic' ? '当前控件填写已验证，尚未保存此控件变体' : '填写已验证，已记住本地网站映射' : row.reason;
+          Object.assign(row, { target: previous.target, chosen: true, status: previous.status, reason: remembered ? memoryReason : previous.reason, source: remembered ? 'memory' : previous.source });
           if (previous.verification) row.verification = previous.verification;
           if (previous.conflict) row.conflict = previous.conflict;
           if (previous.diagnostic) row.diagnostic = previous.diagnostic;
@@ -119,7 +128,7 @@
         if (!local.length) continue;
         const occupied = (record) => record.scanIds.some((id) => item.rows.find((row) => row.field.scanId === id)?.webFilled);
         // 单项人工选择不能推断为整条经历授权；已有映射/手选或非空的未绑定模块交给用户处理。
-        if (initial.records.some((record) => !Object.hasOwn(item.recordBindings, record.recordId) && (occupied(record) || record.scanIds.some((id) => { const row = item.rows.find((row) => row.field.scanId === id); return row?.source === 'memory' || row?.chosen && row.source === 'manual'; })))) {
+        if (initial.records.some((record) => !Object.hasOwn(item.recordBindings, record.recordId) && (occupied(record) || record.scanIds.some((id) => { const row = item.rows.find((row) => row.field.scanId === id); return row?.source === 'memory' && row.memoryMatch !== 'semantic' || row?.chosen && row.source === 'manual'; })))) {
           protectedGroups++; initial.records.forEach((record) => record.scanIds.forEach((scanId) => item.protectedRecords.add(scanId))); continue;
         }
         const used = initial.records.filter((record) => Object.hasOwn(item.recordBindings, record.recordId)).map((record) => item.recordBindings[record.recordId]);
@@ -154,7 +163,11 @@
       response.snapshot.fields.forEach(M.validateField);
       // 新增记录会改变字段集合；保留稳定字段的人工来源与验证，仅清除依赖旧扫描的 AI 建议和确认令牌。
       if (JSON.stringify(response.snapshot.fields) !== JSON.stringify(item.fields)) { item.rows.forEach((row) => { delete row.suggestion; }); item.aiPreview = null; item.valuePreview = null; }
-      rebuild(item, db, response.snapshot.fields); completion(item, response.snapshot); item.excluded = response.snapshot.excluded || []; item.dirty = false;
+      const previousBlocks = JSON.stringify(item.recordBlocks || []);
+      rebuild(item, db, response.snapshot.fields); completion(item, response.snapshot);
+      // 容器重排/成员移动后按刚校验的 recordId 重新查询语义，不能沿用上一次分组配对。
+      if (item.recordBindings && previousBlocks !== JSON.stringify(item.recordBlocks)) rebuild(item, db);
+      item.excluded = response.snapshot.excluded || []; item.dirty = false;
     }
     // 选择仅允许本档案来源，不能通过 AI/页面提供的 ID 读取其他人的值。
     function target(item, fieldId, entryId) {
@@ -193,7 +206,7 @@
           documentId: snapshot.documentId, fillContractVersion: snapshot.fillContractVersion, profileId, fields: snapshot.fields, excluded: snapshot.excluded || [], notice: snapshot.notice || '' };
         rebuild(item, db); completion(item, snapshot); sessions.set(item.sessionId, item); return view(item, db);
       }
-      if (msg.type === 'learning:rules') { const db = await repository.read(); return { rules: db.mappingRules, definitions: db.fieldDefinitions, profiles: db.profiles, entries: db.entries, revision: db.revision, canUndo: !!undo }; }
+      if (msg.type === 'learning:rules') { const db = await repository.read(); return { rules: db.mappingRules, scopes:global.LocalApplyMappingCompat?.scopes(db) || [], definitions: db.fieldDefinitions, profiles: db.profiles, entries: db.entries, revision: db.revision, canUndo: !!undo }; }
       if (msg.type === 'learning:exportV3') { const backup = await repository.exportBackup(3); backup.database.mappingRules = backup.database.mappingRules.map(({ mappingId, origin, path, label, fieldId, profileId, entryId }) => ({ mappingId, origin, path, label, fieldId, profileId, entryId })); return { backup }; }
       if (['learning:editRule', 'learning:deleteRule', 'learning:undoRule'].includes(msg.type)) {
         check(msg.confirmed === true, '规则操作需要明确确认'); const db = await repository.read(); check(msg.revision === db.revision, '规则或资料已变化，请重新预览');
@@ -315,7 +328,9 @@
         check(JSON.stringify(value) === JSON.stringify(row.verification.value), '本地值已变化，请重新填写验证');
         const verified = await pageMessage(item.tabId, { type: 'learning:verify', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId, value });
         check(verified.result.status === 'success', '网页值已变化，未保存规则');
-        const old = db.mappingRules.find((rule) => rule.profileId === item.profileId && rule.origin === item.origin && rule.semanticId === row.field.semanticId);
+        // 变体单独学习；散列相同仍须完整特征一致，不能覆盖另一控件的旧验证证据。
+        const old = db.mappingRules.find((rule) => rule.profileId === item.profileId && rule.origin === item.origin && rule.semanticId === row.field.semanticId
+          && rule.features && JSON.stringify(M.features(rule.features)) === JSON.stringify(M.features(row.field)));
         await ruleCommand(db, 'saveMapping', { mappingId: old?.mappingId || 'mapping.' + crypto.randomUUID(), origin: item.origin, path: '/', label: row.field.label,
           ...row.target, profileId: item.profileId, semanticId: row.field.semanticId, features: M.features(row.field), confirmed: true, enabled: true,
           lastVerifiedAt: verified.result.verifiedAt, ruleVersion: (old?.ruleVersion || 0) + 1 });

@@ -74,16 +74,16 @@
     return db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === target.fieldId && row.entryId === (target.entryId || null));
   }
 
-  // 匹配同站、同档案、同语义规则；禁用记录完全不参与，未验证编辑只能成为待确认建议。
-  function memory(db, profileId, origin, field) {
+  // 旧精确规则优先；未命中才做可关闭的内存语义查询，绝不改写旧特征或验证时间。
+  function memory(db, profileId, origin, field, fields = [field], bindings = {}) {
     const expected = JSON.stringify(features(field));
     const rules = db.mappingRules.filter((rule) => rule.enabled !== false && rule.origin === origin && rule.profileId === profileId
       && rule.semanticId === field.semanticId && JSON.stringify(features(rule.features || {})) === expected);
-    if (!rules.length) return null;
+    if (!rules.length) return global.LocalApplyMappingCompat?.find(db, profileId, origin, field, fields, bindings) || null;
     const targets = new Set(rules.map((rule) => JSON.stringify([rule.fieldId, rule.entryId])));
-    if (targets.size !== 1) return { target: null, reason: '历史规则冲突，请手动选择', confirmed: false };
+    if (targets.size !== 1) return { target: null, reason: '历史规则冲突，请手动选择', confirmed: false, memoryMatch:'exact' };
     const rule = rules.find((item) => item.confirmed && item.lastVerifiedAt) || rules[0];
-    return { target: { fieldId: rule.fieldId, entryId: rule.entryId }, confirmed: !!(rule.confirmed && rule.lastVerifiedAt), reason: rule.confirmed ? '用户确认且已验证的网站记忆' : '规则已编辑，需要重新确认及验证' };
+    return { target: { fieldId: rule.fieldId, entryId: rule.entryId }, confirmed: !!(rule.confirmed && rule.lastVerifiedAt), memoryMatch:'exact', reason: rule.confirmed ? '用户确认且已验证的网站记忆' : '规则已编辑，需要重新确认及验证' };
   }
 
   // 仅从当前档案的学历枚举判断层级；目录首段使用平面值，不读取其他档案或从院校名猜测。
@@ -148,15 +148,15 @@
     return definition && key ? { definition, reason: '标准词典与明确上下文匹配' } : null;
   }
 
-  // 新匹配只消费语义描述；旧规则仍按原封套精确查询，控件描述留给本页执行及验证。
-  function match(db, profileId, origin, fields) {
+  // 精确记忆优先，语义兼容须带完整字段集合与本次记录绑定，控件执行仍独立准备/验证。
+  function match(db, profileId, origin, fields, bindings = {}) {
     return fields.map((field) => {
       validateField(field);
       const semantic = semanticDescriptor(field); const control = controlDescriptor(field);
       const base = { field, semantic, control, target: null, candidates: [], status: 'needs_confirmation', reason: '未知字段，请手动选择或主动使用 AI', source: 'unknown' };
       if (restricted(semantic)) return { ...base, status: 'unsupported', reason: '认证或同意条款不自动处理' };
       if (/家庭|紧急|联系人|家属/.test(semantic.group + semantic.label)) return { ...base, reason: '联系人与申请人语义不同，请人工选择' };
-      const saved = memory(db, profileId, origin, field);
+      const saved = memory(db, profileId, origin, field, fields, bindings);
       if (saved) return { ...base, ...saved, status: saved.target && saved.confirmed ? hasValue(valueOf(db, profileId, saved.target)?.value) ? 'matched' : 'missing_value' : 'needs_confirmation', source: 'memory' };
       const found = definitionFor(db, semantic);
       if (!found) return base;

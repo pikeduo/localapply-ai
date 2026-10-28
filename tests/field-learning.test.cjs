@@ -11,7 +11,7 @@ const ROOT = path.resolve(__dirname, '..');
 async function fixture() {
   const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let completion = []; let recordBlocks = []; let onAdd = () => {}; let fillContractVersion = 1;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
-  for (const file of ['templates','providers','key-vault','resume','field-matching','fill-contract','fill-result','field-suggestions','applications','local-store','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
+  for (const file of ['templates','providers','key-vault','resume','field-matching','mapping-compat','fill-contract','fill-result','field-suggestions','applications','local-store','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
   const repo = context.LocalApplyStore.createRepository(storage); const initial = await repo.readLegacy(); const configured = structuredClone(initial);
   configured.settings.model = 'synthetic-field-model'; await repo.saveLegacy(initial, configured);
@@ -47,6 +47,57 @@ function suggestion(payload, fieldId = null, definition = null) {
 }
 // 创建定义不包含个人值，值只放入 confirmField 的独立字段。
 function definition(label = '附加说明') { return { label, type: 'text', group: '其他', aliases: [], options: [] }; }
+
+// 通过现有确认、填写及回读链路建立旧形状规则，不直接伪造已验证状态。
+async function learnMapping(env, field, fieldId = 'builtin.gender', entryId = null) {
+  let view=await env.scan(field);view=await env.send(view,'select',{scanId:field.scanId,fieldId,entryId});
+  view=await env.send(view,'fill',{scanId:field.scanId,confirmed:true});return env.send(view,'remember',{scanId:field.scanId,confirmed:true});
+}
+
+test('分层第九步：跨控件只复用来源，当前验证成功并主动记忆后才保存独立变体',async()=>{
+  const env=await fixture();await env.setValue('builtin.gender','男');const original=env.field('合成映射代号',{type:'select',group:'个人信息'});await learnMapping(env,original);
+  const before=await env.repo.read();const old=before.mappingRules[0];const field=env.field(original.label,{type:'radio',group:original.group});let view=await env.scan(field);
+  assert.equal(view.rows[0].status,'matched');assert.equal(view.rows[0].memoryMatch,'semantic');assert.equal(view.rows[0].verification,null);await assert.rejects(env.send(view,'remember',{scanId:field.scanId,confirmed:true}),/验证成功/);
+  env.fail(true);view=await env.send(view,'fill',{scanId:field.scanId,confirmed:true});assert.equal(view.rows[0].status,'failed');await assert.rejects(env.send(view,'remember',{scanId:field.scanId,confirmed:true}),/验证成功/);assert.deepEqual(await env.repo.read(),before);
+  env.fail(false);view=await env.send(view,'fill',{scanId:field.scanId,confirmed:true});env.completion([{scanId:field.scanId,present:true}]);view=await env.send(view,'session');assert.match(view.rows[0].reason,/尚未保存此控件变体/);await env.send(view,'remember',{scanId:field.scanId,confirmed:true});
+  const db=await env.repo.read();assert.equal(db.mappingRules.length,2);assert.deepEqual(db.mappingRules.find((rule)=>rule.mappingId===old.mappingId),old);assert.equal((await env.scan(field)).rows[0].memoryMatch,'exact');
+  const rules=await env.service.handle({type:'learning:rules'});assert.ok(rules.scopes.every((scope)=>scope.count===2));for(const word of ['semantic.v1.','memoryMatch','control.v1.'])assert.ok(!JSON.stringify(await env.repo.exportBackup()).includes(word));assert.equal(env.aiCalls.length,0);
+});
+
+test('分层第九步：规则编辑/禁用/删除/撤销立即更新当前会话，不保留派生的旧成功',async()=>{
+  const env=await fixture();await env.setValue('builtin.gender','男');await env.setValue('builtin.phone','13800000000');const original=env.field('合成映射代号',{type:'select',group:'个人信息'});await learnMapping(env,original);
+  const field=env.field(original.label,{type:'combobox',group:original.group});let view=await env.scan(field);view=await env.send(view,'fill',{scanId:field.scanId,confirmed:true});assert.equal(view.rows[0].status,'success');
+  let rules=await env.service.handle({type:'learning:rules'});const mappingId=rules.rules[0].mappingId;
+  await env.service.handle({type:'learning:editRule',mappingId,fieldId:'builtin.gender',entryId:null,enabled:false,revision:rules.revision,confirmed:true});
+  view=await env.send(view,'session');assert.equal(view.rows[0].target,null);assert.equal(view.rows[0].status,'needs_confirmation');assert.equal(view.rows[0].verification,null);
+  rules=await env.service.handle({type:'learning:rules'});await env.service.handle({type:'learning:undoRule',revision:rules.revision,confirmed:true});assert.equal((await env.scan(field)).rows[0].status,'matched');
+  rules=await env.service.handle({type:'learning:rules'});await env.service.handle({type:'learning:editRule',mappingId,fieldId:'builtin.phone',entryId:null,enabled:true,revision:rules.revision,confirmed:true});view=await env.scan(field);assert.equal(view.rows[0].target,null);assert.equal(view.rows[0].status,'needs_confirmation');
+  // 用户仍可明确手选；未改库版本的刷新不能丢失这次人工选择。
+  view=await env.send(view,'select',{scanId:field.scanId,fieldId:'builtin.gender'});view=await env.send(view,'session');assert.equal(view.rows[0].target.fieldId,'builtin.gender');assert.equal(view.rows[0].source,'manual');
+  rules=await env.service.handle({type:'learning:rules'});await env.service.handle({type:'learning:deleteRule',mappingId,revision:rules.revision,confirmed:true});assert.equal((await env.scan(field)).rows[0].source,'unknown');
+  rules=await env.service.handle({type:'learning:rules'});await env.service.handle({type:'learning:undoRule',revision:rules.revision,confirmed:true});assert.equal((await env.scan(field)).rows[0].target,null);
+});
+
+test('分层第九步：重复经历复用字段关联但来源绑定属于当前会话，不按旧序号串条',async()=>{
+  const env=await fixture();await env.setValue('builtin.school','合成首条学校');const entryId=(await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'education',title:'合成第二条'}})).result;await env.setValue('builtin.school','合成第二条学校',entryId);
+  const extra={group:'教育经历',kind:'education'};await learnMapping(env,env.field('就读机构代号',{...extra,type:'select'}),'builtin.school',entryId);
+  const fields=[0,1].map((index)=>env.field('就读机构代号',{...extra,type:'radio',index}));env.recordBlocks([{blockId:'scan.block',kind:'education',canAdd:false,records:fields.map((field,index)=>({recordId:'scan.record'+index,scanIds:[field.scanId]}))}]);
+  let view=await env.scan(...fields);assert.ok(view.rows.every((row)=>row.target===null));view=await env.send(view,'prepareRecords',{confirmed:true});assert.equal(view.rows[0].target.entryId,null);assert.equal(view.rows[1].target.entryId,entryId);assert.ok(view.rows.every((row)=>row.memoryMatch==='semantic'));assert.equal(view.rows[0].value,'合成首条学校');assert.equal(view.rows[1].value,'合成第二条学校');
+  // 字段移动到另一已绑定容器时，只认最新记录成员，不让旧 index 或旧分组继续配对。
+  const moved=fields.map((field,index)=>{const row={...field,index:1-index};row.semanticId=env.context.FieldMatchingEngine.semanticId(row);return row;});env.pageFields(moved);env.recordBlocks([{blockId:'scan.block',kind:'education',canAdd:false,records:[{recordId:'scan.record0',scanIds:[moved[1].scanId]},{recordId:'scan.record1',scanIds:[moved[0].scanId]}]}]);
+  view=await env.send(view,'session');assert.equal(view.rows[0].target.entryId,entryId);assert.equal(view.rows[1].target.entryId,null);
+  view=await env.scan(...fields);assert.ok(view.rows.every((row)=>row.target===null));assert.equal(env.aiCalls.length,0);
+});
+
+test('分层第九步：v5/v4 往返保留旧规则与语义兼容，v3 降级不伪造已验证记忆',async()=>{
+  const env=await fixture();await env.setValue('builtin.gender','男');const original=env.field('合成映射代号',{type:'select',group:'个人信息'});await learnMapping(env,original);const before=await env.repo.read();
+  for(const version of [5,4,3]){
+    const backup=await env.repo.exportBackup(version);const restored=await fixture();const plan=await restored.repo.previewImport(backup,'replace');await restored.repo.command({action:'importBackup',payload:{backup,mode:'replace'},expectedRevision:plan.revision});const db=await restored.repo.read();
+    assert.equal(db.schemaVersion,5);assert.deepEqual(JSON.parse(JSON.stringify(db.fieldValues)),JSON.parse(JSON.stringify(before.fieldValues)));const field=restored.field(original.label,{type:'radio',group:original.group});const row=restored.context.FieldMatchingEngine.match(db,db.activeProfileId,'https://jobs.example.test',[field])[0];
+    if(version!==3){assert.deepEqual(JSON.parse(JSON.stringify(db.mappingRules)),JSON.parse(JSON.stringify(before.mappingRules)));assert.equal(row.memoryMatch,'semantic');assert.equal(row.status,'matched');}else{assert.equal(db.mappingRules[0].semanticId,undefined);assert.equal(row.target,null);}
+    assert.ok(!JSON.stringify(backup).includes('semantic.v1.'));assert.equal(restored.aiCalls.length,0);
+  }
+});
 
 // 意图只能引用当前库中实际存在的值，逻辑枚举与网页控件类型无关。
 test('分层第二步：后台签发实际来源意图，不进入资料、备份、AI 和界面结果', async () => {
@@ -341,13 +392,14 @@ test('学习已有字段优先补充值，拒绝为当前档案重复创建相�
   const preview=await env.send(view,'previewValue',{scanId,fieldId:'builtin.name',value:'合成姓名'}); assert.equal(preview.diff.action,'更新个人字段值');
 });
 
-// 新增布局是 v3 可选映射属性，旧指纹不变；布局改变必须重新确认而非复用旧规则。
+// 第九步布局仍进入旧指纹；缺少分组时跨布局只建议，不能沿用旧验证或绕过确认。
 test('复合结构进入记忆指纹，兼容 v3 备份保留字段和个人值', async () => {
   const env = await fixture(); await env.setValue('builtin.phone', '+8613800000000');
   const field = env.field('手机号', { type: 'tel', layout: 'phone:country-number' }); let view = await env.scan(field);
   view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true }); view = await env.send(view, 'remember', { scanId: field.scanId, confirmed: true });
   assert.equal((await env.scan(field)).rows[0].source, 'memory');
-  assert.equal((await env.scan(env.field('手机号', { type: 'tel' }))).rows[0].source, 'local');
+  const changed = (await env.scan(env.field('手机号', { type: 'tel' }))).rows[0];
+  assert.equal(changed.source, 'memory'); assert.equal(changed.memoryMatch, 'semantic'); assert.equal(changed.status, 'needs_confirmation'); assert.equal(changed.target, null);
   const backup = await env.repo.exportBackup(); assert.equal(backup.database.mappingRules[0].features.layout, 'phone:country-number');
   const restored = await fixture(); const importing=await restored.repo.previewImport(backup,'replace'); await restored.repo.command({action:'importBackup',payload:{backup,mode:'replace'},expectedRevision:importing.revision}); assert.equal((await restored.repo.read()).mappingRules[0].features.layout,'phone:country-number');
   const compat = await env.service.handle({ type: 'learning:exportV3' }); assert.equal(compat.backup.database.mappingRules[0].features, undefined); assert.equal(compat.backup.database.fieldValues.length, backup.database.fieldValues.length);

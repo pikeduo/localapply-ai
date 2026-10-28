@@ -168,6 +168,8 @@
     for (const rule of rulesView.rules) {
       const card = node('article', '', 'smart-rule'); card.dataset.mappingId = rule.mappingId;
       card.append(node('p', rule.origin + ' · ' + rule.label + ' · ' + (rule.enabled === false ? '已禁用' : rule.confirmed ? '已验证' : '待重新确认')));
+      const scope = rulesView.scopes?.find((item) => item.mappingId === rule.mappingId);
+      if (scope) card.append(node('p', `控件：${rule.features.type} · 同语义 ${scope.count} 个变体（${scope.controls.join('、')}）。本卡仅修改当前变体；冲突、待验证或禁用变体会阻止跨控件自动复用。`, 'muted'));
       const target = node('select'); target.className = 'smart-rule-target';
       for (const def of rulesView.definitions) {
         target.append(new Option(def.label + ' · 平面资料', JSON.stringify([def.fieldId, null])));

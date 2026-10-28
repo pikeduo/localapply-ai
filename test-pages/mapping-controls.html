@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>跨控件映射 · 合成招聘页</title>
+<style>body{font:16px/1.7 system-ui;max-width:850px;margin:40px auto;background:#f5f8fc;color:#23344e}.form-section{background:#fff;border:1px solid #cad7e6;border-radius:16px;padding:24px}label{display:block;margin-top:12px}input,select,textarea,[role=combobox]{padding:10px;border:1px solid #b4c7df;border-radius:7px;min-width:190px}input[type=radio]{min-width:0}[role=listbox]{padding:10px;background:#edf2ff}[role=option]{padding:8px;cursor:pointer}[aria-selected=true]{background:#d2e1ff}button{margin-top:20px;padding:10px}</style></head>
+<body><h1>旧映射的跨控件兼容验证</h1><p>同一字段切换控件，每次实际选择并重新验证；以下均为合成资料。</p>
+<form><section class="form-section"><h2 id="group">个人信息</h2><div id="slot"></div></section><button type="submit">提交申请</button></form>
+<script>
+window.__mappingEvents=0;window.__mappingClicks=0;window.__submitCount=0;
+document.querySelector('form').addEventListener('submit',(event)=>{event.preventDefault();window.__submitCount++;});
+document.querySelector('form').addEventListener('change',()=>{window.__mappingEvents++;});
+// 只重建当前合成字段；不改变 URL，不访问资料或原始 HTML 之外的站点。
+window.__mappingShow=function(mode='select',group='个人信息',duplicate=false){
+  document.getElementById('group').textContent=group;const slot=document.getElementById('slot');slot.replaceChildren();
+  for(let index=0;index<(duplicate?2:1);index++){
+    const id='mapping-field-'+index;const wrap=document.createElement('div');wrap.className='form-item';const label=document.createElement('label');label.textContent='合成映射代号';label.htmlFor=id;wrap.append(label);
+    if(mode==='radio'){
+      // 字段标题由局部容器提供，每个原生选项保留独立标签，不用标题覆盖候选含义。
+      const groupId='mapping-radio-'+index;label.removeAttribute('for');
+      for(const [code,text]of[['M','男'],['F','女']]){const row=document.createElement('label');const input=document.createElement('input');input.type='radio';input.name=groupId;input.value=code;if(code==='M')input.id=id;row.append(input,document.createTextNode(text));wrap.append(row);}
+    }else if(mode==='combobox'){
+      const input=document.createElement('div');input.id=id;input.tabIndex=0;input.setAttribute('role','combobox');input.setAttribute('aria-controls',id+'-menu');input.textContent='请选择';const menu=document.createElement('div');menu.id=id+'-menu';menu.setAttribute('role','listbox');menu.hidden=true;
+      input.addEventListener('click',()=>{menu.hidden=false;});
+      for(const [code,text]of[['M','男'],['F','女']]){const option=document.createElement('div');option.setAttribute('role','option');option.setAttribute('data-value',code);option.setAttribute('aria-selected','false');option.textContent=text;option.addEventListener('click',()=>{window.__mappingClicks++;for(const row of menu.children)row.setAttribute('aria-selected',String(row===option));input.textContent=text;input.setAttribute('data-value',code);menu.hidden=true;});menu.append(option);}
+      wrap.append(input,menu);
+    }else{
+      const input=document.createElement(mode==='select'?'select':mode==='textarea'?'textarea':'input');input.id=id;
+      if(mode==='select')for(const [code,text]of[['','请选择'],['M','男'],['F','女']])input.append(new Option(text,code));
+      wrap.append(input);
+    }
+    slot.append(wrap);
+  }
+};
+window.__mappingShow();
+// 合成 Moka 结构只提供本页记录身份；没有添加按钮，不自动创建来源或保存字段。
+window.__mappingEducation=function(mode='select',count=1){
+  const slot=document.getElementById('slot');slot.replaceChildren();const block=document.createElement('div');block.className='apply-block-synthetic';const heading=document.createElement('div');heading.className='blockTitle-synthetic';const title=document.createElement('span');title.className='text-synthetic';title.textContent='教育经历';heading.append(title);block.append(heading);
+  for(let index=0;index<count;index++){
+    const record=document.createElement('div');record.className='apply-fields-synthetic';const wrap=document.createElement('div');wrap.className='form-item';const label=document.createElement('label');label.textContent='就读机构代号';label.htmlFor='education-field-'+index;const input=document.createElement(mode==='select'?'select':'input');input.id=label.htmlFor;
+    if(mode==='select')for(const [code,text]of[['','请选择'],['S1','合成首条学校'],['S2','合成第二条学校']])input.append(new Option(text,code));
+    wrap.append(label,input);record.append(wrap);block.append(record);
+  }
+  slot.append(block);
+};
+</script></body></html>
