@@ -9,16 +9,16 @@ const ROOT = path.resolve(__dirname, '..');
 
 // 构建与生产相同的 repository/匹配/学习服务，网络和网页只由明确桩响应。
 async function fixture() {
-  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let completion = []; let recordBlocks = []; let onAdd = () => {};
+  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let completion = []; let recordBlocks = []; let onAdd = () => {}; let fillContractVersion = 1;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
-  for (const file of ['templates','providers','key-vault','resume','field-matching','field-suggestions','applications','local-store','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
+  for (const file of ['templates','providers','key-vault','resume','field-matching','fill-contract','field-suggestions','applications','local-store','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
   const repo = context.LocalApplyStore.createRepository(storage); const initial = await repo.readLegacy(); const configured = structuredClone(initial);
   configured.settings.model = 'synthetic-field-model'; await repo.saveLegacy(initial, configured);
   const db = await repo.read(); const profileId = db.activeProfileId;
   const browser = { tabs: { get: async () => ({ id: 42, url }), sendMessage: async (tabId, msg) => {
     calls.push({ type: msg.type, ...msg });
-    if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', origin: new URL(url).origin, fields: structuredClone(fields), completion, recordBlocks } };
+    if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', fillContractVersion, origin: new URL(url).origin, fields: structuredClone(fields), completion, recordBlocks } };
     if (msg.type === 'learning:addRecord') { await onAdd(); return { ok: true }; }
     if (msg.type === 'learning:read') return { ok: true, value: actual };
     if (msg.type === 'learning:fill') { if (fillGate) await fillGate; actual = failFill ? '' : msg.value; return { ok: true, result: { status: failFill ? 'failed' : 'success', reason: failFill ? '受控组件回退' : '', diagnostic: fillDiagnostic, verifiedAt: new Date().toISOString() } }; }
@@ -36,7 +36,7 @@ async function fixture() {
   const setValue = (fieldId, value, entryId = null) => repo.command({ action: 'setValue', payload: { profileId, fieldId, entryId, value } });
   return { context, repo, disk, profileId, calls, aiCalls, field, scan, send, service, setValue,
     response: (next) => { response = next; }, navigate: () => { url += '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, completion: (value) => { completion = value; },
-    recordBlocks: (value) => { recordBlocks = value; }, pageFields: (value) => { fields = value; }, onAdd: (callback) => { onAdd = callback; }, diagnostic: (value) => { fillDiagnostic = value; },
+    recordBlocks: (value) => { recordBlocks = value; }, pageFields: (value) => { fields = value; }, onAdd: (callback) => { onAdd = callback; }, diagnostic: (value) => { fillDiagnostic = value; }, protocol: (value) => { fillContractVersion = value; },
     holdFill: () => { let release; fillGate = new Promise((resolve) => { release = resolve; }); return release; } };
 }
 
@@ -47,6 +47,29 @@ function suggestion(payload, fieldId = null, definition = null) {
 }
 // 创建定义不包含个人值，值只放入 confirmField 的独立字段。
 function definition(label = '附加说明') { return { label, type: 'text', group: '其他', aliases: [], options: [] }; }
+
+// 意图只能引用当前库中实际存在的值，逻辑枚举与网页控件类型无关。
+test('分层第二步：后台签发实际来源意图，不进入资料、备份、AI 和界面结果', async () => {
+  const env = await fixture(); await env.setValue('builtin.gender', '男'); const field = env.field('性别', { type: 'radio' });
+  let view = await env.scan(field); const before = await env.repo.read(); view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true });
+  const message = env.calls.find((call) => call.type === 'learning:fill'); const intent = message.intent;
+  assert.equal(intent.value, '男'); assert.equal(intent.valueType.logicalType, 'enum'); assert.equal(intent.valueType.storageType, 'select');
+  assert.equal(intent.source.profileId, env.profileId); assert.equal(intent.source.fieldId, 'builtin.gender'); assert.equal(intent.source.entryId, null); assert.equal(intent.source.revision, before.revision);
+  assert.equal(intent.binding.sessionId, view.sessionId); assert.equal(intent.binding.documentId, 'document.test'); assert.equal(intent.binding.scanId, field.scanId);
+  assert.equal(intent.binding.semanticId, field.semanticId); assert.equal(intent.binding.tabId, 42); assert.equal(view.rows[0].status, 'success');
+  assert.deepEqual(await env.repo.read(), before); assert.equal(env.aiCalls.length, 0);
+  for (const data of [view, await env.repo.exportBackup()]) assert.ok(!JSON.stringify(data).includes(intent.intentId));
+});
+
+// 模拟旧内容脚本和伪造调用，必须在向页面发送资料前失败，而不是写入后再检查版本。
+test('分层第二步：拒绝 UI 计划、伪值及未升级页面，资料版本变化后不发送意图', async () => {
+  const env = await fixture(); await env.setValue('builtin.name', '合成姓名'); const field = env.field('姓名'); let view = await env.scan(field);
+  for (const extra of [{ value: '伪造值' }, { intent: {} }, { plan: { operation: 'submit' } }, { source: { fieldId: 'builtin.phone' } }]) await assert.rejects(env.send(view, 'fill', { scanId: field.scanId, confirmed: true, ...extra }), /后台生成/);
+  env.protocol(undefined); view = await env.scan(field); await assert.rejects(env.send(view, 'fill', { scanId: field.scanId, confirmed: true }), /刷新网页/);
+  env.protocol(1); view = await env.scan(field); await env.setValue('builtin.name', '合成新资料');
+  await assert.rejects(env.send(view, 'fill', { scanId: field.scanId, confirmed: true }), /资料已变化/);
+  assert.equal(env.calls.filter((call) => call.type === 'learning:fill').length, 0); assert.equal(env.aiCalls.length, 0);
+});
 
 // 固定旧指纹样本，防止新描述无声改变历史规则或存储验证。
 test('分层第一步：冻结旧指纹，四类控件共享语义且保留独立控件描述', async () => {

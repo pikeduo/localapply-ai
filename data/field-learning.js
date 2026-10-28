@@ -18,7 +18,7 @@
       try { response = await browser.tabs.sendMessage(tabId, message); }
       catch (error) {
         if (!inject) throw new Error('页面未连接，请重新授权扫描');
-        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'] });
+        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'] });
         response = await browser.tabs.sendMessage(tabId, message);
       }
       check(response?.ok, response?.error || '页面操作失败'); return response;
@@ -175,7 +175,7 @@
       const result = await repository.command({ action, payload, expectedRevision: db.revision });
       undo = { before, revision: result.revision }; return result;
     }
-    // 后台统一处理阶段三消息，所有写操作使用版本/确认令牌，模型调用只在 recognize 分支发生。
+    // 后台统一校验会话和确认；填写意图只由规范库生成，不接受 UI/AI 提供计划或值。
     async function handle(msg) {
       if (msg.type === 'learning:scanPage') {
         check(msg.confirmed === true && Number.isInteger(msg.tabId), '扫描前须明确授权当前页面');
@@ -187,7 +187,7 @@
         snapshot.fields.forEach(M.validateField);
         for (const [id, previous] of sessions) if (previous.tabId === msg.tabId || sessions.size >= 8) drop(id);
         const item = { sessionId: crypto.randomUUID(), createdAt: Date.now(), tabId: msg.tabId, url: tab.url, origin: snapshot.origin,
-          documentId: snapshot.documentId, profileId, fields: snapshot.fields, excluded: snapshot.excluded || [], notice: snapshot.notice || '' };
+          documentId: snapshot.documentId, fillContractVersion: snapshot.fillContractVersion, profileId, fields: snapshot.fields, excluded: snapshot.excluded || [], notice: snapshot.notice || '' };
         rebuild(item, db); completion(item, snapshot); sessions.set(item.sessionId, item); return view(item, db);
       }
       if (msg.type === 'learning:rules') { const db = await repository.read(); return { rules: db.mappingRules, definitions: db.fieldDefinitions, profiles: db.profiles, entries: db.entries, revision: db.revision, canUndo: !!undo }; }
@@ -280,14 +280,17 @@
         return view(item, latest);
       }
       if (msg.type === 'learning:fill') {
+        check(Object.keys(msg).every((key) => ['type', 'sessionId', 'scanId', 'confirmed', 'overwriteToken', 'panelToken'].includes(key)), '填写意图只能由后台生成');
         check(msg.confirmed === true && row.target, '填写前必须核对本地来源并确认');
+        check(item.fillContractVersion === global.LocalApplyFillContract.VERSION, '页面填写契约尚未加载，请刷新网页后重新扫描');
         const value = M.valueOf(db, item.profileId, row.target)?.value; check(M.hasValue(value), '本地没有该字段值，请先填写资料');
         // 覆盖令牌只允许当前项、当前资料版本及五分钟内已展示的差异，不能用布尔开关绕过。
         const overwrite = msg.overwriteToken !== undefined;
         if (overwrite) check(row.conflict?.token === msg.overwriteToken && row.conflict.revision === db.revision && Date.now() - row.conflict.createdAt < 300000 && JSON.stringify(value) === JSON.stringify(row.conflict.after), '覆盖确认已失效，请重新填写并预览差异');
         row.status = 'filling'; delete row.diagnostic;
         try {
-          const result = await pageMessage(item.tabId, { type: 'learning:fill', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId, value, ...(overwrite ? { overwrite: true, expectedCurrent: row.conflict.before } : {}) });
+          const intent = global.LocalApplyFillContract.createIntent(db, item.profileId, row.target, row.field, { sessionId: item.sessionId, tabId: item.tabId, documentId: item.documentId });
+          const result = await pageMessage(item.tabId, { type: 'learning:fill', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId, value, intent, ...(overwrite ? { overwrite: true, expectedCurrent: row.conflict.before } : {}) });
           check(['success', 'failed', 'unsupported', 'needs_confirmation'].includes(result.result.status), '网页返回无效填写结果');
           row.status = result.result.status; row.reason = result.result.reason || '事件派发后已跨延迟复读，网页未回退';
           row.chosen = true;

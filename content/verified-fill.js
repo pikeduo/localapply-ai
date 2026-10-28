@@ -3,6 +3,8 @@
   'use strict';
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const A = global.LocalApplyFieldAdapters;
+  const C = global.LocalApplyFillContract;
+  const preparedPlans = new WeakMap();
 
   // 扫描器提供独立控件描述；兼容旧的本页调用封套，不使用语义 key 选择写入方式。
   function controlOf(item) { return item.control || global.FieldMatchingEngine.controlDescriptor(item.field); }
@@ -46,6 +48,57 @@
     return null;
   }
 
+  // 原生候选只按现有明确标签/值比较；结构与节点引用仅保存在本页，不进入计划消息。
+  function nativeCandidates(item) { return controlOf(item).type === 'select' ? [...item.el.options] : item.members; }
+
+  // 记录会使计划失效的局部结构和候选状态；不收集整个页面 HTML 或其他字段值。
+  function structure(item) {
+    const type = controlOf(item).type;
+    return JSON.stringify({ field: global.FieldMatchingEngine.features(item.field), control: controlOf(item),
+      attributes: ['type', 'readonly', 'min', 'max', 'placeholder', 'aria-controls', 'aria-owns', 'aria-disabled'].map((name) => item.el.getAttribute(name)),
+      candidates: ['select', 'radio'].includes(type) ? nativeCandidates(item).map((node) => ({ value: node.value,
+        label: (type === 'select' ? node.textContent : node.closest('label')?.textContent)?.trim() || '', disabled: !!node.disabled || !!node.closest('optgroup[disabled]') })) : [] });
+  }
+
+  // 只准备计划不点击；复杂控件明确委托旧链路，不把未发现的异步选项冒充已解析目标。
+  function prepare(item, intent, options = {}) {
+    C.validateIntent(intent, { binding: { scanId: item.field.scanId, semanticId: item.field.semanticId } });
+    const value = intent.value; const control = controlOf(item); const adapted = A.handles(item);
+    if (adapted) { const existing = A.plan(item, value); if (existing.error) return { error: { ...existing.error, diagnostic: { phase: 'plan' } } }; }
+    const blocked = conflict(item, value, options); if (blocked) return { error: { ...blocked, diagnostic: { phase: 'protect', reasonCode: 'existing_value_preserved' } } };
+    let operation = adapted || ['checkbox', 'combobox'].includes(control.type) ? 'legacy-interaction' : 'write-value'; let targetOption; let optionNode;
+    if (accepted(item, value)) operation = 'verify-existing';
+    else if (!adapted && ['select', 'radio'].includes(control.type)) {
+      const candidates = nativeCandidates(item); const found = candidates.filter((node) => node.value === String(value)
+        || (control.type === 'select' ? node.textContent : node.closest('label')?.textContent)?.trim() === String(value));
+      if (found.length !== 1) return { error: { status: 'failed', ok: false, reason: '没有唯一的精确选项，未进行模糊选择', diagnostic: { phase: 'options', candidateCount: candidates.length, matchCount: found.length, reasonCode: found.length ? 'ambiguous_option' : 'no_exact_option' } } };
+      optionNode = found[0];
+      if (optionNode.disabled || optionNode.closest('optgroup[disabled]') || optionNode.getAttribute('aria-disabled') === 'true') return { error: { status: 'unsupported', ok: false, reason: '目标选项已禁用，未执行填写', diagnostic: { phase: 'plan', reasonCode: 'unsupported_control' } } };
+      operation = 'select-option'; targetOption = { handle: 'option.' + crypto.randomUUID(), label: (control.type === 'select' ? optionNode.textContent : optionNode.closest('label')?.textContent)?.trim() || '', value: optionNode.value };
+    }
+    const date = adapted && !['phone', 'address'].includes(item.compound?.kind) ? A.dateValue(value) : null;
+    const plan = { version: C.VERSION, planId: 'plan.' + crypto.randomUUID(), intentId: intent.intentId,
+      binding: { ...intent.binding }, source: { ...intent.source }, controlFingerprint: control.fingerprint, operation,
+      verification: ({ 'write-value': 'value', 'select-option': 'selected-option' })[operation] || 'legacy-delayed', state: operation === 'legacy-interaction' ? 'delegated' : 'ready',
+      ...(targetOption ? { targetOption } : {}), ...(date ? { datePrecision: date.precision } : {}) };
+    C.validatePlan(plan, intent);
+    preparedPlans.set(plan, { item, optionNode, structure: structure(item), current: JSON.stringify(global.LocalApplyPageScanner.readValue(item)),
+      intent: JSON.stringify(intent), encoded: JSON.stringify(plan), createdAt: Date.now(), used: false });
+    return { plan };
+  }
+
+  // 执行前核对本页签发身份、原来源、候选、节点和授权；复制、篡改、过期及重复消费均拒绝。
+  function validatePrepared(plan, item, intent, consume = false) {
+    C.validatePlan(plan, intent); const saved = preparedPlans.get(plan);
+    if (!saved || saved.used || Date.now() - saved.createdAt > 30000 || saved.encoded !== JSON.stringify(plan) || saved.intent !== JSON.stringify(intent)) throw new Error('填写计划已失效，请重新准备');
+    const current = global.LocalApplyPageScanner.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId);
+    if (saved.item.el !== item.el || current.el !== item.el || structure(current) !== saved.structure
+      || JSON.stringify(global.LocalApplyPageScanner.readValue(current)) !== saved.current
+      || saved.optionNode && !nativeCandidates(current).includes(saved.optionNode)) throw new Error('填写控件或候选已变化，请重新准备');
+    if (consume) saved.used = true;
+    return plan;
+  }
+
   // 按控件描述选择已有执行路径；语义仅保留既有选项规范化提示，非空保护与延迟回读不变。
   async function write(item, value, options = {}) {
     const { el, members, field } = item; const control = controlOf(item);
@@ -81,13 +134,20 @@
     if (result.ok) global.WangshenFiller.markFilled(el);
     return { ...result, diagnostic: { phase: 'verify', reasonCode: result.ok ? 'verified' : 'value_not_accepted' } };
   }
-  // 诊断从控件描述取类型；保持固定白名单，不携带新指纹、实际值或候选文字。
+  // 意图通过最小计划守卫后仍调用旧写入器；诊断只含旧白名单，不返回意图、计划或来源值。
   async function fill(item, value, options = {}) {
-    A.diagnostic?.(item, true); const result = await write(item, value, options); const trace = A.diagnostic?.(item) || {};
+    A.diagnostic?.(item, true); let result;
+    if (options.intent) {
+      C.validateIntent(options.intent, { value }); const prepared = prepare(item, options.intent, options);
+      if (prepared.error) result = prepared.error;
+      else { validatePrepared(prepared.plan, item, options.intent, true); result = await write(item, value, options); }
+    } else result = await write(item, value, options); // 保留本页旧调用兼容，消息入口始终要求后台意图。
+    const trace = A.diagnostic?.(item) || {};
     const control = controlOf(item);
     const adapter = item.compound?.kind || (A.dropdown(item.el) ? 'moka-dropdown' : ({ select: 'native-select', combobox: 'aria-combobox', radio: 'radio', checkbox: 'checkbox' })[control.type]) || (A.handles(item) ? 'date' : 'text');
     const reasonCode = result.ok ? 'verified' : result.diagnostic?.reasonCode || trace.reasonCode || (/精度|只有年|不能.*补日/.test(result.reason || '') ? 'insufficient_date_precision' : /日期/.test(result.reason || '') && result.status !== 'unsupported' ? 'invalid_date' : result.status === 'unsupported' ? 'unsupported_control' : 'write_rejected');
     return { ...result, diagnostic: { adapter, phase: 'write', ...trace, ...result.diagnostic, reasonCode, controlType: control.type, status: result.status || (result.ok ? 'success' : 'failed') } };
   }
   global.LocalApplyVerifiedFill = { fill, verify, accepted };
+  global.LocalApplyFillPlanner = { prepare, validate: validatePrepared }; // 仅隔离内容脚本可见；无消息/模型执行接口。
 })(globalThis);

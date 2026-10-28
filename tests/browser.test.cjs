@@ -8,6 +8,81 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 实际后台签发意图，隔离内容脚本内测试计划身份和结构失效；不使用真实个人资料或 API。
+test('分层第二步：填写意图、私有计划与消息边界', { timeout: 60000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'fill-contract-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    for (const [fieldId, value] of [['builtin.gender', '男'], ['builtin.birthDate', '2001-06']]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId, entryId: null, value } } });
+    const before = (await rpc(options, 'localapply:read')).database; const page = await context.newPage(); const errors = []; page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto(api.base + '/test-pages/field-control-variants.html');
+    // 在合成表单追加严格要求日的控件，不改变原四控件夹具或历史断言。
+    await page.evaluate(() => { const label = document.createElement('label'); label.textContent = '出生日期'; label.htmlFor = 'plan-birth'; const input = document.createElement('input'); input.id = 'plan-birth'; input.type = 'date'; document.querySelector('.form-section').append(label, input); });
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    // 仅旁路观察本测试的合成消息，仍将原消息交给真实 tabs API 和内容脚本处理。
+    await worker.evaluate(() => { const original = chrome.tabs.sendMessage; chrome.tabs.sendMessage = async function (...args) { if (args[1]?.type === 'learning:fill') globalThis.__contractMessage = structuredClone(args[1]); return original.apply(chrome.tabs, args); }; });
+    const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); const row = scan.rows.find((item) => item.control.type === 'select'); let message;
+    await t.test('真实来源意图经私有计划和原填写器选择 M 编码并完成回读', async () => {
+      const filled = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true }); assert.equal(filled.rows.find((item) => item.field.scanId === row.field.scanId).status, 'success');
+      message = await worker.evaluate(() => globalThis.__contractMessage); assert.equal(message.intent.source.profileId, profileId); assert.equal(message.intent.source.entryId, null); assert.equal(message.intent.source.revision, before.revision); assert.equal(message.intent.valueType.logicalType, 'enum');
+      assert.equal(message.intent.binding.sessionId, scan.sessionId); assert.equal(message.intent.binding.tabId, tabId); assert.equal(await page.locator('#gender-select').inputValue(), 'M');
+      assert.ok(!JSON.stringify(filled).includes(message.intent.intentId)); await page.locator('#gender-select').selectOption('');
+    });
+    await t.test('真实 DOM 下拒绝复制、篡改、候选替换、节点替换和值变化的计划', async () => {
+      // 显式 JSON 保留首条来源的 entryId:null；注入 API 的对象参数转换不能改变契约语义。
+      const checks = await worker.evaluate(async ({ tabId, intent }) => (await chrome.scripting.executeScript({ target: { tabId }, args: [JSON.stringify(intent)], func: (encodedIntent) => {
+        const intent = JSON.parse(encodedIntent);
+        const S = globalThis.LocalApplyPageScanner; const P = globalThis.LocalApplyFillPlanner; const item = S.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId); const checks = {}; let stage = 'prepare';
+        // 所有情况仅准备/校验，不调用写入器；拒绝后恢复合成节点供下一项使用。
+        const make = () => P.prepare(item, intent).plan; const rejected = (operation) => { try { operation(); return false; } catch { return true; } };
+        // 返回固定故障步骤和插件栈位置，诊断注入异常不能污染宿主页面的未捕获错误列表。
+        try {
+          let plan = make(); checks.copy = rejected(() => P.validate(structuredClone(plan), item, intent)); stage = 'tamper';
+          plan = make(); plan.targetOption.value = 'F'; checks.tamper = rejected(() => P.validate(plan, item, intent)); stage = 'option';
+          plan = make(); const option = item.el.options[1]; const replacement = option.cloneNode(true); option.replaceWith(replacement); checks.option = rejected(() => P.validate(plan, item, intent)); replacement.replaceWith(option); stage = 'node';
+          plan = make(); const clone = item.el.cloneNode(true); item.el.replaceWith(clone); checks.node = rejected(() => P.validate(plan, item, intent)); clone.replaceWith(item.el); S.scan(); stage = 'value';
+          plan = make(); item.el.value = 'F'; checks.value = rejected(() => P.validate(plan, item, intent)); item.el.value = ''; stage = 'replay';
+          plan = make(); P.validate(plan, item, intent, true); checks.replay = rejected(() => P.validate(plan, item, intent)); checks.noWrite = item.el.value === '';
+          return checks;
+        } catch (error) { return { stage, error: error.message, stack: error.stack.split('\n').slice(0, 5) }; }
+      } }))[0].result, { tabId, intent: message.intent });
+      assert.deepEqual(checks, { copy: true, tamper: true, option: true, node: true, value: true, replay: true, noWrite: true });
+    });
+    await t.test('错误文档、恶意属性和跨消息计划在页面写入前被拒绝', async () => {
+      const results = await worker.evaluate(async ({ tabId, message }) => {
+        const invalid = [
+          { ...message, intent: { ...message.intent, binding: { ...message.intent.binding, documentId: 'document.wrong' } } },
+          { ...message, intent: { ...message.intent, javascript: 'globalThis.__planInjected=true' } },
+          { ...message, plan: { operation: 'submit', xpath: '//button' } }
+        ]; const results = []; for (const msg of invalid) results.push(await chrome.tabs.sendMessage(tabId, msg)); return results;
+      }, { tabId, message });
+      assert.ok(results.every((result) => result.ok === false)); assert.equal(await page.locator('#gender-select').inputValue(), ''); assert.equal(await page.evaluate(() => window.__planInjected), undefined);
+    });
+    await t.test('UI 不能自带意图、值或计划，也不能直接向内容脚本签发填写', async () => {
+      for (const extra of [{ value: '伪造值' }, { intent: message.intent }, { plan: { operation: 'submit' } }]) {
+        const denied = await options.evaluate((payload) => chrome.runtime.sendMessage(payload), { type: 'learning:fill', sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true, ...extra }); assert.equal(denied.ok, false);
+      }
+      const direct = await options.evaluate(({ tabId, message }) => chrome.tabs.sendMessage(tabId, message), { tabId, message }); assert.equal(direct.ok, false); assert.match(direct.error, /后台发送/); assert.equal(await page.locator('#gender-select').inputValue(), '');
+    });
+    await t.test('本地只有年月时不会为年月日控件生成补日操作', async () => {
+      const birth = scan.rows.find((item) => item.field.label === '出生日期'); assert.equal(birth.target.fieldId, 'builtin.birthDate');
+      const result = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: birth.field.scanId, confirmed: true }); const rejected = result.rows.find((item) => item.field.scanId === birth.field.scanId);
+      assert.equal(rejected.status, 'needs_confirmation'); assert.match(rejected.reason, /精度不足/); assert.equal(await page.locator('#plan-birth').inputValue(), '');
+    });
+    await t.test('计划不进入日志、备份或个人库，零 AI、零提交且无页面异常', async () => {
+      const backup = (await rpc(options, 'localapply:exportBackup')).backup; const diagnostics = await rpc(options, 'diagnostics:read');
+      for (const data of [backup, diagnostics]) { assert.ok(!JSON.stringify(data).includes(message.intent.intentId)); assert.ok(!JSON.stringify(data).includes('plan.')); }
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => submitCount), 0); assert.equal(await page.locator('#agreement').isChecked(), false); assert.deepEqual(errors, []);
+      await page.screenshot({ path: path.join(testRoot, 'fill-contract-guards.png'), fullPage: true });
+    });
+  } finally {
+    if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
 // 通过真实后台/内容脚本验证独立描述，复用原填写器，不以私有函数或内存桩代替执行。
 test('分层第一步：字段语义与控件描述独立', { timeout: 60000 }, async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });

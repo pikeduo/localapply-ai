@@ -1,0 +1,100 @@
+// 填写意图与计划的最小契约：仅处理可信运行时数据，不读取存储、DOM 或模型输出。
+(function (global) {
+  'use strict';
+  const VERSION = 1;
+  const logicalTypes = { text: 'string', textarea: 'string', select: 'enum', number: 'number', boolean: 'boolean', date: 'date', multiSelect: 'string-array' };
+  const bindingKeys = ['sessionId', 'tabId', 'documentId', 'scanId', 'semanticId'];
+  const sourceKeys = ['profileId', 'fieldId', 'entryId', 'revision'];
+
+  // 固定错误不含实际值、资料标识或外部异常正文。
+  function check(ok, message = '填写契约格式错误') { if (!ok) throw new Error(message); }
+
+  // 只接受白名单数据属性，拒绝脚本、额外键、数组及 getter/setter。
+  function shape(value, keys) {
+    check(value && Object.prototype.toString.call(value) === '[object Object]');
+    check(Reflect.ownKeys(value).every((key) => typeof key === 'string' && keys.includes(key)
+      && Object.hasOwn(Object.getOwnPropertyDescriptor(value, key), 'value')));
+  }
+
+  // 保留旧库可用的字符串 ID，不因新契约擅自重命名历史字段。
+  function reference(value) { check(typeof value === 'string' && value.trim().length > 0 && value.length <= 500); }
+
+  // 旧定义仅投影逻辑类型及编辑提示，不改变持久化 type 或枚举原文。
+  function projectDefinition(definition) {
+    check(definition && Object.hasOwn(logicalTypes, definition.type), '字段逻辑类型不支持');
+    return { storageType: definition.type, logicalType: logicalTypes[definition.type], editorHint: definition.type };
+  }
+
+  // 仅校验既有资料的 JSON 类型和规模，绝不按控件猜值、补日期或裁剪枚举。
+  function validateValue(value, logicalType) {
+    if (logicalType === 'number') check(typeof value === 'number' && Number.isFinite(value));
+    else if (logicalType === 'boolean') check(typeof value === 'boolean');
+    else if (logicalType === 'string-array') check(Array.isArray(value) && value.length > 0 && value.length <= 200
+      && value.every((item) => typeof item === 'string' && item.trim().length > 0 && item.length <= 500));
+    else {
+      check(typeof value === 'string' && value.trim().length > 0 && value.length <= 100000);
+      if (logicalType === 'date') {
+        check(/^\d{4}(-\d{2})?(-\d{2})?$/.test(value));
+        if (value.length >= 7) check(+value.slice(5, 7) >= 1 && +value.slice(5, 7) <= 12);
+        if (value.length === 10) check(Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value);
+      }
+    }
+  }
+
+  // 意图绑定后台会话、来源和资料版本；expected 只用于调用方的可信上下文比对，不构成授权。
+  function validateIntent(intent, expected = {}) {
+    shape(intent, ['version', 'intentId', 'binding', 'source', 'valueType', 'value']);
+    check(intent.version === VERSION); reference(intent.intentId); check(/^intent\.[\w.-]+$/.test(intent.intentId));
+    shape(intent.binding, bindingKeys); shape(intent.source, sourceKeys);
+    for (const key of ['sessionId', 'documentId', 'scanId', 'semanticId']) reference(intent.binding[key]);
+    check(Number.isInteger(intent.binding.tabId) && intent.binding.tabId >= 0);
+    check(/^scan\.[\w.-]{1,100}$/.test(intent.binding.scanId) && /^semantic\.[a-f0-9]{16}$/.test(intent.binding.semanticId));
+    for (const key of ['profileId', 'fieldId']) reference(intent.source[key]);
+    if (intent.source.entryId !== null) reference(intent.source.entryId);
+    check(Number.isInteger(intent.source.revision) && intent.source.revision >= 0);
+    shape(intent.valueType, ['storageType', 'logicalType', 'editorHint']);
+    const projected = projectDefinition({ type: intent.valueType.storageType });
+    check(Object.keys(projected).every((key) => projected[key] === intent.valueType[key])); validateValue(intent.value, projected.logicalType);
+    for (const section of ['binding', 'source']) if (expected[section]) {
+      shape(expected[section], section === 'binding' ? bindingKeys : sourceKeys);
+      check(Object.keys(expected[section]).every((key) => expected[section][key] === intent[section][key]), '填写来源或文档已变化');
+    }
+    if (Object.hasOwn(expected, 'value')) check(JSON.stringify(expected.value) === JSON.stringify(intent.value), '填写值与后台意图不一致');
+    return intent;
+  }
+
+  // 只能从当前规范库中取真实来源；调用方必须先通过会话/URL/revision 检查。
+  function createIntent(db, profileId, target, field, binding) {
+    global.FieldMatchingEngine.validateField(field); shape(target, ['fieldId', 'entryId']);
+    check(db.activeProfileId === profileId && db.profiles.some((row) => row.profileId === profileId), '填写档案已变化');
+    const entryId = target.entryId ?? null;
+    check(entryId === null || db.entries.some((row) => row.entryId === entryId && row.profileId === profileId), '填写来源不属于当前档案');
+    const definition = db.fieldDefinitions.find((row) => row.fieldId === target.fieldId);
+    const row = db.fieldValues.find((row) => row.profileId === profileId && row.fieldId === target.fieldId && row.entryId === entryId);
+    check(definition && row && global.FieldMatchingEngine.hasValue(row.value), '填写来源缺少实际资料');
+    const intent = { version: VERSION, intentId: 'intent.' + crypto.randomUUID(), binding: { ...binding, scanId: field.scanId, semanticId: field.semanticId },
+      source: { profileId, fieldId: target.fieldId, entryId, revision: db.revision }, valueType: projectDefinition(definition), value: JSON.parse(JSON.stringify(row.value)) };
+    return validateIntent(intent);
+  }
+
+  // 计划只有固定操作及验证类型；它不是脚本，执行还必须持有本页私有句柄并重新核对节点。
+  function validatePlan(plan, intent) {
+    validateIntent(intent); shape(plan, ['version', 'planId', 'intentId', 'binding', 'source', 'controlFingerprint', 'operation', 'verification', 'state', 'targetOption', 'datePrecision']);
+    check(plan.version === VERSION && typeof plan.planId === 'string' && /^plan\.[\w.-]+$/.test(plan.planId) && plan.intentId === intent.intentId);
+    shape(plan.binding, bindingKeys); shape(plan.source, sourceKeys);
+    check(bindingKeys.every((key) => plan.binding[key] === intent.binding[key]) && sourceKeys.every((key) => plan.source[key] === intent.source[key]), '填写来源或文档已变化');
+    check(typeof plan.controlFingerprint === 'string' && /^control\.v1\.[a-f0-9]{16}$/.test(plan.controlFingerprint));
+    const pairs = { 'write-value': 'value', 'select-option': 'selected-option', 'verify-existing': 'legacy-delayed', 'legacy-interaction': 'legacy-delayed' };
+    check(Object.hasOwn(pairs, plan.operation) && plan.verification === pairs[plan.operation]);
+    check(plan.state === (plan.operation === 'legacy-interaction' ? 'delegated' : 'ready'));
+    if (plan.operation === 'select-option') {
+      shape(plan.targetOption, ['handle', 'label', 'value']); reference(plan.targetOption.handle);
+      check(/^option\.[\w.-]+$/.test(plan.targetOption.handle));
+      for (const key of ['label', 'value']) check(typeof plan.targetOption[key] === 'string' && plan.targetOption[key].length <= 100000);
+    } else check(!Object.hasOwn(plan, 'targetOption'));
+    if (Object.hasOwn(plan, 'datePrecision')) check(['year', 'month', 'day'].includes(plan.datePrecision));
+    return plan;
+  }
+
+  global.LocalApplyFillContract = { VERSION, projectDefinition, createIntent, validateIntent, validatePlan };
+})(globalThis);

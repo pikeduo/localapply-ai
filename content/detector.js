@@ -393,7 +393,7 @@
 
   // ============ 消息处理（侧边栏 ⇄ 页面） ============
 
-  // 只接受本扩展管理页面/后台的控制消息，网页内容不能自行建立扫描授权。
+  // 只接受可信控制消息；填写意图另核对文档和白名单，网页或 AI 不能提交可执行计划。
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       try {
@@ -420,6 +420,7 @@
           case 'learning:scan': {
             if (msg.authorize === true && msg.expectedUrl !== location.href) throw new Error('页面已导航，请重新授权扫描');
             const snapshot = globalThis.LocalApplyPageScanner.scan(msg.authorize === true);
+            snapshot.fillContractVersion = globalThis.LocalApplyFillContract.VERSION;
             // 完成标记与结构元数据分开，AI 契约不会接收网页输入值或完成状态。
             snapshot.completion = globalThis.LocalApplyPageScanner.completion();
             snapshot.recordBlocks = globalThis.LocalApplyPageScanner.recordBlocks();
@@ -435,9 +436,14 @@
           case 'learning:verify': {
             const record = globalThis.LocalApplyPageScanner.record(msg.scanId, msg.documentId, msg.semanticId);
             if (msg.type === 'learning:read') { sendResponse({ ok: true, value: globalThis.LocalApplyPageScanner.readValue(record) }); return; }
+            if (msg.type === 'learning:fill') {
+              if (sender.url && sender.url.split(/[?#]/)[0] !== chrome.runtime.getURL('background.js')) throw new Error('填写意图只接受后台发送');
+              globalThis.LocalApplyFillContract.validateIntent(msg.intent, { binding: { documentId: msg.documentId, scanId: msg.scanId, semanticId: msg.semanticId }, value: msg.value });
+            }
+            if (Object.hasOwn(msg, 'plan')) throw new Error('填写计划只能在当前页面生成');
             filling = true;
             // 覆盖只接受后台差异令牌核验后的许可，并在页面再次比较原值防止确认后变化。
-            try { const result = await globalThis.LocalApplyVerifiedFill[msg.type === 'learning:fill' ? 'fill' : 'verify'](record, msg.value, { overwrite: msg.overwrite === true, expectedCurrent: msg.expectedCurrent }); sendResponse({ ok: true, result }); }
+            try { const result = await globalThis.LocalApplyVerifiedFill[msg.type === 'learning:fill' ? 'fill' : 'verify'](record, msg.value, { overwrite: msg.overwrite === true, expectedCurrent: msg.expectedCurrent, intent: msg.intent }); sendResponse({ ok: true, result }); }
             finally { filling = false; }
             return;
           }
