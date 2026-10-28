@@ -86,6 +86,8 @@
 
   // 精确点选才登记本次选择证据；仅输入文字即使暂时显示相同也不能算填写成功。
   async function fillDropdown(el, value, unit = '', fieldLabel = '', lifecycle) {
+    // 新模块加载后统一三阶段流程；旧未加载页面保留原实现，失败绝不再次执行旧路径。
+    if (global.LocalApplyDropdownControls) return global.LocalApplyDropdownControls.interact(el, value, { unit, fieldLabel, lifecycle });
     const started = Date.now(); const desired = String(value); const searchable = !el.readOnly && !dropdown(el).classList.contains('select');
     const trace = { adapter: 'moka-dropdown', phase: 'open', candidateCount: 0, matchCount: 0, searchable, popupRelation: 'none', associatedPopup: false };
     lifecycle?.check(); selections.delete(el); const before = await openControl(el, false, lifecycle); lifecycle?.check();
@@ -116,6 +118,7 @@
 
   // 回读必须同时命中显示值和精确选择证据，受控组件清空或回退不会计为成功。
   function dropdownAccepted(el, value) {
+    if (global.LocalApplyDropdownControls) return global.LocalApplyDropdownControls.accepted(el, value);
     const selected = selections.get(el); const desired = String(value);
     return !!selected && selected.expected === desired && [desired, selected.text].some((text) => optionEqual(dropdownText(el), text));
   }
@@ -428,4 +431,8 @@
     return { ok: true };
   }
   global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, optionEqual, fillDropdown, dropdownAccepted, diagnostic };
+  // 只向打包的下拉桥接模块提供成熟局部探测及脱敏轨迹入口，不开放网页消息接口。
+  global.LocalApplyDropdownDOM = Object.freeze({ openControl, popupFor, popupRoots, optionLabel, usable,
+    trace(el, detail) { traces.set(el, detail); }
+  });
 })(globalThis);

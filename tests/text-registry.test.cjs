@@ -10,7 +10,7 @@ const ROOT = path.resolve(__dirname, '..');
 // 在独立隔离世界载入实际契约/注册表，赋值桩禁止进入旧候选搜索路径。
 function fixture(type = 'text', value = '合成文本') {
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date, setTimeout, clearTimeout, AbortController });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   const M = context.FieldMatchingEngine; const C = context.LocalApplyFillContract;
   const field = { scanId: 'scan.synthetic', label: '合成字段', name: '', placeholder: '', options: [], group: '', kind: '', degree: '', index: 0, type }; field.semanticId = M.semanticId(field);
   const attrs = { type: type === 'textarea' || type === 'contenteditable' ? null : type }; let active = true; let writes = 0; let marks = 0;
@@ -31,7 +31,7 @@ function fixture(type = 'text', value = '合成文本') {
 
 // 模拟错误打包能力，验证生产注册表实际拒绝重复/未知项，而非仅检查常量列表。
 function loadRegistry(adapters) {
-  const context = vm.createContext({ LocalApplyTextAdapters: adapters, LocalApplyNativeAdapters: [], LocalApplyDatePhoneAdapters: [], LocalApplyFillContract: { ADAPTER_IDS: ['text', 'textarea', 'contenteditable'] } });
+  const context = vm.createContext({ LocalApplyTextAdapters: adapters, LocalApplyNativeAdapters: [], LocalApplyDatePhoneAdapters: [], LocalApplyDropdownAdapters: [], LocalApplyFillContract: { ADAPTER_IDS: ['text', 'textarea', 'contenteditable'] } });
   vm.runInContext(fs.readFileSync(path.join(ROOT, 'content/controls/registry.js'), 'utf8'), context); return context.LocalApplyAdapterRegistry;
 }
 
@@ -39,7 +39,7 @@ function loadRegistry(adapters) {
 function fakeAdapter(id) { return { id, detect: () => true, prepare: () => {}, execute: () => {}, verify: () => {} }; }
 
 test('注册项冻结、唯一且固定白名单；不存在动态注册入口，多重命中拒绝', () => {
-  const env = fixture(); assert.deepEqual([...env.registry.ids], ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone']);
+  const env = fixture(); assert.deepEqual([...env.registry.ids], ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone', 'dropdown']);
   assert.ok(Object.isFrozen(env.registry) && Object.isFrozen(env.registry.ids)); assert.equal(env.registry.register, undefined); assert.equal(env.registry.get('remote.js'), null);
   assert.throws(() => env.registry.ids.push('remote')); assert.ok(Object.isFrozen(env.registry.get('text')));
   assert.throws(() => loadRegistry([fakeAdapter('text'), fakeAdapter('text')]), /白名单或发生重复/);

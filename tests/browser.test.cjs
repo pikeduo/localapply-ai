@@ -8,6 +8,72 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 第六步通过真实后台来源及实际 ARIA/框架状态验证，不访问真实岗位或付费 API。
+test('分层第六步：异步下拉三阶段及迟到响应边界', { timeout: 90000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'dropdown-')); const api = await serve(); let context; const errors = [];
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId; await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.gender', value: '男' } } });
+    const before = (await rpc(options, 'localapply:read')).database; const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(api.base + '/test-pages/dropdown-controls.html'); await page.locator('#react-dropdown').waitFor(); await page.locator('#vue-dropdown').waitFor();
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((row) => row.url === url).id, page.url());
+    // 保留本测试的合成意图作边界验证，实际消息仍走原后台与内容脚本。
+    await worker.evaluate(() => { const original = chrome.tabs.sendMessage; globalThis.__dropdownMessages = {}; chrome.tabs.sendMessage = function (...args) { if (args[1]?.type === 'learning:fill') globalThis.__dropdownMessages[args[1].scanId] = structuredClone(args[1]); return original.apply(chrome.tabs, args); }; });
+    const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true });
+    // 用户明确选择同一真实资料来源，不向 UI 消息塞入查询值、脚本或执行计划。
+    async function fill(label) {
+      const row = scan.rows.find((row) => row.field.label === label); assert.ok(row, label);
+      await rpc(options, 'learning:select', { sessionId: scan.sessionId, scanId: row.field.scanId, fieldId: 'builtin.gender' });
+      return (await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true })).rows.find((next) => next.field.scanId === row.field.scanId);
+    }
+    await t.test('异步唯一候选真正选中 M 编码，相同值不再查询或点击', async () => {
+      assert.equal((await fill('下拉-success')).status, 'success'); assert.equal(await page.locator('#success').getAttribute('data-value'), 'M');
+      const count = await page.evaluate(() => [__choiceClicks.success, __queries.success]); assert.equal((await fill('下拉-success')).status, 'success'); assert.deepEqual(await page.evaluate(() => [__choiceClicks.success, __queries.success]), count);
+      assert.equal((await fill('下拉-late')).status, 'success'); assert.equal(await page.evaluate(() => __choiceClicks.late), 1);
+      assert.equal((await fill('下拉-lazy')).status, 'success'); assert.equal(await page.evaluate(() => __choiceClicks.lazy), 1);
+      assert.equal(await page.locator('#menu-lazy').count(), 0); // 确认后卸载菜单仍按实际选中标记/编码验证。
+    });
+    await t.test('重复、禁用、危险、外部菜单和超时均不点击，搜索文字不算完成', async () => {
+      for (const mode of ['duplicate', 'disabled', 'unsafe', 'foreign', 'timeout', 'search-only']) { const row = await fill('下拉-' + mode); assert.equal(row.status, 'unsupported', mode + '：' + row.reason); assert.equal(await page.evaluate((mode) => __choiceClicks[mode] || 0, mode), 0); }
+      assert.equal((await fill('危险触发器')).status, 'unsupported'); assert.equal(await page.evaluate(() => __submitCount), 0);
+      assert.equal(await page.locator('#search-only').inputValue(), '男');
+      const view = await rpc(options, 'learning:session', { sessionId: scan.sessionId }); assert.equal(view.rows.find((row) => row.field.label === '下拉-search-only').webFilled, false);
+      const rejected = await fill('下拉-reject'); assert.equal(rejected.status, 'failed'); assert.equal(rejected.diagnostic.reasonCode, 'value_not_accepted'); assert.equal(await page.locator('#reject').inputValue(), '男');
+    });
+    await t.test('真实 React/Vue 异步状态与重绘保持；拒绝组件保留查询仍失败', async () => {
+      for (const label of ['React异步下拉', 'Vue异步下拉']) { const row = await fill(label); assert.equal(row.status, 'success', row.reason); }
+      assert.equal((await fill('React拒绝下拉')).status, 'failed'); assert.equal(await page.locator('#react-dropdown-reject').inputValue(), '男');
+      assert.equal(await page.evaluate(() => __dropdownProbe['react-dropdown']()), 'M'); assert.equal(await page.evaluate(() => __dropdownProbe.vue()), 'M');
+      await page.evaluate(() => { __dropdownProbe['react-dropdown-redraw'](); __dropdownProbe.redrawVue(); }); assert.equal(await page.locator('#react-dropdown').inputValue(), '男'); assert.equal(await page.locator('#vue-dropdown').inputValue(), '男');
+    });
+    await t.test('失焦或取消后迟到候选不被点击，取消可恢复新一次填写', async () => {
+      const focus = await fill('下拉-focus'); assert.equal(focus.status, 'unsupported'); assert.equal(focus.diagnostic.reasonCode, 'focus_lost'); await page.waitForTimeout(350); assert.equal(await page.evaluate(() => __choiceClicks.focus || 0), 0);
+      const row = scan.rows.find((row) => row.field.label === '下拉-late'); const encoded = await worker.evaluate((scanId) => JSON.stringify(globalThis.__dropdownMessages[scanId].intent), row.field.scanId); await page.evaluate(() => __resetChoice.late());
+      const result = await worker.evaluate(async ({ tabId, encoded }) => (await chrome.scripting.executeScript({ target: { tabId }, args: [encoded], func: async (encoded) => {
+        const intent = JSON.parse(encoded); const item = LocalApplyPageScanner.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId); const controller = new AbortController();
+        const pending = LocalApplyVerifiedFill.fill(item, intent.value, { intent, signal: controller.signal }); setTimeout(() => controller.abort(), 100); const result = await pending; await new Promise((resolve) => setTimeout(resolve, 800)); return { status: result.status, reason: result.reason };
+      } }))[0].result, { tabId, encoded }); assert.equal(result.status, 'failed'); assert.match(result.reason, /取消/); assert.equal(await page.evaluate(() => __choiceClicks.late), 1);
+      await page.evaluate(() => __resetChoice.late()); assert.equal((await fill('下拉-late')).status, 'success'); assert.equal(await page.evaluate(() => __choiceClicks.late), 2);
+    });
+    await t.test('候选准备零点击，克隆句柄/候选替换均失效，来源及文档约束不降级', async () => {
+      const row = scan.rows.find((row) => row.field.label === '下拉-success'); const encoded = await worker.evaluate((scanId) => JSON.stringify(globalThis.__dropdownMessages[scanId].intent), row.field.scanId); await page.evaluate(() => __resetChoice.success());
+      const result = await worker.evaluate(async ({ tabId, encoded }) => (await chrome.scripting.executeScript({ target: { tabId }, args: [encoded], func: async (encoded) => {
+        const intent = JSON.parse(encoded); const S = LocalApplyPageScanner; const U = LocalApplyDropdownControls; const item = S.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId); const plan = LocalApplyFillPlanner.prepare(item, intent).plan;
+        LocalApplyFillPlanner.validate(plan, item, intent, true); const lifecycle = { check: () => S.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId) };
+        const first = await U.query(item.el, intent.value, { lifecycle }); const choice = await U.prepareChoice(first); let copy = false; try { await U.commitChoice(first, JSON.parse(JSON.stringify(choice))); } catch { copy = true; } U.close(first);
+        const next = await U.query(item.el, intent.value, { lifecycle }); const target = await U.prepareChoice(next); const node = document.querySelector('#menu-success [role=option]'); node.replaceWith(node.cloneNode(true)); let replaced = false; try { await U.commitChoice(next, target); } catch { replaced = true; } U.close(next);
+        return { copy, replaced, operation: plan.operation, state: plan.state, adapter: plan.adapterId };
+      } }))[0].result, { tabId, encoded }); assert.deepEqual(result, { copy: true, replaced: true, operation: 'resolve-option', state: 'delegated', adapter: 'dropdown' }); assert.equal(await page.evaluate(() => __choiceClicks.success), 1);
+    });
+    await t.test('保留个人库和旧映射；日志/备份不含查询值或私有候选，零 AI/提交', async () => {
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); const logs = JSON.stringify(await rpc(options, 'diagnostics:read')); const backup = JSON.stringify((await rpc(options, 'localapply:exportBackup')).backup);
+      for (const value of ['intent.', 'plan.', 'choice.', '下拉-success', 'React异步下拉']) assert.ok(!logs.includes(value), value);
+      for (const value of ['intent.', 'plan.', 'choice.']) assert.ok(!backup.includes(value)); assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => __submitCount), 0); assert.deepEqual(errors, []);
+      await page.screenshot({ path: path.join(root, 'dropdown-controls.png'), fullPage: true });
+    });
+  } finally { await context?.close(); api.server.closeAllConnections(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(root) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 日期/电话桥接经过真实后台授权和真实框架，取消/替换只在独立合成页面中注入。
 test('分层第五步：日期电话计划、子项保护及取消', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'date-phone-')); const api = await serve(); let context; const errors = [];
@@ -280,8 +346,8 @@ test('分层第三步：固定注册表与文本执行路径', { timeout: 90000 
         await new Promise((resolve) => setTimeout(resolve, 600)); S.scan(true);
         return { ids: R.ids, frozen: Object.isFrozen(R), register: typeof R.register, adapterId, stopped: stopped.status, beforeWrites, cancelled: cancelled.status, revoked: revoked.status, writes: globalThis.__textWrites - writes, marks: globalThis.__textMarks - marks, legacy: globalThis.__legacyTextCalls };
       } }))[0].result, { tabId, encoded });
-      // 第五步新增日期/电话桥接；保留完整固定列表及全部取消/撤销断言。
-      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
+      // 第六步增加固定下拉桥接；保留完整列表及全部取消/撤销断言。
+      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox', 'date', 'phone', 'dropdown'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
     });
     await t.test('保留个人库、日志白名单及零模型/提交，扫描撤销后可重新使用', async () => {
       scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); assert.ok(scan.rows.length > 0);
@@ -1176,7 +1242,7 @@ async function serve() {
       if (modelApi.chatHold) { modelApi.releaseChat = respond; modelApi.onChat?.(); } else respond();
       return;
     }
-    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js'].includes(pathname)) {
+    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js'].includes(pathname)) {
       if (!frameworkBundles.has(pathname)) frameworkBundles.set(pathname, require('esbuild').build({ entryPoints: [path.join(ROOT, pathname)], bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"', '__VUE_OPTIONS_API__': 'true', '__VUE_PROD_DEVTOOLS__': 'false', '__VUE_PROD_HYDRATION_MISMATCH_DETAILS__': 'false' } }));
       const output = await frameworkBundles.get(pathname); res.setHeader('Content-Type', 'application/javascript'); res.end(output.outputFiles[0].contents); return;
     }
@@ -1184,7 +1250,13 @@ async function serve() {
     try { const body = await fs.readFile(path.join(ROOT, pathname)); res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(body); }
     catch { res.writeHead(404); res.end(); }
   });
-  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  // 系统偶尔分配到 Chromium 禁用的 10080；只关闭本测试服务并有界重取，不关闭浏览器安全策略。
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+    if (server.address().port !== 10080) break;
+    await new Promise((resolve) => server.close(resolve));
+    if (attempt === 3) throw new Error('本地夹具未取得可用测试端口');
+  }
   return { server, calls, modelApi, modelRequests, base: 'http://127.0.0.1:' + server.address().port };
 }
 

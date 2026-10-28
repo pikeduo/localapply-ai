@@ -17,6 +17,7 @@
     if (A.handles(item)) return A.accepted(item, expected);
     if (['select', 'radio', 'checkbox'].includes(control.type)) return global.LocalApplyNativeChoices.accepted(item, expected);
     if (control.type === 'combobox') {
+      if (global.LocalApplyDropdownControls) return global.LocalApplyDropdownControls.accepted(el, expected);
       if (A.dropdown(el)) return A.dropdownAccepted(el, expected);
       const menu = el.getRootNode().getElementById?.(el.getAttribute('aria-controls') || el.getAttribute('aria-owns'));
       const selected = [...(menu?.querySelectorAll('[role="option"][aria-selected="true"]') || [])];
@@ -94,7 +95,7 @@
     const date = adapted && !['phone', 'address'].includes(item.compound?.kind) ? A.dateValue(value) : null;
     const plan = { version: C.VERSION, planId: 'plan.' + crypto.randomUUID(), intentId: intent.intentId,
       binding: { ...intent.binding }, source: { ...intent.source }, controlFingerprint: control.fingerprint, operation,
-      verification: ({ 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state', 'fill-date': 'date-parts', 'fill-phone': 'phone-parts' })[operation] || 'legacy-delayed', state: ['legacy-interaction', 'fill-date', 'fill-phone'].includes(operation) ? 'delegated' : 'ready',
+      verification: ({ 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state', 'fill-date': 'date-parts', 'fill-phone': 'phone-parts', 'resolve-option': 'selected-option' })[operation] || 'legacy-delayed', state: ['legacy-interaction', 'fill-date', 'fill-phone', 'resolve-option'].includes(operation) ? 'delegated' : 'ready',
       ...(adapter ? { adapterId: adapter.id } : {}), ...(targetOption ? { targetOption } : {}),
       ...(prepared?.targetOptions ? { targetOptions: prepared.targetOptions } : {}), ...(prepared?.targetParts ? { targetParts: prepared.targetParts } : {}), ...(prepared?.targetPrecision ? { targetPrecision: prepared.targetPrecision } : {}), ...(typeof prepared?.checked === 'boolean' ? { checked: prepared.checked } : {}), ...(date ? { datePrecision: date.precision } : {}) };
     C.validatePlan(plan, intent);
@@ -167,7 +168,7 @@
         const attempt = await adapter.execute(prepared.plan, context);
         result = attempt.ok ? await adapter.verify(prepared.plan, context) : attempt;
         if (result.ok) global.WangshenFiller.markFilled(item.el);
-        result = { ...result, diagnostic: { phase: attempt.ok ? 'verify' : 'write' } };
+        result = { ...result, diagnostic: { ...result.diagnostic, phase: attempt.ok ? 'verify' : 'write' } };
       } else { validatePrepared(prepared.plan, item, options.intent, true); result = await write(item, value, options); }
     } else result = await write(item, value, options); // 保留本页旧调用兼容，消息入口始终要求后台意图。
     const trace = A.diagnostic?.(item) || {};

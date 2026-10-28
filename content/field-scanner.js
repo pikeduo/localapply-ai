@@ -150,6 +150,8 @@
       let present = Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined && value !== false && String(value).trim() !== '' && !/^(请选择|请选择一项|Select|Please select)$/i.test(String(value).trim());
       if (item.compound?.kind === 'date') present = present && !A.plan(item, value).error;
       if (A.dropdown(item.el) && !item.compound) present = present && (!!A.dropdown(item.el).querySelector('[class*="sd-Input-display-value-"]')?.textContent.trim() || A.dropdownAccepted(item.el, value));
+      // ARIA 搜索框的临时查询值不能令卡片隐藏待填项，必须有真正选中的结构证据。
+      else if (item.control.type === 'combobox' && global.LocalApplyDropdownControls) present = present && global.LocalApplyDropdownControls.accepted(item.el, value);
       return { scanId: item.field.scanId, present: present && item.el.getAttribute('aria-invalid') !== 'true' && item.el.validity?.valid !== false };
     });
   }

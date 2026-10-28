@@ -1,0 +1,22 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>合成异步下拉 · 分层第六步</title><style>body{font:15px/1.5 system-ui;max-width:900px;margin:24px auto}.form-item,fieldset{border:1px solid #ccd6e2;border-radius:10px;padding:12px;margin:10px 0}input{padding:8px}label{margin-right:10px}[role=listbox]{background:#f1f5ff;padding:8px}[role=option]{padding:7px;cursor:pointer}[aria-selected=true]{background:#dbeafe}[hidden]{display:none!important}</style></head><body><h1>搜索和自定义下拉</h1><form id="application"></form><button type="button" id="focus-away">其他操作</button><script>
+window.__choiceClicks={};window.__submitCount=0;window.__queries={};window.__resetChoice={};
+// 每个菜单有明确 ARIA 归属，候选晚到、重复、拒绝、失焦及危险内容均为合成场景。
+for(const mode of ['success','lazy','duplicate','disabled','unsafe','search-only','reject','timeout','late','focus','foreign']){
+  const box=document.createElement('div');box.className='form-item';const label=document.createElement('label');label.htmlFor=mode;label.textContent='下拉-'+mode;
+  const input=document.createElement('input');input.id=mode;input.setAttribute('role','combobox');input.setAttribute('aria-controls',mode==='foreign'?'missing-menu':'menu-'+mode);input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-expanded','false');
+  const menu=document.createElement('div');menu.id='menu-'+mode;menu.setAttribute('role','listbox');menu.hidden=true;box.append(label,input);if(mode!=='lazy')box.append(menu);application.append(box);let timer;
+  const render=()=>{menu.replaceChildren();if(['search-only','timeout'].includes(mode))return;for(let i=0;i<(mode==='duplicate'?2:1);i++){
+    const option=document.createElement('div');option.setAttribute('role','option');option.setAttribute('aria-selected','false');option.setAttribute('data-value',i?'other':'M');option.textContent='男';if(mode==='disabled')option.setAttribute('aria-disabled','true');
+    if(mode==='unsafe'){const button=document.createElement('button');button.type='submit';button.textContent='确认';option.append(button);}
+    option.addEventListener('click',()=>{__choiceClicks[mode]=(__choiceClicks[mode]||0)+1;if(mode!=='reject'){option.setAttribute('aria-selected','true');input.setAttribute('data-value','M');}input.value='男';input.setAttribute('aria-expanded','false');menu.hidden=true;if(mode==='lazy')menu.remove();});menu.append(option);
+  }};
+  input.addEventListener('click',()=>{if(!menu.isConnected)box.append(menu);menu.hidden=false;input.setAttribute('aria-expanded','true');});
+  input.addEventListener('input',()=>{__queries[mode]=(__queries[mode]||0)+1;clearTimeout(timer);menu.replaceChildren();menu.hidden=false;input.setAttribute('aria-expanded','true');timer=setTimeout(render,mode==='late'?650:180);if(mode==='focus')setTimeout(()=>document.getElementById('focus-away').focus(),80);});
+  __resetChoice[mode]=()=>{clearTimeout(timer);input.value='';input.removeAttribute('data-value');menu.replaceChildren();menu.hidden=true;input.setAttribute('aria-expanded','false');};
+}
+// 真正的框架控件在独立根节点渲染，不把 DOM 赋值桩当成 state 更新。
+for(const id of ['dropdown-react','dropdown-vue']){const root=document.createElement('div');root.id=id;application.append(root);}
+// 默认 submit 的伪 combobox 必须拒绝，不能因 ARIA 角色而获得自动提交权限。
+const dangerous=document.createElement('button');dangerous.setAttribute('role','combobox');dangerous.setAttribute('aria-label','危险触发器');dangerous.setAttribute('aria-controls','menu-success');dangerous.textContent='请选择';application.append(dangerous);
+application.addEventListener('submit',(event)=>{event.preventDefault();__submitCount++;});
+</script><script src="/test-pages/dropdown-frameworks.js"></script></body></html>

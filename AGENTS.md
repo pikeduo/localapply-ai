@@ -6,9 +6,10 @@
 
 - 2026-10-25 起以 `docs/DEVELOPMENT_PLAN.md` v2.0 为准；旧阶段三验收为历史证据，不能替代新版 S3-01～S3-09。2026-10-27 用户授权先集中回归，再执行阶段五 S5-01～S5-07；保留阶段 0～4 成果，不进入阶段六，不提交或推送。
 - 扫描先经 `content/field-adapters.js` 分类/局部复合分组，再生成字段；国码、年月日子项、日历候选及网站操作不得入库。复合节点仅保留内容脚本内存，`features.layout` 为 v3 可选白名单，旧指纹不变。
-- 2026-10-28 分层第 01～05 步分别获授权实施，第 05 步后停止，第 06 步搜索/自定义下拉须另获授权。冻结旧 features/semanticId 和 v5；新语义/控件描述仅驻留运行时，不能按语义 key 合并记录或冒称跨控件历史映射已完成。
+- 2026-10-28 分层第 01～06 步分别获授权实施，第 06 步后停止，第 07 步地区级联须另获授权。冻结旧 features/semanticId 和 v5；新语义/控件描述仅驻留运行时，不能按语义 key 合并记录或冒称跨控件历史映射已完成。
 - `data/fill-contract.js` 的 FillIntent 只由后台规范来源生成，绑定会话/文档/扫描/条目/revision；扫描契约版本未加载须刷新，禁止降级发送值。FillPlan 仅本页私有准备/一次性验证，严禁 UI/AI 传入脚本或计划；复杂控件明确 delegated 并继续旧路径。意图、计划、目标候选及快照禁止进入库/备份/AI/日志，不以 ready 冒充写入成功。
-- `content/controls/registry.js` 固定注册 text/textarea/contenteditable/select/radio/checkbox/date/phone，禁止动态脚本注册；detect 多重命中拒绝。文本只经 fillTextOnly 原语，原生选择只使用当前候选的唯一标签/编码；同标签不同码、重复码、禁用及受保护目标拒绝。单/多选按完整选中集合保护和回读，计划保存节点数组副本及状态；不完整单选组不得间接清除隐藏/禁用成员。失败不重写/换路径。contenteditable 使用同一分行读法。批次 UI/会话整合、地址和独立自定义下拉仍待后续步骤。
+- `content/controls/registry.js` 固定注册 text/textarea/contenteditable/select/radio/checkbox/date/phone/dropdown，禁止动态脚本注册；detect 多重命中拒绝。文本只经 fillTextOnly 原语，原生选择只使用当前候选的唯一标签/编码；同标签不同码、重复码、禁用及受保护目标拒绝。单/多选按完整选中集合保护和回读，计划保存节点数组副本及状态；不完整单选组不得间接清除隐藏/禁用成员。失败不重写/换路径。contenteditable 使用同一分行读法。批次 UI/会话整合和地址注册仍待后续步骤。
+- `content/controls/dropdown.js` 的 resolve-option 外层计划为 delegated，查询、唯一候选准备及提交独立；候选是本页 WeakMap 身份及三秒/一次性句柄，复制/重绘/跨查询无效。通用 ARIA 须有明确唯一列表 ID，可延迟挂载；Moka 复用局部菜单与正式标签。焦点/内容/文档变化、取消或超时停止后续点击；按钮须显式 type=button，不能因 combobox 角色而点击提交。搜索词不算成功或完成状态；须选中证据和显示值跨重绘保持。日期/电话子菜单共用管线，失败不走第二路径；不猜多选/无关联菜单。
 - `content/controls/date-phone.js` 桥接既有局部日期/电话逻辑，不复制日历实现；计划保留来源 datePrecision、目标 targetPrecision（未打开日历为 unknown）及固定子项句柄，仍标 delegated。一次性快照绑定所有子项/候选/部分值；交互生命周期在每次等待后及动作前检查取消、授权、成员和外部修改。只有本次紧随已知写入的节点可更新观察值，不得掩盖其他子项变化；相同年月不重写，空编码占位不算已有资料。新日期文本只走 fillTextOnly，不能触发旧全页候选搜索。
 - Moka 的非标准 `autocomplete="new_password"` 不单独视为密码，真实认证类型/名称和标准密码属性仍拦截。主动扫描后的完成状态独立返回 `{scanId,present}`，不得夹带网页值或进入 AI；卡片仅列未填/失败/冲突项，旧侧栏保留原列表。轮询不得重建展开的资料编辑器；下拉仅点选绑定弹层或局部容器内的唯一精确选项，延迟回读验证。
 - Moka Sugar 菜单覆盖 `sd-Dropdown-dropdown-*`、默认 `sd-Menu-container-*` 与自定义项内部点击节点。日历按初始年/月/日面板识别精度，不能把日历导航误当提交；年月原文只规范明确日期，不补日。已手动打开的无关联弹层仅通过同一控件有界重开取得归属，禁止跨菜单猜选及点击日历内的提交按钮/链接。
