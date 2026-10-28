@@ -5,7 +5,7 @@
   const keys = ['province', 'city', 'district']; const executions = new WeakMap();
 
   // 固定错误不包含实际地址、候选文字或页面 URL。
-  function failure(reason, status = 'unsupported', code = 'unsupported_control', key, counts = {}) { return { ok: false, status, reason, diagnostic: { phase: 'options', reasonCode: code, ...(key ? { part: key } : {}), ...counts } }; }
+  function failure(reason, status = 'unsupported', code = status === 'unsupported' ? 'unsupported_control' : 'write_rejected', key, counts = {}) { return { ok: false, status, reason, diagnostic: { phase: 'options', reasonCode: code, ...(key ? { part: key } : {}), ...counts } }; }
   // 原生编码和实际标签分别读取，避免把省份代码与中文名称直接比较。
   function raw(node) {
     const value = A.dropdown(node) ? A.dropdownText(node) : 'value' in node ? node.value : node.textContent.trim();
@@ -149,9 +149,9 @@
     },
     // 三个成员跨延迟重绘窗口都须保持相同路径，任一级回退均不计成功。
     async verify(plan, context) {
-      const state = executions.get(plan); if (!state) return failure('地址计划尚未执行', 'failed');
-      for (let count = 0; count < 8; count++) { await delay(context.signal); try { guard(context, state); } catch (error) { return error?.diagnostic ? error : failure('地址控件已失效', 'failed'); } if (!accepted(context.item, context.intent.value)) return failure('网页未接受完整地址或受控组件已回退', 'failed', 'value_not_accepted'); }
-      return { ok: true, status: 'success', verifiedAt: new Date().toISOString() };
+      const state = executions.get(plan); if (!state) return global.LocalApplyFillResult.failure('stale_plan');
+      executions.delete(plan);
+      return global.LocalApplyFillVerification.run(context, () => guard(context, state), () => accepted(context.item, context.intent.value));
     }
   });
   global.LocalApplyAddressControls = Object.freeze({ snapshot, unchanged, accepted, hasConflict, read });

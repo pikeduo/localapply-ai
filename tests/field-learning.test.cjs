@@ -11,7 +11,7 @@ const ROOT = path.resolve(__dirname, '..');
 async function fixture() {
   const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let completion = []; let recordBlocks = []; let onAdd = () => {}; let fillContractVersion = 1;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
-  for (const file of ['templates','providers','key-vault','resume','field-matching','fill-contract','field-suggestions','applications','local-store','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
+  for (const file of ['templates','providers','key-vault','resume','field-matching','fill-contract','fill-result','field-suggestions','applications','local-store','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
   const repo = context.LocalApplyStore.createRepository(storage); const initial = await repo.readLegacy(); const configured = structuredClone(initial);
   configured.settings.model = 'synthetic-field-model'; await repo.saveLegacy(initial, configured);

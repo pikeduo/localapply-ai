@@ -18,7 +18,7 @@
   }
 
   // 固定错误仅附白名单数量/原因码，不能把候选标签、编码或资料值写入日志。
-  function failure(reason, status = 'unsupported', reasonCode = 'unsupported_control', counts = {}) {
+  function failure(reason, status = 'unsupported', reasonCode = status === 'unsupported' ? 'unsupported_control' : 'write_rejected', counts = {}) {
     return { ok: false, status, reason, diagnostic: { phase: 'options', reasonCode, ...counts } };
   }
 
@@ -97,16 +97,6 @@
     return null;
   }
 
-  // 取消立即结束观察窗口，监听器随定时器一起释放，不安排任何迟到写入。
-  function delay(ms, signal) {
-    if (signal?.aborted) return Promise.resolve();
-    return new Promise((done) => {
-      // 正常完成和取消共享清理，避免长时间页面会话积累监听器。
-      const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); done(); };
-      const timer = setTimeout(finish, ms); signal?.addEventListener('abort', finish, { once: true });
-    });
-  }
-
   // 候选描述只有本页随机句柄及当前真实标签/编码，不成为持久化业务规则。
   function option(row) { return { handle: 'option.' + crypto.randomUUID(), label: row.label, value: row.value }; }
 
@@ -154,12 +144,9 @@
       },
       // 跨框架重绘窗口回读完整选中集合，失败不记成功也不重试点击。
       async verify(plan, context) {
-        const state = executions.get(plan); if (!state) return failure('填写计划尚未执行', 'failed');
-        for (const ms of [120, 380]) {
-          await delay(ms, context.signal); const error = guard(context, state); if (error) return error;
-          if (!matches(context.item, state)) return failure('网页未接受新值、校验失败或受控组件已回退', 'failed', 'value_not_accepted');
-        }
-        return { ok: true, status: 'success', verifiedAt: new Date().toISOString() };
+        const state = executions.get(plan); if (!state) return global.LocalApplyFillResult.failure('stale_plan');
+        executions.delete(plan);
+        return global.LocalApplyFillVerification.run(context, () => guard(context, state), () => matches(context.item, state));
       }
     });
   }

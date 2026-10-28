@@ -8,6 +8,72 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 第八步使用真实后台来源、独立浏览器及真实 React/Vue；原因码必须来自实际回读。
+test('分层第八步：统一验证、准确原因码与日志持久性', { timeout: 90000 }, async (t) => {
+  const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'verification-'));const api=await serve();let context;const errors=[];
+  const name='合成验证姓名';let before;let extensionId;
+  try {
+    context=await launch(profile);context.setDefaultTimeout(10000);const loaded=await extension(context);const worker=loaded.worker;extensionId=loaded.extensionId;
+    const options=await context.newPage();await options.goto(`chrome-extension://${extensionId}/options/options.html`);await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+    const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
+    for(const [fieldId,value] of [['builtin.name',name],['builtin.gender','男'],['builtin.birthDate','2001-06']]) await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId,value}}});
+    before=(await rpc(options,'localapply:read')).database;
+    const page=await context.newPage();page.on('pageerror',(error)=>errors.push(error.message));await page.goto(api.base+'/test-pages/verification-controls.html');await page.locator('#verify-react-stable').waitFor();await page.locator('#verify-vue-stable').waitFor();
+    const tabId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((row)=>row.url===url).id,page.url());
+    await worker.evaluate(()=>{const original=chrome.tabs.sendMessage;globalThis.__verifyMessages={};chrome.tabs.sendMessage=function(...args){if(args[1]?.type==='learning:fill')globalThis.__verifyMessages[args[1].scanId]=structuredClone(args[1]);return original.apply(chrome.tabs,args);};});
+    let scan=await rpc(options,'learning:scanPage',{tabId,confirmed:true});
+    // 只选择规范库中的合成来源，不让测试 UI 指定脚本或计划。
+    async function fill(label,fieldId='builtin.name') {
+      const row=scan.rows.find((row)=>row.field.label===label);assert.ok(row,label);await rpc(options,'learning:select',{sessionId:scan.sessionId,scanId:row.field.scanId,fieldId});
+      return (await rpc(options,'learning:fill',{sessionId:scan.sessionId,scanId:row.field.scanId,confirmed:true})).rows.find((next)=>next.field.scanId===row.field.scanId);
+    }
+    await t.test('真实 React/Vue 稳定状态跨观察窗口并重绘保持，相同内容零写入',async()=>{
+      for(const framework of ['React','Vue']) {const result=await fill(framework+'稳定');assert.equal(result.status,'success',result.reason);assert.equal(result.diagnostic.reasonCode,'verified');}
+      await page.evaluate(()=>{__verifyProbe.redrawReact();__verifyProbe.redrawVue();});assert.equal(await page.locator('#verify-react-stable').inputValue(),name);assert.equal(await page.locator('#verify-vue-stable').inputValue(),name);
+      const changes=await page.evaluate(()=>__verifyChanges);assert.equal((await fill('React稳定')).status,'success');assert.equal(await page.evaluate(()=>__verifyChanges),changes);
+    });
+    await t.test('框架先接受后延迟回退准确返回 controlled_reverted，不冒称写入成功',async()=>{
+      for(const framework of ['React','Vue']) {const result=await fill(framework+'延迟回退');assert.equal(result.status,'failed');assert.equal(result.diagnostic.reasonCode,'controlled_reverted',framework+':'+result.reason);}
+      assert.equal(await page.locator('#verify-react-revert').inputValue(),'');assert.equal(await page.locator('#verify-vue-revert').inputValue(),'');
+    });
+    await t.test('标准有效性与延迟 aria-invalid 均返回 validation_failed，控件各只写一次',async()=>{
+      for(const [label,fieldId] of [['原生校验','builtin.gender'],['延迟ARIA校验','builtin.name']]) {const count=await page.evaluate(()=>__verifyChanges);const result=await fill(label,fieldId);assert.equal(result.status,'failed');assert.equal(result.diagnostic.reasonCode,'validation_failed',result.reason);assert.equal(await page.evaluate(()=>__verifyChanges),count+1);}
+    });
+    await t.test('显式非提交按钮仍支持下拉适配，唯一候选选中后通过统一验证',async()=>{
+      const result=await fill('明确按钮下拉','builtin.gender');assert.equal(result.status,'success',result.reason);assert.equal(result.diagnostic.reasonCode,'verified');assert.equal(await page.locator('#verify-button').getAttribute('data-value'),'M');assert.equal(await page.evaluate(()=>__submitCount),0);
+    });
+    await t.test('精度不足、选项不存在/歧义保留准确原因和旧终态，拒绝时零事件',async()=>{
+      const changes=await page.evaluate(()=>__verifyChanges);
+      for(const [label,id,code] of [['精度测试','builtin.birthDate','insufficient_date_precision'],['缺少选项','builtin.gender','no_exact_option'],['重复选项','builtin.gender','ambiguous_option']]) {const result=await fill(label,id);assert.notEqual(result.status,'success');assert.equal(result.diagnostic.reasonCode,code,result.reason);}
+      assert.equal(await page.evaluate(()=>__verifyChanges),changes);
+    });
+    await t.test('取消与扫描撤销停止统一回读，无迟到重写或成功标记，已有不同值保留',async()=>{
+      assert.equal((await fill('取消测试')).status,'success');const row=scan.rows.find((row)=>row.field.label==='取消测试');
+      const encoded=await worker.evaluate((id)=>JSON.stringify(__verifyMessages[id].intent),row.field.scanId);
+      const result=await worker.evaluate(async({tabId,encoded})=>(await chrome.scripting.executeScript({target:{tabId},args:[encoded],func:async(encoded)=>{
+        const intent=JSON.parse(encoded);const S=LocalApplyPageScanner;const V=LocalApplyVerifiedFill;const item=S.record(intent.binding.scanId,intent.binding.documentId,intent.binding.semanticId);const original=WangshenFiller.fillTextOnly;const mark=WangshenFiller.markFilled;let writes=0;let marks=0;
+        WangshenFiller.fillTextOnly=(...args)=>{writes++;return original(...args);};WangshenFiller.markFilled=(...args)=>{marks++;return mark(...args);};
+        try {
+          item.el.value='';const controller=new AbortController();const pending=V.fill(item,intent.value,{intent,signal:controller.signal});setTimeout(()=>controller.abort(),220);const cancelled=await pending;
+          item.el.value='';const next=V.fill(item,intent.value,{intent});setTimeout(()=>S.revoke(),220);const stale=await next;await new Promise((resolve)=>setTimeout(resolve,550));
+          return {cancelled:cancelled.diagnostic.reasonCode,stale:stale.diagnostic.reasonCode,writes,marks};
+        } finally {WangshenFiller.fillTextOnly=original;WangshenFiller.markFilled=mark;}
+      }}))[0].result,{tabId,encoded});
+      assert.deepEqual(result,{cancelled:'cancelled',stale:'stale_context',writes:2,marks:0});scan=await rpc(options,'learning:scanPage',{tabId,confirmed:true});
+      await page.locator('#verify-cancel').fill('网页原值');const conflict=await fill('取消测试');assert.equal(conflict.status,'needs_confirmation');assert.equal(conflict.diagnostic.reasonCode,'existing_value_preserved');assert.equal(await page.locator('#verify-cancel').inputValue(),'网页原值');
+    });
+    await t.test('原诊断管线保留新旧固定码，个人库不变，零 AI/提交且无私密轨迹',async()=>{
+      const logs=await rpc(options,'diagnostics:read');const encoded=JSON.stringify(logs);for(const code of ['verified','controlled_reverted','validation_failed','no_exact_option','ambiguous_option','insufficient_date_precision','existing_value_preserved'])assert.ok(logs.rows.some((row)=>row.fill?.reasonCode===code),code);
+      for(const secret of [name,'intent.','plan.','synthetic-validation','网页原值',page.url()])assert.ok(!encoded.includes(secret),secret);assert.deepEqual((await rpc(options,'localapply:read')).database,before);assert.equal(api.calls.length,0);assert.equal(await page.evaluate(()=>__submitCount),0);assert.deepEqual(errors,[]);
+      await page.screenshot({path:path.join(root,'verification-controls.png'),fullPage:true});
+    });
+    await t.test('整个 Chromium 进程重启后日志仍含新增码，资料与 Schema v5 原样保留',async()=>{
+      await context.close();context=await launch(profile);await extension(context);const reopened=await context.newPage();await reopened.goto(`chrome-extension://${extensionId}/options/options.html`);await reopened.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+      const logs=await rpc(reopened,'diagnostics:read');assert.ok(logs.rows.some((row)=>row.fill?.reasonCode==='controlled_reverted'));assert.ok(logs.rows.some((row)=>row.fill?.reasonCode==='validation_failed'));assert.deepEqual((await rpc(reopened,'localapply:read')).database,before);
+    });
+  } finally {await context?.close();api.server.closeAllConnections();await new Promise((resolve)=>api.server.close(resolve));assert.ok(path.resolve(profile).startsWith(path.resolve(root)+path.sep));await fs.rm(profile,{recursive:true,force:true,maxRetries:3});}
+});
+
 // 地区路径只用合成名称/代码；真实扫描、后台来源与框架状态验证不触碰用户浏览器。
 test('分层第七步：地址级联路径、部分保护与异步取消', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'address-')); const api = await serve(); let context; const errors = [];
@@ -40,7 +106,8 @@ test('分层第七步：地址级联路径、部分保护与异步取消', { tim
     await t.test('异父级同名市、重复候选及错误绑定拒绝，网页已有不同省市区保持', async () => {
       for (const mode of ['stale','duplicate','binding']) { const row = await fill('地址-' + mode); assert.equal(row.status, 'unsupported', mode + '：' + row.reason); assert.equal(await page.locator(`#${mode}-city`).inputValue(), ''); assert.equal(await page.evaluate((mode) => __addressWrites[mode].city || 0, mode), 0); }
       await page.locator('#native-province').selectOption('pb'); const row = await fill('地址-native'); assert.equal(row.status, 'needs_confirmation'); assert.equal(await page.locator('#native-province').inputValue(), 'pb');
-      const rejected = await fill('地址-rejected'); assert.equal(rejected.status, 'failed'); assert.equal(rejected.diagnostic.reasonCode, 'value_not_accepted');
+      // 第八步在真实观察到地址先接受后丢失时使用专属回退码，保留失败状态断言。
+      const rejected = await fill('地址-rejected'); assert.equal(rejected.status, 'failed'); assert.equal(rejected.diagnostic.reasonCode, 'controlled_reverted');
     });
     await t.test('真实 React/Vue 和明确父级绑定的 ARIA 三级状态正确，重绘保持', async () => {
       for (const label of ['React地址','Vue地址','地址-aria']) { const row = await fill(label); assert.equal(row.status, 'success', label + '：' + row.reason); }
@@ -163,7 +230,8 @@ test('分层第五步：日期电话计划、子项保护及取消', { timeout: 
     await t.test('真实 React/Vue 接受月份和国码电话，重绘保持，拒绝组件失败', async () => {
       for (const framework of ['React', 'Vue']) {
         for (const [suffix, fieldId] of [['月份', 'builtin.graduationDate'], ['手机号', 'builtin.phone']]) { const row = await fill(framework + suffix, fieldId); assert.equal(row.status, 'success', framework + suffix + '：' + row.reason); }
-        const rejected = await fill(framework + '拒绝月份', 'builtin.graduationDate'); assert.equal(rejected.status, 'failed'); assert.match(rejected.reason, /回退/);
+        // 立即拒绝与延迟回退均失败，按固定原因码区分，不能从中文提示猜测行为。
+        const rejected = await fill(framework + '拒绝月份', 'builtin.graduationDate'); assert.equal(rejected.status, 'failed'); assert.ok(['write_rejected','value_not_accepted','controlled_reverted'].includes(rejected.diagnostic.reasonCode),rejected.diagnostic.reasonCode);
       }
       const expected = { date: '2028-06', country: 'gb', phone: '2070000000' }; assert.deepEqual(await page.evaluate(() => __datePhoneProbe.react()), expected); assert.deepEqual(await page.evaluate(() => __datePhoneProbe.vue()), expected);
       await page.evaluate(() => { __datePhoneProbe.redrawReact(); __datePhoneProbe.redrawVue(); });
@@ -381,7 +449,8 @@ test('分层第三步：固定注册表与文本执行路径', { timeout: 90000 
     });
     await t.test('真实 React/Vue 状态接受新值且重绘保持，拒绝组件准确报告回退', async () => {
       for (const label of ['React受控姓名', 'Vue受控姓名']) assert.equal((await fill(label)).status, 'success');
-      for (const label of ['React拒绝回退姓名', 'Vue拒绝回退姓名']) { const row = await fill(label); assert.equal(row.status, 'failed'); assert.match(row.reason, /回退/); }
+      // 第八步保留拒绝失败断言，立即拒绝不能冒称观察到了先接受再回退。
+      for (const label of ['React拒绝回退姓名', 'Vue拒绝回退姓名']) { const row = await fill(label); assert.equal(row.status, 'failed'); assert.ok(['write_rejected','value_not_accepted','controlled_reverted'].includes(row.diagnostic.reasonCode),row.diagnostic.reasonCode); }
       assert.equal(await page.evaluate(() => __frameworkProbe.react()), name); assert.equal(await page.evaluate(() => __frameworkProbe.vue()), name);
       await page.evaluate(() => { __frameworkProbe.rerenderReact(); __frameworkProbe.rerenderVue(); });
       assert.equal(await page.locator('#real-react-name').inputValue(), name); assert.equal(await page.locator('#real-vue-name').inputValue(), name);
@@ -1301,7 +1370,7 @@ async function serve() {
       if (modelApi.chatHold) { modelApi.releaseChat = respond; modelApi.onChat?.(); } else respond();
       return;
     }
-    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js', '/test-pages/address-frameworks.js'].includes(pathname)) {
+    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js', '/test-pages/address-frameworks.js', '/test-pages/verification-frameworks.js'].includes(pathname)) {
       if (!frameworkBundles.has(pathname)) frameworkBundles.set(pathname, require('esbuild').build({ entryPoints: [path.join(ROOT, pathname)], bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"', '__VUE_OPTIONS_API__': 'true', '__VUE_PROD_DEVTOOLS__': 'false', '__VUE_PROD_HYDRATION_MISMATCH_DETAILS__': 'false' } }));
       const output = await frameworkBundles.get(pathname); res.setHeader('Content-Type', 'application/javascript'); res.end(output.outputFiles[0].contents); return;
     }

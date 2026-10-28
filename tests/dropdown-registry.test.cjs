@@ -20,7 +20,7 @@ function fixture() {
   context.LocalApplyFieldAdapters = { dropdown: () => null, handles: () => false, exclusion: () => null, optionEqual: (a, b) => a === b };
   context.LocalApplyDropdownDOM = { usable: (node) => node.isConnected && !node.disabled, optionLabel: (node) => node.textContent.trim(), popupRoots: () => [menu], trace() {},
     async openControl(node, calendar, lifecycle) { lifecycle.check(); node.focus(); lifecycle.changed(node); return new Set([menu]); } };
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/controls/dropdown.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/fill-result.js', 'content/controls/verification.js', 'content/controls/dropdown.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   return { el, nodes, menu, attrs, document, option, context, U: context.LocalApplyDropdownControls, C: context.LocalApplyFillContract, adapter: context.LocalApplyDropdownAdapters[0], clicks: () => clicks, writes: () => writes };
 }
 

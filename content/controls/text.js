@@ -2,6 +2,7 @@
 (function (global) {
   'use strict';
   const inputTypes = ['text', 'email', 'tel', 'number', 'url'];
+  const executions = new WeakSet();
 
   // 取消或文档失效均返回固定原因；只读/菜单控件不能被普通文本路径绕过。
   function guard(context, writing = false) {
@@ -14,16 +15,6 @@
     if (el.getAttribute('role') === 'combobox' || /^(list|both)$/.test(el.getAttribute('aria-autocomplete') || '')
       || /^(true|listbox|tree|grid|dialog)$/.test(el.getAttribute('aria-haspopup') || '')) return { ok: false, status: 'unsupported', reason: '此控件需要选项适配器，未按普通文本填写' };
     return null;
-  }
-
-  // 等待仅用于回读；取消时立即结束并释放监听器，不安排迟到写入。
-  function delay(ms, signal) {
-    if (signal?.aborted) return Promise.resolve();
-    return new Promise((resolve) => {
-      // 定时器和取消共享清理入口，避免遗留监听器。
-      const finish = () => { clearTimeout(timer); signal?.removeEventListener('abort', finish); resolve(); };
-      const timer = setTimeout(finish, ms); signal?.addEventListener('abort', finish, { once: true });
-    });
   }
 
   // 按真实标签/控件描述识别三种文本能力，复合项和已知菜单留给原适配器。
@@ -49,20 +40,17 @@
       execute(plan, context) {
         const error = guard(context, true); if (error) return error;
         if (plan.adapterId !== id || !['write-value', 'verify-existing'].includes(plan.operation)) throw new Error('文本填写计划不匹配');
-        context.consumePlan(plan);
+        context.consumePlan(plan); executions.add(plan);
         if (plan.operation === 'verify-existing') return { ok: true };
         try {
           const result = global.WangshenFiller.fillTextOnly(context.item.el, context.intent.value);
           return result.ok ? { ok: true } : { ok: false, status: 'failed', reason: '网页未接受文本或受控组件已回退' };
         } catch { return { ok: false, status: 'failed', reason: '网页拒绝文本写入' }; }
       },
-      // 跨两个观察窗口检查校验状态和重绘回退，撤销后不再报告成功。
+      // 只验证已消费的原计划；共用回读检查校验和重绘，不能重放验证成功。
       async verify(plan, context) {
-        for (const ms of [120, 380]) {
-          await delay(ms, context.signal); const error = guard(context); if (error) return error;
-          if (!context.accepted(context.intent.value)) return { ok: false, status: 'failed', reason: '网页未接受新值、校验失败或受控组件已回退' };
-        }
-        return { ok: true, status: 'success', verifiedAt: new Date().toISOString() };
+        if (!executions.delete(plan)) return global.LocalApplyFillResult.failure('stale_plan');
+        return global.LocalApplyFillVerification.run(context, () => guard(context));
       }
     });
   }

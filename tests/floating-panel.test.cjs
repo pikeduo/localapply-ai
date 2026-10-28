@@ -14,7 +14,7 @@ function fixture() {
     tabs: { get: async () => ({ url }), sendMessage: async (id, message) => { if (message.type === 'wsa:floatingProbe') return { ok: true, open, documentId: doc };
       if (message.type === 'wsa:floatingOpen') { open = true; return { ok: true }; } if (message.type === 'wsa:floatingClose') open = false; return { ok: true }; } } };
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date });
-  for (const file of ['diagnostics','floating-panel']) vm.runInContext(fs.readFileSync(path.join(__dirname,'../data',file + '.js'),'utf8'), context);
+  for (const file of ['fill-result','diagnostics','floating-panel']) vm.runInContext(fs.readFileSync(path.join(__dirname,'../data',file + '.js'),'utf8'), context);
   const diagnostics = context.LocalApplyDiagnostics.create(storage);
   const manager = context.LocalApplyFloatingPanel.create(browser, diagnostics);
   const sender = { id: browser.runtime.id, url: browser.runtime.getURL('panel/panel.html'), tab: { id: 1 }, frameId: 4 };

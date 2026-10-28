@@ -31,16 +31,6 @@
       || node.closest('fieldset[disabled],button,a,[role="button"]') || A.exclusion(node, item.field.label)?.category === 'security_control')) throw new Error('日期或电话控件不可操作，已停止填写');
   }
 
-  // 观察窗口支持及时取消，只做回读，不安排任何迟到写入。
-  function delay(ms, signal) {
-    if (signal?.aborted) return Promise.resolve();
-    return new Promise((resolve) => {
-      // 共用清理入口释放定时器及信号监听器。
-      const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); };
-      const timer = setTimeout(done, ms); signal?.addEventListener('abort', done, { once: true });
-    });
-  }
-
   // 两种固定桥接能力不吸收地址或普通电话文本框，自定义下拉仍由旧局部实现处理。
   function adapter(id) {
     return Object.freeze({ id,
@@ -76,13 +66,9 @@
       },
       // 完整回读每个子项和控件校验状态，受控回退不能当成成功。
       async verify(plan, context) {
-        const state = executions.get(plan); if (!state) return { ok: false, status: 'failed', reason: '填写计划尚未执行' };
-        for (const ms of [120, 380]) {
-          await delay(ms, context.signal);
-          try { guard(context, state); } catch { return { ok: false, status: 'failed', reason: context.signal?.aborted ? '已取消填写' : '日期或电话控件已变化，已停止验证' }; }
-          if (context.item.el.validity?.valid === false || context.item.el.getAttribute('aria-invalid') === 'true' || !A.accepted(context.item, context.intent.value)) return { ok: false, status: 'failed', reason: '网页未接受新值、校验失败或受控组件已回退' };
-        }
-        return { ok: true, status: 'success', verifiedAt: new Date().toISOString() };
+        const state = executions.get(plan); if (!state) return global.LocalApplyFillResult.failure('stale_plan');
+        executions.delete(plan);
+        return global.LocalApplyFillVerification.run(context, () => guard(context, state), () => A.accepted(context.item, context.intent.value));
       }
     });
   }

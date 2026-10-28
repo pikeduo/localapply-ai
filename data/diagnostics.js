@@ -3,7 +3,7 @@
   'use strict';
   const KEY = 'localapply.diagnostics';
   const MAX_ROWS = 400;
-  const fillReasons = { verified: '填写后回读验证成功', popup_not_found: '未找到属于当前控件的弹层', options_not_found: '弹层已关联但没有可选项', no_exact_option: '候选中没有唯一精确匹配', ambiguous_option: '存在多个相同候选，已停止选择', focus_lost: '打开弹层后焦点离开当前控件', value_not_accepted: '网页未接受选项或随后回退', existing_value_preserved: '网页已有内容，已保留', invalid_date: '日期格式或范围不符合要求', insufficient_date_precision: '本地日期精度不足，未补月日', unsupported_control: '控件结构暂不支持', invalid_value_type: '资料类型不符合控件要求', write_rejected: '控件拒绝写入', operation_error: '填写通信或校验发生异常' };
+  const fillReasons = global.LocalApplyFillResult.REASONS;
   const operations = ['panel.open','panel.close','page.presence','page.error','ui.error','jobs.scan','jobs.submitted','jobs.feedback','learning.scanPage','learning.prepareRecords','learning.prepareAI','learning.recognize','learning.cancelAI','learning.ignore','learning.select','learning.readField','learning.previewValue','learning.commitValue','learning.fill','learning.remember','learning.revoke','learning.editRule','learning.deleteRule','learning.undoRule','localapply.command','localapply.saveLegacy','localapply.vault','localapply.previewImport','wsa.aiChat','wsa.listModels','wsa.probeCapabilities','wsa.resumeRoute','wsa.aiExtractResume','wsa.cancelResume','runtime.request'];
   // 将异常归为稳定错误码，外部响应、用户标签和凭据不进入日志。
   function errorInfo(error) {
@@ -15,15 +15,11 @@
   }
   // 控件轨迹仅保留固定枚举、数量和布尔状态，不接受标签、候选文字、字段值或页面选择器。
   function fillInfo(detail) {
-    if (!detail || typeof detail !== 'object') return null;
-    const result = {};
-    const enums = { adapter: ['moka-dropdown','native-select','aria-combobox','date','phone','address','radio','checkbox','text'], phase: ['plan','protect','open','options','select','write','verify'], status: ['success','failed','unsupported','needs_confirmation'], part: ['year','month','day','country','number','province','city','district'], controlType: ['text','textarea','email','tel','number','url','date','month','datetime-local','select','radio','checkbox','combobox','contenteditable'], fieldKind: ['education','employment','internship','project','award','family','certificate','paper'], popupRelation: ['aria','portal','local','none'] };
-    for (const [key, allowed] of Object.entries(enums)) if (allowed.includes(detail[key])) result[key] = detail[key];
-    if (Object.hasOwn(fillReasons, detail.reasonCode)) { result.reasonCode = detail.reasonCode; result.message = fillReasons[detail.reasonCode]; }
-    for (const key of ['fieldNumber','candidateCount','matchCount','popupCount','newPopupCount','elapsedMs']) if (Number.isInteger(detail[key]) && detail[key] >= 0) result[key] = Math.min(detail[key], 10000000);
-    for (const key of ['searchable','focused','associatedPopup','traceAvailable']) if (typeof detail[key] === 'boolean') result[key] = detail[key];
+    const result = global.LocalApplyFillResult.trace(detail);
+    if (result.reasonCode) result.message = fillReasons[result.reasonCode];
     return Object.keys(result).length ? result : null;
   }
+
   // 序列化读写并限制七天/400 条，日志存储独立于资料与备份。
   function create(storage) {
     let pending = Promise.resolve(); let lastWriteFailed = false;

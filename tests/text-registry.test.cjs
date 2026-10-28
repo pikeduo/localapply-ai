@@ -10,7 +10,7 @@ const ROOT = path.resolve(__dirname, '..');
 // 在独立隔离世界载入实际契约/注册表，赋值桩禁止进入旧候选搜索路径。
 function fixture(type = 'text', value = '合成文本') {
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date, setTimeout, clearTimeout, AbortController });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/fill-result.js', 'content/field-adapters.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   const M = context.FieldMatchingEngine; const C = context.LocalApplyFillContract;
   const field = { scanId: 'scan.synthetic', label: '合成字段', name: '', placeholder: '', options: [], group: '', kind: '', degree: '', index: 0, type }; field.semanticId = M.semanticId(field);
   const attrs = { type: type === 'textarea' || type === 'contenteditable' ? null : type }; let active = true; let writes = 0; let marks = 0;

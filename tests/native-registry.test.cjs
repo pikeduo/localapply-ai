@@ -12,12 +12,12 @@ function fixture(type = 'select', value = '男', multiple = false) {
   const root = {}; let writes = 0; let marks = 0; let active = true;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date, setTimeout, clearTimeout, AbortController,
     Event: class { constructor(type) { this.type = type; } }, HTMLSelectElement: class {}, HTMLOptionElement: class {} });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/fill-result.js', 'content/field-adapters.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   // 标签通过原生 labels 暴露，另保留属性供测试模拟禁用/标签变更。
   function node(label, code, tagName = 'INPUT') {
     const attrs = {}; const row = { tagName, type, name: 'synthetic', form: null, textContent: label, labels: [{ textContent: label }], value: code,
       selected: false, checked: false, disabled: false, isConnected: true, attrs, getAttribute: (key) => attrs[key] ?? null,
-      getRootNode: () => root, closest: (selector) => selector === 'label' ? { textContent: label } : null,
+      getRootNode: () => root, matches: () => false, closest: (selector) => selector === 'label' ? { textContent: label } : null,
       dispatchEvent() {}, click() { writes++; if (type === 'radio') item.members.forEach((member) => { member.checked = member === row; }); else row.checked = !row.checked; row.onClick?.(); } };
     return row;
   }

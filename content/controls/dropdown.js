@@ -3,6 +3,7 @@
   'use strict';
   const A = global.LocalApplyFieldAdapters; const D = global.LocalApplyDropdownDOM;
   const active = new WeakMap(); const receipts = new WeakMap(); const choices = new WeakMap();
+  const executed = new WeakSet();
 
   // 固定状态仅带白名单原因码；不把标签、编码、搜索词或原始异常带入诊断。
   function failure(reason, code = 'unsupported_control', status = 'unsupported') { return { ok: false, status, reason, diagnostic: { reasonCode: code } }; }
@@ -155,18 +156,15 @@
     // 消费唯一外层计划后才查询；所有回调继续核对原文档/来源及控件节点。
     async execute(plan, context) {
       if (plan.adapterId !== 'dropdown') throw new Error('下拉计划不匹配'); context.consumePlan(plan);
+      executed.add(plan);
       if (context.signal?.aborted) return failure('已取消填写', 'write_rejected', 'failed');
       if (plan.operation === 'verify-existing') return { ok: true };
       return interact(context.item.el, context.intent.value, { fieldLabel: context.item.field.label, signal: context.signal, lifecycle: { check: () => context.assertActive() } });
     },
     // 真正选中证据和页面显示须跨重绘窗口保持，搜索文字/仅关闭菜单均不足以成功。
     async verify(plan, context) {
-      for (const ms of [120, 380]) {
-        await delay(ms, context.signal); if (context.signal?.aborted) return failure('已取消填写', 'write_rejected', 'failed');
-        try { context.assertActive(); } catch { return failure('网页或字段已变化，已停止验证', 'write_rejected', 'failed'); }
-        if (!context.accepted(context.intent.value)) return failure('网页未确认选中目标或受控组件已回退', 'value_not_accepted', 'failed');
-      }
-      return { ok: true, status: 'success', verifiedAt: new Date().toISOString() };
+      if (!executed.delete(plan)) return global.LocalApplyFillResult.failure('stale_plan');
+      return global.LocalApplyFillVerification.run(context);
     }
   });
   global.LocalApplyDropdownControls = Object.freeze({ query, prepareChoice, commitChoice, close, interact, accepted });

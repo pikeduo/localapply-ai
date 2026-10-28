@@ -1,7 +1,7 @@
 // 阶段三在成熟填写器外增加严格选择和延迟复读验证，不接触提交/验证码/密码。
 (function (global) {
   'use strict';
-  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const F = global.LocalApplyFillResult;
   const A = global.LocalApplyFieldAdapters;
   const C = global.LocalApplyFillContract;
   const R = global.LocalApplyAdapterRegistry;
@@ -27,12 +27,18 @@
     return (el.isContentEditable ? (global.WangshenFiller?.readText?.(el) ?? el.textContent) : el.value) === String(expected);
   }
 
-  // 复读跨过框架事件和延迟重渲染，DOM 回退或校验失败不记成功。
-  async function verify(item, value) {
-    await wait(120); const first = accepted(item, value);
-    await wait(380); const second = accepted(item, value);
-    return first && second ? { status: 'success', ok: true, verifiedAt: new Date().toISOString() }
-      : { status: 'failed', ok: false, reason: '网页未接受新值、校验失败或受控组件已回退' };
+  // 旧本页调用也共用验证窗口；真实扫描器每次回读重新检查文档与原节点。
+  async function verify(item, value, options = {}) {
+    const scanner = global.LocalApplyPageScanner;
+    const context = { item, signal: options.signal, intent: { value },
+      // 仅无文档的历史单元桩允许局部检查；真实页面始终存在 documentId。
+      assertActive() {
+        if (scanner.documentId && scanner.record(item.field.scanId, scanner.documentId, item.field.semanticId).el !== item.el) throw new Error('填写控件已变化');
+      },
+      // 与新适配器使用相同真实状态读法。
+      accepted(next) { return accepted(item, next); }
+    };
+    return global.LocalApplyFillVerification.run(context);
   }
 
   // 按当前控件读取非空冲突；覆盖许可仍绑定用户刚核对的旧值。
@@ -77,6 +83,8 @@
   // 只准备计划不点击；复杂控件明确委托旧链路，不把未发现的异步选项冒充已解析目标。
   function prepare(item, intent, options = {}) {
     C.validateIntent(intent, { binding: { scanId: item.field.scanId, semanticId: item.field.semanticId } });
+    const safety = global.LocalApplyFillVerification.guard(adapterContext(item, intent, options), true);
+    if (safety) return { error: { ...safety, diagnostic: { ...safety.diagnostic, phase: 'protect' } } };
     const value = intent.value; const control = controlOf(item); const adapted = A.handles(item); const adapter = R.resolve(control, { item });
     const prepared = adapter?.prepare(control, intent, adapterContext(item, intent, options));
     if (prepared?.error) return prepared;
@@ -128,7 +136,7 @@
     const { el, members, field } = item; const control = controlOf(item);
     if (A.handles(item)) { const next = A.plan(item, value); if (next.error) return { ...next.error, diagnostic: { phase: 'plan' } }; }
     const blocked = conflict(item, value, options); if (blocked) return { ...blocked, diagnostic: { phase: 'protect', reasonCode: 'existing_value_preserved' } };
-    if (accepted(item, value)) return { ...await verify(item, value), diagnostic: { phase: 'verify' } };
+    if (accepted(item, value)) { const result = await verify(item, value, options); return { ...result, diagnostic: { ...result.diagnostic, phase: 'verify' } }; }
     if (A.handles(item)) {
       const result = await A.fill(item, value); if (!result.ok) return { status: result.status || 'failed', ...result };
     } else if (control.type === 'combobox') {
@@ -154,29 +162,36 @@
       const result = await global.WangshenFiller.fillElement(el, value, { inputType: control.type, options: field.options });
       if (!result.ok) return { status: 'failed', ...result };
     }
-    const result = await verify(item, value);
+    const result = await verify(item, value, options);
     if (result.ok) global.WangshenFiller.markFilled(el);
-    return { ...result, diagnostic: { phase: 'verify', reasonCode: result.ok ? 'verified' : 'value_not_accepted' } };
+    return { ...result, diagnostic: { ...result.diagnostic, phase: 'verify' } };
   }
-  // 文本及原生选择意图交固定注册表执行；复杂控件保留旧路径，失败不双重执行。
+  // 所有固定能力统一终态；执行异常返回固定原因，拒绝后不双重执行或重复写入。
   async function fill(item, value, options = {}) {
     A.diagnostic?.(item, true); let result;
-    if (options.intent) {
-      C.validateIntent(options.intent, { value }); const prepared = prepare(item, options.intent, options);
-      if (prepared.error) result = prepared.error;
-      else if (prepared.plan.adapterId) {
-        const adapter = R.get(prepared.plan.adapterId); const context = adapterContext(item, options.intent, options);
-        const attempt = await adapter.execute(prepared.plan, context);
-        result = attempt.ok ? await adapter.verify(prepared.plan, context) : attempt;
-        if (result.ok) global.WangshenFiller.markFilled(item.el);
-        result = { ...result, diagnostic: { ...result.diagnostic, phase: attempt.ok ? 'verify' : 'write' } };
-      } else { validatePrepared(prepared.plan, item, options.intent, true); result = await write(item, value, options); }
-    } else result = await write(item, value, options); // 保留本页旧调用兼容，消息入口始终要求后台意图。
+    if (options.intent) C.validateIntent(options.intent, { value }); // 伪造消息仍由契约边界拒绝，不能降级成旧写入。
+    try {
+      if (options.signal?.aborted) result = F.failure('cancelled');
+      else if (options.intent) {
+        const prepared = prepare(item, options.intent, options);
+        if (prepared.error) result = prepared.error;
+        else if (prepared.plan.adapterId) {
+          const adapter = R.get(prepared.plan.adapterId); const context = adapterContext(item, options.intent, options);
+          const attempt = await adapter.execute(prepared.plan, context);
+          result = F.normalize(attempt.ok ? await adapter.verify(prepared.plan, context) : attempt);
+          if (result.ok) global.WangshenFiller.markFilled(item.el);
+          result = { ...result, diagnostic: { ...result.diagnostic, phase: attempt.ok ? 'verify' : 'write' } };
+        } else { validatePrepared(prepared.plan, item, options.intent, true); result = await write(item, value, options); }
+      } else result = await write(item, value, options); // 保留本页旧调用兼容，消息入口始终要求后台意图。
+    } catch (error) {
+      const message = String(error?.message || '');
+      result = F.failure(options.signal?.aborted ? 'cancelled' : /^填写计划已失效/.test(message) ? 'stale_plan'
+        : /^(填写控件|填写候选|填写适配器|页面已变化)/.test(message) ? 'stale_context' : 'operation_error');
+    }
     const trace = A.diagnostic?.(item) || {};
     const control = controlOf(item);
     const adapter = item.compound?.kind || (A.dropdown(item.el) ? 'moka-dropdown' : ({ select: 'native-select', combobox: 'aria-combobox', radio: 'radio', checkbox: 'checkbox' })[control.type]) || (A.handles(item) ? 'date' : 'text');
-    const reasonCode = result.ok ? 'verified' : result.diagnostic?.reasonCode || trace.reasonCode || (/精度|只有年|不能.*补日/.test(result.reason || '') ? 'insufficient_date_precision' : /日期/.test(result.reason || '') && result.status !== 'unsupported' ? 'invalid_date' : result.status === 'unsupported' ? 'unsupported_control' : 'write_rejected');
-    return { ...result, diagnostic: { adapter, phase: 'write', ...trace, ...result.diagnostic, reasonCode, controlType: control.type, status: result.status || (result.ok ? 'success' : 'failed') } };
+    return F.normalize({ ...result, diagnostic: { adapter, phase: 'write', ...trace, ...result.diagnostic, controlType: control.type } });
   }
   global.LocalApplyVerifiedFill = { fill, verify, accepted };
   global.LocalApplyFillPlanner = { prepare, validate: validatePrepared }; // 仅隔离内容脚本可见；无消息/模型执行接口。

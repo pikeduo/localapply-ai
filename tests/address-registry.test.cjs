@@ -7,7 +7,7 @@ const ROOT = path.resolve(__dirname, '..');
 function fixture(value = '甲省 / 同名市 / 中心区', cascade = true) {
   let writes = 0; let marks = 0; let active = true;
   const context = vm.createContext({ Date, setTimeout, clearTimeout, AbortController, crypto: require('node:crypto').webcrypto, Event: class { constructor(type) { this.type = type; } }, FocusEvent: class {}, HTMLSelectElement: class {} });
-  for (const file of ['data/templates.js','data/field-matching.js','data/fill-contract.js','content/field-adapters.js','content/controls/text.js','content/controls/native.js','content/controls/date-phone.js','content/controls/dropdown.js','content/controls/address.js','content/controls/registry.js','content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js','data/field-matching.js','data/fill-contract.js', 'data/fill-result.js','content/field-adapters.js','content/controls/verification.js', 'content/controls/text.js','content/controls/native.js','content/controls/date-phone.js','content/controls/dropdown.js','content/controls/address.js','content/controls/registry.js','content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   // 标签与编码故意不同；同名市在甲乙省中分别使用不同代码。
   function option(value, textContent) { return { value, textContent, disabled: false, getAttribute: () => null, closest: () => null }; }
   // 可变节点接口用于验证候选、属性、部分值和节点身份的失效保护。

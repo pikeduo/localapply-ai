@@ -6,7 +6,8 @@
 
 - 2026-10-25 起以 `docs/DEVELOPMENT_PLAN.md` v2.0 为准；旧阶段三验收为历史证据，不能替代新版 S3-01～S3-09。2026-10-27 用户授权先集中回归，再执行阶段五 S5-01～S5-07；保留阶段 0～4 成果，不进入阶段六，不提交或推送。
 - 扫描先经 `content/field-adapters.js` 分类/局部复合分组，再生成字段；国码、年月日子项、日历候选及网站操作不得入库。复合节点仅保留内容脚本内存，`features.layout` 为 v3 可选白名单，旧指纹不变。
-- 2026-10-28 分层第 01～07 步分别获授权实施，第 07 步后停止，第 08 步统一验证/原因码须另获授权。冻结旧 features/semanticId 和 v5；新语义/控件描述仅驻留运行时，不能按语义 key 合并记录或冒称跨控件历史映射已完成。
+- 2026-10-28 分层第 01～08 步分别获授权实施，第 08 步后停止，第 09 步跨控件映射兼容须另获授权。冻结旧 features/semanticId 和 v5；新语义/控件描述仅驻留运行时，不能按语义 key 合并记录或冒称跨控件历史映射已完成。
+- `data/fill-result.js` 是终态/原因码/诊断白名单的唯一契约，`content/controls/verification.js` 共用 120/240/500ms 回读与安全守卫。至少最后两次接受才成功；仅实际先接受后丢失标 controlled_reverted，标准有效性错误标 validation_failed；取消/失效停止回读，不重写或回滚网页。专有候选/父级守卫保留，验证须消费已执行的原计划；ready/执行尝试不能当 success，异常正文不进入响应/日志。批次统一取消仍属第 10 步，500ms 以后或服务端接受仍须用户核查。
 - `data/fill-contract.js` 的 FillIntent 只由后台规范来源生成，绑定会话/文档/扫描/条目/revision；扫描契约版本未加载须刷新，禁止降级发送值。FillPlan 仅本页私有准备/一次性验证，严禁 UI/AI 传入脚本或计划；复杂控件明确 delegated 并继续旧路径。意图、计划、目标候选及快照禁止进入库/备份/AI/日志，不以 ready 冒充写入成功。
 - `content/controls/registry.js` 固定注册 text/textarea/contenteditable/select/radio/checkbox/date/phone/dropdown/address，禁止动态脚本注册；detect 多重命中拒绝。文本只经 fillTextOnly 原语，原生选择只使用当前候选的唯一标签/编码；同标签不同码、重复码、禁用及受保护目标拒绝。单/多选按完整选中集合保护和回读，计划保存节点数组副本及状态；不完整单选组不得间接清除隐藏/禁用成员。失败不重写/换路径。contenteditable 使用同一分行读法。批次 UI/会话整合仍待后续步骤。
 - `content/controls/address.js` 仅接明确省/市/区复合项，fill-address/address-parts 为 delegated；复用局部 setter 和下拉管线，原生 select 即使带 combobox 角色仍优先原生路径。初始禁用市区仅在同一可见安全容器中绑定；下级等待父级绑定、候选换代或单一父级静态结构证据，不能只等一段时间就认定加载完成。同名异路径、重复/禁用候选、部分值冲突拒绝；改变上级会清除非空下级也须逐项确认。私有快照绑定成员/选项/父级属性/部分值，取消或外部修改停止后续写入。缺层级/海外自由文本不推断，半填地址不当作完成。

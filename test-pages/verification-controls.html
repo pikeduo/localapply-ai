@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>统一验证 · 合成控件</title>
+<style>body{font:15px/1.6 system-ui;max-width:900px;margin:30px auto;background:#f7f9fc;color:#23344e}fieldset{background:white;border:1px solid #ccd6e2;border-radius:12px;padding:18px;margin:18px 0}label{display:block;margin:12px 0}input,select{display:block;box-sizing:border-box;width:100%;padding:10px;border:1px solid #b5c4dd;border-radius:6px}input[aria-invalid=true],select:invalid{border-color:#cc546b}output{color:#356b4b}</style></head>
+<body><h1>填写结果与延迟验证</h1><p>仅合成数据：成功 / 接受后回退 / 网页校验失败。</p><form>
+<div id="verify-react"></div><div id="verify-vue"></div>
+<fieldset><legend>网页校验与边界</legend>
+<label for="verify-invalid">原生校验</label><select id="verify-invalid"><option value="">请选择</option><option value="M">男</option></select>
+<label>延迟ARIA校验<input id="verify-aria"></label>
+<label>取消测试<input id="verify-cancel"></label>
+<label>精度测试<input id="verify-date" type="date"></label>
+<label for="verify-missing">缺少选项</label><select id="verify-missing"><option value="">请选择</option><option value="F">女</option></select>
+<label for="verify-duplicate">重复选项</label><select id="verify-duplicate"><option value="">请选择</option><option value="M">男</option><option value="other">男</option></select>
+<label for="verify-button">明确按钮下拉</label><button type="button" role="combobox" id="verify-button" aria-controls="verify-menu" aria-expanded="false" value="">请选择</button>
+<div id="verify-menu" role="listbox" hidden><div role="option" data-value="M" aria-selected="false" tabindex="-1">男</div></div>
+<button type="submit">提交申请</button></fieldset></form><script>
+// 固定校验文本和事件计数仅用于独立测试，绝不输出字段实际值。
+window.__verifyChanges=0;window.__submitCount=0;
+document.querySelector('form').addEventListener('change',()=>{window.__verifyChanges++;});
+document.querySelector('form').addEventListener('submit',(event)=>{event.preventDefault();window.__submitCount++;});
+document.getElementById('verify-invalid').addEventListener('change',(event)=>event.target.setCustomValidity('synthetic-validation'));
+document.getElementById('verify-aria').addEventListener('change',(event)=>setTimeout(()=>event.target.setAttribute('aria-invalid','true'),280));
+// 显式非提交按钮只打开关联菜单，候选点击提供真实选中证据。
+const trigger=document.getElementById('verify-button');const menu=document.getElementById('verify-menu');
+trigger.addEventListener('click',()=>{menu.hidden=false;trigger.setAttribute('aria-expanded','true');});
+menu.firstElementChild.addEventListener('click',(event)=>{event.currentTarget.setAttribute('aria-selected','true');trigger.value='M';trigger.textContent='男';trigger.setAttribute('data-value','M');trigger.setAttribute('aria-expanded','false');menu.hidden=true;});
+</script><script src="/test-pages/verification-frameworks.js"></script></body></html>
