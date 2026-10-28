@@ -4,7 +4,7 @@
 importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/field-suggestions.js', 'data/applications.js', 'data/local-store.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js', 'data/job-tracking.js'); // 填写契约、岗位与字段学习复用唯一仓库，不读回密钥。
 
 const ROOT_KEY = 'wangshenAutofill';
-const repository = LocalApplyStore.createRepository(chrome.storage.local);
+const repository = LocalApplyStore.createRepository(chrome.storage.local, { cache: true, changes: chrome.storage.onChanged });
 const diagnostics = LocalApplyDiagnostics.create(chrome.storage.local);
 const jobTracking = LocalApplyJobTracking.create(repository, chrome);
 const floatingPanel = LocalApplyFloatingPanel.create(chrome, diagnostics, (tabId) => fieldLearning.invalidate(tabId)); // 关闭卡片也中止本页 AI 和未确认候选。
@@ -160,7 +160,7 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         await chrome.tabs.create({ url: chrome.runtime.getURL('options/options.html') + '?' + params + '#' + destination });
         sendResponse({ ok: true }); return;
       }
-      if (msg?.type === 'diagnostics:read') { sendResponse({ ok: true, ...await diagnostics.read() }); return; }
+      if (msg?.type === 'diagnostics:read') { sendResponse({ ok: true, ...await diagnostics.read(), databaseStorage: await repository.storageStatus() }); return; }
       // 岗位扫描始终绑定卡片所在标签，不接受调用方指定的其他页面。
       if (msg?.type === 'jobs:scan') { if (!panelSession) throw new Error('请从当前网页的悬浮卡片识别岗位'); sendResponse({ ok: true, ...await jobTracking.scan(panelSession.tabId) }); return; }
       // 保存成功后的确认提示只清理当前卡片所属标签，不改变已写入的申请。

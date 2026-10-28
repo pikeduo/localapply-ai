@@ -7,6 +7,12 @@
     const result = await sendMessage('diagnostics:read'); if (!result.ok) throw new Error(result.error);
     const status = $('logsStorageStatus');
     if (status) { status.textContent = result.storage?.lastWriteFailed ? '最近一次日志写入失败，当前显示的是之前已保存的记录；请检查扩展本地存储后重试。' : '日志自动保存在本浏览器扩展的 chrome.storage.local（localapply.diagnostics），重启后保留；点击“导出日志”另存为 JSON 文件。'; status.className = result.storage?.lastWriteFailed ? 'err' : 'muted'; }
+    // 使用官方实际占用统计，只展示字节与固定配额提示，不自动清理个人数据。
+    if (status && result.databaseStorage) {
+      const info = result.databaseStorage;
+      if (info.totalBytes !== null) status.textContent += ` 本地占用 ${info.totalBytes} 字节，数据库 ${info.dbBytes} 字节。`;
+      if (info.warning) { status.textContent += ' ' + info.warning; status.className = 'err'; }
+    }
     $('logsOutput').textContent = result.rows.length ? result.rows.slice().reverse().map((row) => JSON.stringify(row)).join('\n') : '暂无日志'; return result;
   }
   // 统一显示诊断操作错误，不生成递归日志。

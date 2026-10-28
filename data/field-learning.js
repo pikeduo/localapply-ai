@@ -6,6 +6,8 @@
   // 依赖通过参数传入，测试使用本地 Mock；浏览器中始终复用唯一 repository/AI 客户端。
   function create(repository, ai, browser) {
     const sessions = new Map(); const queues = new Map(); const aiJobs = new Map(); let undo = null;
+    // 生产仓库提供按档案索引的只读上下文；旧测试/兼容仓库仍可使用原完整读取接口。
+    function fieldContext(profileId) { return repository.readFieldContext ? repository.readFieldContext(profileId) : repository.read(); }
     // 页面退出时立即释放待确认个人值、覆盖令牌及模型任务，不保留隐藏的输入历史。
     function drop(id) { aiJobs.get(id)?.abort(); sessions.delete(id); }
     // 顶层导航/关闭绑定页面时，终止该页所有扫描会话；其他页面资料不受影响。
@@ -42,7 +44,7 @@
       check(sessions.has(id), '扫描会话已过期或页面已导航/关闭，请重新授权扫描');
       const tab = await browser.tabs.get(item.tabId);
       if (tab.url !== item.url) { drop(id); throw new Error('页面已导航，请重新授权扫描'); }
-      const db = await repository.read(); check(db.profiles.some((profile) => profile.profileId === item.profileId), '档案已删除');
+      const db = await fieldContext(item.profileId); check(db.profiles.some((profile) => profile.profileId === item.profileId), '档案已删除');
       check(db.activeProfileId === item.profileId, '活动档案已变化，请重新授权扫描');
       return { item, db };
     }
@@ -169,9 +171,10 @@
       const bytes = new TextEncoder().encode(JSON.stringify([provider.providerId, provider.baseUrl, provider.protocol, settings.model, settings.apiKeys?.[provider.providerId] || '']));
       return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
     }
-    // 规则写入保留本会话撤销点，后续外部改动时拒绝覆盖。
+    // 规则写入的撤销点必须包含全部档案规则，不能用局部匹配投影覆盖其他档案。
     async function ruleCommand(db, action, payload) {
-      const before = clone(db.mappingRules);
+      const complete = await repository.read(); check(complete.revision === db.revision, '规则或资料已变化，请重新预览');
+      const before = clone(complete.mappingRules);
       const result = await repository.command({ action, payload, expectedRevision: db.revision });
       undo = { before, revision: result.revision }; return result;
     }
@@ -180,7 +183,7 @@
       if (msg.type === 'learning:scanPage') {
         check(msg.confirmed === true && Number.isInteger(msg.tabId), '扫描前须明确授权当前页面');
         const tab = await browser.tabs.get(msg.tabId); check(/^https?:\/\//.test(tab.url || ''), '只能扫描用户授权的普通招聘网页');
-        const db = await repository.read(); const profileId = msg.profileId || db.activeProfileId;
+        const db = await fieldContext(msg.profileId); const profileId = msg.profileId || db.activeProfileId;
         check(db.profiles.some((profile) => profile.profileId === profileId), '档案不存在');
         const response = await pageMessage(msg.tabId, { type: 'learning:scan', authorize: true, expectedUrl: tab.url }, true);
         const snapshot = response.snapshot; check(snapshot.origin === new URL(tab.url).origin && snapshot.fields.length <= 500, '页面来源或字段数量错误');
@@ -235,7 +238,7 @@
         try { out = await ai.callGLM({ model: settings.model, expectedContext: preview.context, messages: global.FieldSuggestions.messages(preview.payload), signal: controller.signal, disableThinking: true, maxTokens: 5000, timeoutMs: 30000 }); check(!controller.signal.aborted, '已取消字段识别'); }
         catch (error) { if (controller.signal.aborted) throw new Error('已取消字段识别'); throw error; }
         finally { if (aiJobs.get(item.sessionId) === controller) aiJobs.delete(item.sessionId); }
-        check((await repository.read()).revision === preview.revision && await aiContext(await repository.readAiSettings()) === preview.context, '识别期间资料或 API 已变化，请重新扫描');
+        check((await fieldContext(item.profileId)).revision === preview.revision && await aiContext(await repository.readAiSettings()) === preview.context, '识别期间资料或 API 已变化，请重新扫描');
         let parsed; try { parsed = JSON.parse(out.content); } catch { throw new Error('AI 字段建议不是有效 JSON，请重试或手动选择'); }
         const suggestions = global.FieldSuggestions.validate(parsed, preview.payload);
         suggestions.forEach((suggestion) => { const row = rowOf(item, suggestion.scanId); row.suggestion = suggestion; row.status = 'needs_confirmation'; row.reason = 'AI 建议尚未确认；置信度不能代替用户核对'; });
@@ -275,7 +278,7 @@
         const preview = item.valuePreview; check(msg.confirmed === true && preview?.token === msg.token && preview.scanId === row.field.scanId && Date.now() - preview.createdAt < 300000, '须先预览差异并明确确认');
         item.valuePreview = null;
         const saved = await repository.command({ action: 'confirmField', payload: { ...preview.next, profileId: item.profileId, confirmed: true }, expectedRevision: preview.revision });
-        const latest = await repository.read(); rebuild(item, latest); const updated = rowOf(item, msg.scanId);
+        const latest = await fieldContext(item.profileId); rebuild(item, latest); const updated = rowOf(item, msg.scanId);
         Object.assign(updated, { target: saved.result, chosen: true, status: M.hasValue(preview.next.value) ? 'matched' : 'missing_value', source: 'manual', reason: '已确认保存到个人档案，尚未学习网页映射' });
         return view(item, latest);
       }
@@ -316,7 +319,7 @@
         await ruleCommand(db, 'saveMapping', { mappingId: old?.mappingId || 'mapping.' + crypto.randomUUID(), origin: item.origin, path: '/', label: row.field.label,
           ...row.target, profileId: item.profileId, semanticId: row.field.semanticId, features: M.features(row.field), confirmed: true, enabled: true,
           lastVerifiedAt: verified.result.verifiedAt, ruleVersion: (old?.ruleVersion || 0) + 1 });
-        const latest = await repository.read(); rebuild(item, latest); return view(item, latest);
+        const latest = await fieldContext(item.profileId); rebuild(item, latest); return view(item, latest);
       }
       throw new Error('未知字段学习操作');
     }

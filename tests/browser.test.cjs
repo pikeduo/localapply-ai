@@ -8,6 +8,65 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 缓存专项通过真实后台、实际本地存储及整进程重启，文件页使用真实 IndexedDB/Web Lock。
+test('存储缓存：真实通知、保存失败草稿、权限及重启', { timeout: 90000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'storage-cache-')); let context;
+  try {
+    context = await launch(profile); let { worker, extensionId } = await extension(context); const url = `chrome-extension://${extensionId}/options/options.html`;
+    let page = await context.newPage(); await page.goto(url); await workspacePage(page, 'resumeCenter'); const first = (await rpc(page, 'localapply:read')).database; const profileId = first.activeProfileId;
+    await t.test('重复只读不加载数据库，自身通知不失效，官方字节统计可见', async () => {
+      const before = (await rpc(page, 'diagnostics:read')).databaseStorage;
+      for (let i = 0; i < 8; i++) await rpc(page, 'localapply:read');
+      await rpc(page, 'localapply:command', { request: { action: 'setValue', expectedRevision: first.revision, payload: { profileId, fieldId: 'builtin.name', value: '合成缓存姓名' } } });
+      const after = (await rpc(page, 'diagnostics:read')).databaseStorage; assert.equal(after.dbReads, before.dbReads); assert.equal(after.invalidations, before.invalidations); assert.ok(after.hits >= before.hits + 9); assert.ok(after.dbBytes > 0); assert.ok(after.totalBytes >= after.dbBytes); assert.ok(after.quotaBytes > 0);
+    });
+    await t.test('外部同版本数据库修改重新校验，过期页面写入被拒绝', async () => {
+      await worker.evaluate(async () => { const db = (await chrome.storage.local.get('localapply.database'))['localapply.database']; db.profiles[0].name = '合成外部简历'; await chrome.storage.local.set({ 'localapply.database': db }); });
+      assert.equal((await rpc(page, 'localapply:read')).database.profiles[0].name, '合成外部简历');
+      const response = await page.evaluate(({ profileId, revision }) => chrome.runtime.sendMessage({ type: 'localapply:command', request: { action: 'setValue', expectedRevision: revision, payload: { profileId, fieldId: 'builtin.name', value: '不得覆盖' } } }), { profileId, revision: first.revision }); assert.equal(response.ok, false); assert.match(response.error, /版本/);
+    });
+    await t.test('真实保存失败保留输入草稿，重试后持久化且无敏感诊断', async () => {
+      await page.reload(); await workspacePage(page, 'resumeCenter');
+      // 仅在独立测试后台拦截下一次 DB 写入，凭据/诊断写入继续走实际 API。
+      await worker.evaluate(() => { const original = chrome.storage.local.set; globalThis.__storageOriginalSet = original; chrome.storage.local.set = function (value) { if (Object.hasOwn(value, 'localapply.database')) { chrome.storage.local.set = original; return Promise.reject(new Error('QUOTA_BYTES 合成失败')); } return original.call(chrome.storage.local, value); }; });
+      const input = page.getByLabel('简历中心 · 姓名', { exact: true }); await input.fill('合成失败草稿'); await input.press('Tab');
+      await page.waitForFunction(() => document.getElementById('centerStatus').textContent.includes('保存失败'));
+      assert.equal(await input.inputValue(), '合成失败草稿'); assert.equal(await input.getAttribute('data-dirty'), 'true');
+      assert.ok(!(await rpc(page, 'localapply:read')).database.fieldValues.some((row) => row.value === '合成失败草稿'));
+      await input.fill('合成重试持久化'); await input.press('Tab'); await page.waitForFunction(() => document.getElementById('centerStatus').textContent === '已保存在本地');
+      const status = await rpc(page, 'diagnostics:read'); assert.ok(status.databaseStorage.writeFailures >= 1); assert.ok(!JSON.stringify(status).includes('合成重试持久化'));
+      await workspacePage(page, 'diagnosticsPanel'); await page.locator('#logsRefresh').click(); await page.waitForFunction(() => document.getElementById('logsStorageStatus').textContent.includes('本地占用'));
+      await page.screenshot({ path: path.join(root, 'storage-cache-diagnostics.png'), fullPage: true });
+    });
+    await t.test('内容脚本不能读取完整库或诊断指标', async () => {
+      const api = await serve(); try {
+        const target = await context.newPage(); await target.goto(api.base + '/test-pages/field-control-variants.html'); const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, target.url());
+        const denied = await worker.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: async () => [await chrome.runtime.sendMessage({ type: 'localapply:read' }), await chrome.runtime.sendMessage({ type: 'diagnostics:read' })] }))[0].result, tabId);
+        assert.ok(denied.every((value) => value.ok === false)); await target.close();
+      } finally { api.server.closeAllConnections(); await new Promise((resolve) => api.server.close(resolve)); }
+    });
+    await t.test('整个浏览器关闭重开，从持久层重建缓存且保留最新资料', async () => {
+      await context.close(); context = await launch(profile); ({ worker, extensionId } = await extension(context)); page = await context.newPage(); await page.goto(url); await workspacePage(page, 'resumeCenter');
+      const db = (await rpc(page, 'localapply:read')).database; assert.ok(db.fieldValues.some((row) => row.value === '合成重试持久化')); assert.equal(db.profiles[0].name, '合成外部简历');
+      const status = (await rpc(page, 'diagnostics:read')).databaseStorage; assert.equal(status.loads, 1); assert.equal(status.writeFailures, 0); assert.ok(status.hits > 0);
+    });
+  } finally { await context?.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(root) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+// 两个独立文件页各有仓库实例，锁内新读保证旧 revision 不会覆盖另一个页面。
+test('存储缓存：file 多页面锁内读取、冲突与重启', { timeout: 60000 }, async () => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'storage-file-')); const url = require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href; let context;
+  try {
+    context = await launch(profile, false); const pages = [await context.newPage(), await context.newPage()]; for (const page of pages) { await page.goto(url); await workspacePage(page, 'resumeCenter'); assert.equal(await page.evaluate(() => !!navigator.locks), true); }
+    const initial = await pages[0].evaluate(() => sendMessage('localapply:read')); const profileId = initial.database.activeProfileId;
+    // 两页同时发起相同期望版本写入，真实 Web Lock 只允许一页成功。
+    const replies = await Promise.all(pages.map((page, i) => page.evaluate(({ profileId, revision, i }) => sendMessage('localapply:command', { request: { action: 'setValue', expectedRevision: revision, payload: { profileId, fieldId: 'builtin.name', value: '合成文件并发' + i } } }), { profileId, revision: initial.database.revision, i })));
+    assert.equal(replies.filter((reply) => reply.ok).length, 1); assert.equal(replies.filter((reply) => !reply.ok).length, 1);
+    const states = await Promise.all(pages.map((page) => page.evaluate(() => sendMessage('localapply:read')))); assert.deepEqual(states[0].database, states[1].database);
+    const expected = states[0].database; await context.close(); context = await launch(profile, false); const page = await context.newPage(); await page.goto(url); await workspacePage(page, 'resumeCenter'); assert.deepEqual((await page.evaluate(() => sendMessage('localapply:read'))).database, expected);
+  } finally { await context?.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(root) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 文本注册表使用真实后台意图和受控框架；只操作独立合成页，绝不触碰用户浏览器。
 test('分层第三步：固定注册表与文本执行路径', { timeout: 90000 }, async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
@@ -280,11 +339,12 @@ for (const withExtension of [true, false]) {
       });
       await t.test('抽屉取消关闭保留草稿，确认放弃不写库且恢复焦点', async () => {
         const before = (await page.evaluate(() => dataRequest('localapply:read'))).database;
-        await page.locator('.application-open').first().click(); assert.equal(await page.locator('#appDetail').evaluate((element) => element.matches(':modal')), true); assert.equal(await page.locator('#appCompany').evaluate((element) => document.activeElement === element), true);
+        // 文件页的锁内 IndexedDB 读取异步完成；等真实抽屉打开再保留原焦点/模态断言。
+        await page.locator('.application-open').first().click(); await page.locator('#appDetail').waitFor({ state: 'visible' }); assert.equal(await page.locator('#appDetail').evaluate((element) => element.matches(':modal')), true); assert.equal(await page.locator('#appCompany').evaluate((element) => document.activeElement === element), true);
         await page.locator('#appNotes').fill('合成未保存草稿'); page.once('dialog', (dialog) => dialog.dismiss()); await page.keyboard.press('Escape'); assert.equal(await page.locator('#appDetail').isVisible(), true); assert.equal(await page.locator('#appNotes').inputValue(), '合成未保存草稿');
         page.once('dialog', (dialog) => dialog.accept()); await page.keyboard.press('Escape'); assert.equal(await page.locator('#appDetail').isVisible(), false); assert.equal(await page.evaluate(() => document.activeElement.classList.contains('application-open')), true);
         assert.deepEqual((await page.evaluate(() => dataRequest('localapply:read'))).database.applications, before.applications);
-        await page.locator('.application-open').first().click(); await page.screenshot({ path: path.join(testRoot, `applications-drawer-${withExtension ? 'extension' : 'file'}.png`), fullPage: true }); await page.locator('#appDetailDismiss').click();
+        await page.locator('.application-open').first().click(); await page.locator('#appDetail').waitFor({ state: 'visible' }); await page.screenshot({ path: path.join(testRoot, `applications-drawer-${withExtension ? 'extension' : 'file'}.png`), fullPage: true }); await page.locator('#appDetailDismiss').click();
       });
       await t.test('窄屏只在看板内部滚动，暗色、列表和抽屉均可操作', async () => {
         await page.setViewportSize({ width: 390, height: 844 }); await page.locator('#themeToggle').click(); assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);

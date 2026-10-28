@@ -484,6 +484,18 @@ test('填写失败不学习，验证成功才可记住；同站复用，跨域�
   const db = await env.repo.read(); assert.equal(env.context.FieldMatchingEngine.match(db, env.profileId, 'https://other.example.test', [field])[0].target, null);
 });
 
+// 局部读取用于匹配，全量撤销点仍须保留其他档案的规则。
+test('按档案匹配投影的记忆与撤销不会删除其他档案规则', async () => {
+  const env = await fixture(); const other = (await env.repo.command({ action: 'createProfile', payload: { name: '合成另一档案' } })).result;
+  const state = await env.repo.readLegacy(); const selected = structuredClone(state); selected.activeProfileId = env.profileId; await env.repo.saveLegacy(state, selected);
+  await env.repo.command({ action: 'saveMapping', payload: { mappingId: 'mapping.other', origin: 'https://jobs.example.test', path: '/', label: '合成旧规则', fieldId: 'builtin.name', profileId: other, entryId: null } });
+  await env.setValue('builtin.phone', '13800000000'); const field = env.field('合成便捷号码'); let view = await env.scan(field);
+  view = await env.send(view, 'select', { scanId: field.scanId, fieldId: 'builtin.phone' }); view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true }); await env.send(view, 'remember', { scanId: field.scanId, confirmed: true });
+  const rules = await env.service.handle({ type: 'learning:rules' }); assert.equal(rules.rules.length, 2);
+  await env.service.handle({ type: 'learning:undoRule', revision: rules.revision, confirmed: true }); const after = (await env.repo.read()).mappingRules;
+  assert.equal(after.length, 1); assert.equal(after[0].mappingId, 'mapping.other'); assert.equal(after[0].profileId, other);
+});
+
 test('映射可修改、禁用、删除及撤销，改目标后不能沿用旧验证状态', async () => {
   const env = await fixture(); await env.setValue('builtin.phone', '13800000000'); const field = env.field('便捷联系号码'); let view = await env.scan(field);
   view = await env.send(view, 'select', { scanId: field.scanId, fieldId: 'builtin.phone' }); view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true }); await env.send(view, 'remember', { scanId: field.scanId, confirmed: true });

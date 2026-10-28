@@ -54,7 +54,8 @@
       });
     },
   };
-  const repository = global.LocalApplyStore.createRepository(storage);
+  // 每个文件页有独立仓库，跨页 Web Lock 内必须新读 IndexedDB，禁止沿用后台快照。
+  const repository = global.LocalApplyStore.createRepository(storage, { cache: false });
   const ai = global.LocalApplyAI.createClient(() => repository.readAiSettings(), async (profileId) => global.LocalApplyResumeCatalog.catalog(await repository.read(), profileId)); // 文件页也只读取所选档案的字段元数据。
 
   // 与扩展使用相同命令语义，文件页从不调用插件私有存储或网页填充权限。

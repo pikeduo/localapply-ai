@@ -361,16 +361,27 @@
     check(legacy.schemaVersion === 1 || legacy.schemaVersion === undefined, '不支持的旧数据库版本');
     return { db: syncLegacy(emptyDatabase(), clone(legacy), 'legacy'), api: splitApi(legacy) };
   }
-  // 将规范存储投影为旧 UI 需要的 fields，仅投影平面字段，不损失重复经历。
-  function legacyState(db, api) {
+  // 索引仅引用同一个有效快照，按档案分区；不复制个人值，不改变字段或规则匹配语义。
+  function fieldIndex(db) {
+    const definitions = new Map(db.fieldDefinitions.map((row) => [row.fieldId, row])); const flatValues = new Map();
+    const partitions = {};
+    for (const table of ['bindings', 'fieldValues', 'entries', 'mappingRules']) {
+      partitions[table] = new Map();
+      for (const row of db[table]) { const list = partitions[table].get(row.profileId) || []; list.push(row); partitions[table].set(row.profileId, list); }
+    }
+    for (const row of db.fieldValues) if (row.entryId === null) flatValues.set(JSON.stringify([row.profileId, row.fieldId]), row);
+    return { db, revision: db.revision, definitions, flatValues, ...partitions };
+  }
+  // 将规范存储投影为旧 UI 的平面字段，使用同版本索引避免每个字段反复全表查找。
+  function legacyState(db, api, index = fieldIndex(db)) {
     return { schemaVersion: SCHEMA_VERSION, revision: db.revision, migratedFullFields: true, onboardingDone: db.onboardingDone,
       settings: { ...clone(db.settings), ...clone(api) }, activeProfileId: db.activeProfileId, ledger: clone(db.ledger), drafts: clone(db.drafts),
       profiles: db.profiles.map((profile) => ({ id: profile.profileId, name: profile.name, createdAt: Date.parse(profile.createdAt), templateId: 'all', __wsaFull: true,
-        materials: clone(profile.materials), fields: db.bindings.filter((binding) => binding.profileId === profile.profileId).map((binding) => {
-          const def = db.fieldDefinitions.find((field) => field.fieldId === binding.fieldId);
-          const row = db.fieldValues.find((value) => value.profileId === profile.profileId && value.fieldId === def.fieldId && value.entryId === null);
+        materials: clone(profile.materials), fields: (index.bindings.get(profile.profileId) || []).map((binding) => {
+          const def = index.definitions.get(binding.fieldId);
+          const row = index.flatValues.get(JSON.stringify([profile.profileId, def.fieldId]));
           const { profileId, fieldId, ...display } = binding;
-          return { ...clone(display), label: def.label, group: def.group, inputType: def.type, options: clone(def.options), value: row?.value ?? '' };
+          return { ...clone(display), label: def.label, group: def.group, inputType: def.type, options: clone(def.options), value: clone(row?.value ?? '') };
         }) })) };
   }
   // 旧 UI 新增字段不带 options；标准化快照后才比较，避免把展示默认值误判为冲突。
@@ -487,19 +498,71 @@
     result.revision = current.revision;
     return { database: validate(result), summary };
   }
-  // 创建后台仓库；队列同时覆盖读取初始化与写入，避免 UI 并发丢更新。
-  function createRepository(storage) {
+  // 扩展后台可显式启用快照；文件页默认关闭，继续在 Web Lock 内读取持久层。
+  function createRepository(storage, options = {}) {
     let queue = Promise.resolve();
     let sessionKey = null; // 不落盘；后台回收或文件页关闭后须重新解锁。
     let sessionSalt = null; // 另一页面重设口令时，旧会话密钥必须失效。
+    const backend = storage; const enabled = options.cache === true;
+    let snapshot = null; let queryIndex = null; let generation = 0; let knownDatabase = false; let disposed = false; let events = Promise.resolve();
+    const notifications = []; // 只保留至多 16 个待送达通知摘要，不保留旧数据库副本。
+    const metrics = { hits: 0, misses: 0, dbReads: 0, dbWrites: 0, writeFailures: 0, invalidations: 0, loads: 0, loadMs: 0, indexBuilds: 0 };
+    // 只保留当前快照的一套引用索引；失效、写入和释放后重建，文件页不跨操作缓存。
+    function indexFor(db) {
+      if (enabled && queryIndex?.db === db && queryIndex.revision === db.revision) return queryIndex;
+      const index = fieldIndex(db); metrics.indexBuilds++; if (enabled && db === snapshot) queryIndex = index; return index;
+    }
+    storage = {
+      // 只统计真实数据库键 I/O；独立 API/日志读写不冒充数据库命中。
+      async get(names) { if ([names].flat().includes(DB_KEY)) metrics.dbReads++; return backend.get(names); },
+      // 持久化失败必须原样拒绝；配额错误提供可操作提示，不删除任何资料。
+      async set(values) {
+        if (Object.hasOwn(values, DB_KEY)) metrics.dbWrites++;
+        try { await backend.set(values); } catch (error) {
+          metrics.writeFailures++; if (/quota|QUOTA_BYTES|配额/i.test(error.message || '')) throw new Error('存储配额不足，请导出备份并检查占用后重试；未删除个人资料');
+          throw error;
+        }
+      },
+      setAccessLevel: (value) => backend.setAccessLevel(value),
+    };
+    // SHA-256 同时绑定通知前后值；排序对象键以兼容 Chrome 存储序列化的键顺序变化。
+    async function signature(changes) {
+      const value = [DB_KEY, CATALOG_KEY].filter((key) => Object.hasOwn(changes, key)).map((key) => [key, changes[key].oldValue, changes[key].newValue]);
+      const encoded = JSON.stringify(value, (_key, row) => object(row) ? Object.fromEntries(Object.keys(row).sort().map((key) => [key, row[key]])) : row);
+      return Array.from(new Uint8Array(await global.crypto.subtle.digest('SHA-256', new TextEncoder().encode(encoded))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+    // 外部变化释放快照；下个排队请求必须重新完整校验，损坏数据不能退回空库。
+    function invalidate() { snapshot = queryIndex = null; generation++; metrics.invalidations++; }
+    // 通知处理与仓库操作在异步边界会合；旧自身通知只消费摘要，绝不回写旧快照。
+    function changed(changes, area) {
+      if (disposed || area !== 'local' || ![DB_KEY, CATALOG_KEY].some((key) => Object.hasOwn(changes, key))) return;
+      events = events.then(async () => {
+        const digest = await signature(changes); const index = notifications.indexOf(digest);
+        if (index >= 0) notifications.splice(index, 1); else invalidate();
+      }).catch(() => { invalidate(); });
+    }
+    if (enabled) options.changes?.addListener(changed);
+    // 在恢复点等待和真正写盘前后复核外部变更；不宣称 Chrome 多键写入具有事务性。
+    async function current(expected) { await events; check(expected === generation, '存储已在外部变化，请重新读取并预览后重试'); }
+    // 先登记自身通知，再等待持久化；失败释放缓存，绝不公布未保存副本。
+    async function persist(values, oldValues, expected) {
+      await current(expected); let digest;
+      if (enabled && options.changes) {
+        const changes = Object.fromEntries([DB_KEY, CATALOG_KEY].filter((key) => Object.hasOwn(values, key) && !equal(values[key], oldValues[key])).map((key) => [key, { oldValue: oldValues[key], newValue: values[key] }]));
+        if (Object.keys(changes).length) { digest = await signature(changes); await current(expected); notifications.push(digest); if (notifications.length > 16) notifications.shift(); }
+      }
+      try { await storage.set(values); await current(expected); }
+      catch (error) { if (digest) { const i = notifications.indexOf(digest); if (i >= 0) notifications.splice(i, 1); } snapshot = queryIndex = null; throw error; }
+    }
     // 初始化访问限制并升级目录；清理与恢复点同批写入，失败不删除旧数据，下次可重试。
-    async function load() {
+    async function loadData(cached, expected) {
       await storage.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
-      const data = await storage.get([DB_KEY, API_KEY, VAULT_KEY, DEVICE_KEY, CATALOG_KEY]);
+      const data = await storage.get([API_KEY, VAULT_KEY, DEVICE_KEY, ...(cached ? [] : [DB_KEY, CATALOG_KEY])]);
       if (data[VAULT_KEY]) global.LocalApplyVault.validate(data[VAULT_KEY]);
       if (sessionKey && data[VAULT_KEY]?.salt !== sessionSalt) { sessionKey = sessionSalt = null; }
       if (data[DEVICE_KEY]) global.LocalApplyVault.validateDevice(data[DEVICE_KEY]);
-      if (data[DB_KEY]) {
+      if (cached) return { db: cached, api: apiSettings(data[API_KEY]), vault: data[VAULT_KEY] || null, device: data[DEVICE_KEY] || null };
+      if (data[DB_KEY] !== undefined) {
         const db = upgradeDatabase(data[DB_KEY]); const api = apiSettings(data[API_KEY]);
         const catalogUpgrade = data[CATALOG_KEY]?.version !== global.WangshenTemplates.CATALOG_VERSION;
         const schemaUpgrade = data[DB_KEY].schemaVersion !== SCHEMA_VERSION;
@@ -511,22 +574,39 @@
         }
         if (!equal(db, data[DB_KEY])) {
           db.revision++;
-          await storage.set({ [DB_KEY]: db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION }, ...(removed || schemaUpgrade ? { [RECOVERY_KEY]: recovery } : {}) }); // 迁移/清理、恢复点和标记同批提交，失败可重试。
+          await persist({ [DB_KEY]: db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION }, ...(removed || schemaUpgrade ? { [RECOVERY_KEY]: recovery } : {}) }, data, expected);
         } else if (catalogUpgrade) {
-          await storage.set({ [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } });
+          await persist({ [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION } }, data, expected);
         }
         return { db, api, vault: data[VAULT_KEY] || null, device: data[DEVICE_KEY] || null };
       }
+      check(!knownDatabase, '持久数据库已被外部移除，请检查存储或从备份恢复；未自动创建空库');
       const legacy = await storage.get(LEGACY_KEY);
       const migrated = migrate(legacy[LEGACY_KEY] || global.WangshenTemplates.defaultState());
       upgradeFieldCatalog(migrated.db);
       const recovery = clone(migrated.db); const removed = removeObsoleteGroups(migrated.db); validate(migrated.db);
       // 先持久化独立配置，再以单 DB 键作为迁移生效点；中断时旧源仍可重试。
       await storage.set({ [API_KEY]: migrated.api });
-      await storage.set({ [DB_KEY]: migrated.db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION }, ...(removed ? { [RECOVERY_KEY]: recovery } : {}) });
+      await persist({ [DB_KEY]: migrated.db, [CATALOG_KEY]: { version: global.WangshenTemplates.CATALOG_VERSION }, ...(removed ? { [RECOVERY_KEY]: recovery } : {}) }, data, expected);
       const saved = await storage.get([DB_KEY, API_KEY]);
       check(equal(saved[DB_KEY], migrated.db) && equal(saved[API_KEY], migrated.api), '迁移写入校验失败；旧数据仍保留');
       return { ...migrated, vault: data[VAULT_KEY] || null, device: data[DEVICE_KEY] || null };
+    }
+    // 串行初始化自然合并并发首次请求；通知竞态至多重读三次，不循环重试损坏数据。
+    async function load() {
+      check(!disposed, '数据仓库已释放'); const started = Date.now();
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await events; const expected = generation; const cached = enabled ? snapshot : null;
+        let loaded;
+        try { loaded = await loadData(cached, expected); await events; }
+        catch (error) { snapshot = queryIndex = null; throw error; }
+        if (expected !== generation) continue;
+        if (cached) metrics.hits++; else { metrics.misses++; metrics.loads++; }
+        knownDatabase = true; if (enabled) snapshot = loaded.db;
+        metrics.loadMs += Date.now() - started;
+        return { ...loaded, generation: expected };
+      }
+      throw new Error('存储持续发生变化，请稍后重新读取');
     }
     // UI 只获得密钥存在状态；启用保险库后绝不通过兼容投影返回真实 Key。
     function project(previous) {
@@ -535,7 +615,7 @@
       for (const providerId of previous.device?.overrides || []) providers.delete(providerId);
       for (const providerId of previous.device?.providers || []) providers.add(providerId);
       if (previous.vault || previous.device) api.apiKeys = {};
-      const state = legacyState(previous.db, api);
+      const state = legacyState(previous.db, api, indexFor(previous.db));
       state.settings.keyStatus = Object.fromEntries([...providers].map((id) => [id, true]));
       state.settings.vault = { enabled: !!previous.vault, unlocked: !!sessionKey, revision: previous.vault?.revision || 0,
         pendingMigration: !!previous.vault?.migrationPending, localRevision: previous.device?.revision || 0,
@@ -553,8 +633,11 @@
       validate(db); db.revision = previous.db.revision + 1;
       const write = { [DB_KEY]: db };
       if (api && !equal(api, previous.api)) write[API_KEY] = apiSettings(api);
-      if (recovery) await storage.set({ [RECOVERY_KEY]: clone(previous.db) });
-      await storage.set(write);
+      await current(previous.generation);
+      if (recovery) { await storage.set({ [RECOVERY_KEY]: clone(previous.db) }); await current(previous.generation); }
+      await persist(write, { [DB_KEY]: previous.db }, previous.generation);
+      // 命令结果可能引用工作副本；发布独立副本，外部修改返回值不能污染可信缓存。
+      if (enabled) { snapshot = clone(db); queryIndex = null; }
       return clone(db);
     }
     // 密文读回并认证成功后才清理旧明文，档案和其他旧源内容保持不变。
@@ -985,8 +1068,27 @@
       });
     }
     return {
+      // 指标只返回数量和实际字节数；不加载个人库、不读取 Key，也不写入日志。
+      storageStatus: async () => {
+        await queue; await events;
+        const dbBytes = backend.getBytesInUse ? await backend.getBytesInUse(DB_KEY) : null;
+        const totalBytes = backend.getBytesInUse ? await backend.getBytesInUse(null) : null;
+        const quotaBytes = Number.isFinite(backend.QUOTA_BYTES) ? backend.QUOTA_BYTES : null;
+        const nearQuota = quotaBytes !== null && totalBytes >= quotaBytes * .9;
+        return { enabled, valid: !!snapshot, revision: snapshot?.revision ?? null, ...metrics, dbBytes, totalBytes, quotaBytes, nearQuota,
+          warning: nearQuota ? '存储空间接近上限，请导出备份并检查占用；不会自动删除资料' : '' };
+      },
+      // 生命周期结束时释放快照和会话密钥；不更改持久层。
+      dispose: () => { disposed = true; snapshot = queryIndex = sessionKey = sessionSalt = null; notifications.length = 0; if (enabled) options.changes?.removeListener(changed); },
       initialize: () => run(({ db }) => clone(db)),
       read: () => run(({ db }) => clone(db)),
+      // 仅后台字段学习使用有界投影；不含申请/草稿/其他档案值，不作为可写数据库返回。
+      readFieldContext: (profileId) => run(({ db }) => {
+        const id = profileId || db.activeProfileId; const index = indexFor(db);
+        return clone({ revision: db.revision, activeProfileId: db.activeProfileId, profiles: db.profiles.filter((row) => row.profileId === id),
+          fieldDefinitions: db.fieldDefinitions, publicFieldIds: db.publicFieldIds,
+          bindings: index.bindings.get(id) || [], fieldValues: index.fieldValues.get(id) || [], entries: index.entries.get(id) || [], mappingRules: index.mappingRules.get(id) || [] });
+      }),
       readLegacy: () => run(project),
       // 仅 AI 客户端可用：解密发生在后台/文件运行时，不向 UI 返回明文。
       readAiSettings: () => run(async (previous) => {

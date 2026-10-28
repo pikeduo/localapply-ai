@@ -20,6 +20,8 @@
 
 - 本阶段按用户最新要求采用 `chrome.storage.local`，保持无构建的原生 JS；阶段零的 IndexedDB/Vite/Vue 工程化方案后置。
 - `data/local-store.js` 为规范数据入口，`background.js` 持有唯一 repository 实例。页面禁止绕开后台直接写数据库；内容脚本只能请求阈值/开关等安全投影。
+- 2026-10-28 存储专项：分层第 03 步已完成并暂停后续步骤；不启动第 04 步或阶段六。后台显式启用 repository 快照缓存，仅首次/失效后完整读取校验 DB；API/密文每次新读。写入沿用队列/revision/恢复点，必须 await 持久化再发布独立副本和响应；失败不信任新副本。onChanged 用规范化前后值摘要识别自身通知，外部 DB/目录变化释放快照和引用索引；不得以缓存代替持久层。
+- `readFieldContext` 只供后台学习使用按档案分区的只读投影，索引绑定快照身份/revision，不进入 session、备份或内容脚本。规则撤销仍读取全量规则恢复点，禁止用局部投影覆盖其他档案；file:// 明确关闭缓存并保留锁内读取。诊断的字节占用来自 getBytesInUse，接近配额只提示备份/检查，禁止自动删资料或新增 unlimitedStorage。
 - `localapply.database` 当前为 Schema v5：v2/v3/v4 逐级完整校验后原子升级，v5 只新增 `applications` 本地申请表；升级前个人库与新库同批保存恢复点，凭据不变。`localapply.apiSettings` 为独立配置。`wangshenAutofill` 保留旧资料，唯一清理例外是 Key 密文验证成功后删除旧明文 Key。旧恢复点须升级后恢复。
 - `data/applications.js` 独立维护岗位、轮次及状态历史，写入必须确认且绑定 revision；旧填表 `ledger` 不代表成功投递。`content/job-recognizer.js` 只读当前岗位元数据，不读输入值；`data/job-tracking.js` 用后台标签实际地址和扫描文档校验提交，SPA 的 `sender.url` 可能是旧路径。临时成功会话只放 session，10 分钟/20 条；成功必须另行确认才入库，确认后清理提示。内容消息统一由 detector 路由，禁止多监听器抢答。普通 v5 备份含申请，兼容 v4/v3 不含；回滚前另存独立申请 JSON 和完整备份。
 - `localapply.keyVault` 仅保存 PBKDF2/AES-GCM 封套；派生密钥只驻留当前 repository 内存，错误口令不得修改存储。迁移分为先写密文、读回认证、清理明文；中断后须通过 unlock 继续。UI 不得读回已加密 Key，仅显示 keyStatus；新增 Key 必须通过 vaultCommand 保存。
