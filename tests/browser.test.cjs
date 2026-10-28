@@ -297,6 +297,24 @@ test('Moka反馈：正式候选、工作职责、动态结束年月和切页保�
       await page.locator('#rerender').click(); const actual = await page.evaluate(() => acceptedControls);
       assert.equal(actual.experience, '一年以下工作经验'); assert.equal(actual.school0, '合成本科大学'); assert.equal(actual.major1, '合成专业乙'); await page.close();
     });
+    // 复现用户截图里的完整菜单，已手动打开和由插件打开均须真正写入组件状态。
+    await t.test('截图中的“1 年以下”唯一匹配，手动展开菜单后仍可填写', async () => {
+      for (const opened of [false, true]) {
+        const { page, view } = await prepare('spaced-experience'); const row = view.rows.find((item) => item.field.label === '工作经验');
+        assert.equal(row.target?.fieldId, 'builtin.workExperience');
+        if (opened) await page.locator('#experience').click();
+        const result = await rpc(options, 'learning:fill', { sessionId: view.sessionId, scanId: row.field.scanId, confirmed: true }); const filled = result.rows.find((item) => item.field.scanId === row.field.scanId);
+        assert.equal(filled.status, 'success', filled.reason); assert.equal(filled.diagnostic.matchCount, 1); assert.equal(await page.evaluate(() => optionClicks), 1);
+        await page.locator('#rerender').click(); assert.equal(await page.evaluate(() => acceptedControls.experience), '1 年以下'); assert.equal(await page.locator('#experience').evaluate((el) => el.previousElementSibling.textContent), '1 年以下');
+        assert.equal(await page.evaluate(() => submissions), 0); await page.close();
+      }
+    });
+    // 新增空白兼容后也不能在两个同义选项中擅自择一。
+    await t.test('带空格与不带空格的重复年限仍拒绝选择', async () => {
+      const { page, view } = await prepare('spaced-duplicate'); const row = view.rows.find((item) => item.field.label === '工作经验');
+      const result = await rpc(options, 'learning:fill', { sessionId: view.sessionId, scanId: row.field.scanId, confirmed: true }); const filled = result.rows.find((item) => item.field.scanId === row.field.scanId);
+      assert.equal(filled.status, 'unsupported'); assert.equal(filled.diagnostic.reasonCode, 'ambiguous_option'); assert.equal(await page.evaluate(() => optionClicks), 0); await page.close();
+    });
     await t.test('两个等价候选仍拒绝猜选，不因同义规则而覆盖歧义', async () => {
       const { page, view } = await prepare('equivalent-duplicate'); const row = view.rows.find((item) => item.field.label === '工作经验');
       const result = await rpc(options, 'learning:fill', { sessionId: view.sessionId, scanId: row.field.scanId, confirmed: true }); const filled = result.rows.find((item) => item.field.scanId === row.field.scanId);

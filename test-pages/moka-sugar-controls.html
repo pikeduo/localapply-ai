@@ -80,7 +80,10 @@
     };
     input.addEventListener('mousedown', () => { if (!popup.hidden) { popup.hidden = true; return; } view = precision; render(); openPopup(popup); });
   }
-  const basic = record(block('个人信息')); calendar(basic); select(field(basic, '工作经验'), 'experience', '请选择', mode === 'equivalent-duplicate' ? ['1年以下', '一年以下工作经验'] : ['应届生', ...(mode === 'feedback' ? ['一年以下工作经验'] : []), '1-3年', '3-5年']);
+  // 按截图复现含单位空格的年限菜单；重复等价项仍须拒绝自动选择。
+  const spacedExperience = ['在校生', '应届毕业生', '1 年以下', '1 年', '2 年', '3 年', '4 年', '5 年'];
+  const experienceOptions = mode === 'spaced-experience' ? spacedExperience : mode === 'spaced-duplicate' ? [...spacedExperience, '1年以下'] : mode === 'equivalent-duplicate' ? ['1年以下', '一年以下工作经验'] : ['应届生', ...(mode === 'feedback' ? ['一年以下工作经验'] : []), '1-3年', '3-5年'];
+  const basic = record(block('个人信息')); calendar(basic); select(field(basic, '工作经验'), 'experience', '请选择', experienceOptions);
   const education = block('教育背景');
   // 添加按钮沿用上传页结构；预置两条恰好对应本地两条，无须测试器直接分配来源。
   const add = document.createElement('button'); add.type = 'button'; add.textContent = '+ 添加'; education.firstChild.append(add);

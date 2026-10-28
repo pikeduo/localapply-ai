@@ -20,6 +20,16 @@ test('下拉正式标签的空白及一年以下同义表达有界匹配', () =>
   assert.equal(A.optionEqual('06月', '6', '', '月'), true);
 });
 
+// 复现网页“1 年以下”的排版空白；只兼容明确的年单位，不扩大经验区间或修改学校文本。
+test('工作经验兼容数字与年之间的显示空白，保留区间边界', () => {
+  for (const label of ['1 年以下', '１　年以下', '1\u00a0年以下', '一 年以下经验', '不足 1 年', '少于 一 年']) {
+    assert.equal(A.optionEqual(label, '1年以下', '工作经验'), true, label);
+    assert.equal(A.optionEqual('1年以下', label, '工作经验'), true, label);
+  }
+  for (const label of ['1 年', '1 年以上', '1 年以内', '2 年以下', '11 年以下', '在校生', '应届毕业生']) assert.equal(A.optionEqual(label, '1年以下', '工作经验'), false, label);
+  assert.equal(A.optionEqual('1 年以下', '1年以下', '学校名称'), false);
+});
+
 // 只提供适配器实际使用的属性，保证计划计算不依赖输入框当前值。
 function input(type = 'date', placeholder = '') { return { type, getAttribute: (key) => key === 'type' ? type : key === 'placeholder' ? placeholder : null }; }
 
