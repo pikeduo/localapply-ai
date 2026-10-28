@@ -8,6 +8,89 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 原生选择走真实后台意图和固定注册表；仅合成页面/独立 profile，不调用付费 API。
+test('分层第四步：原生选择注册表与真实框架', { timeout: 90000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'native-registry-')); const api = await serve(); let context; const errors = [];
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.gender', value: '男' } } });
+    const multi = (await rpc(options, 'localapply:command', { request: { action: 'createField', payload: { profileId, definition: { label: '合成多选来源', type: 'multiSelect', group: '求职', options: ['开发', '测试', '运维'] }, value: ['开发', '测试'] } } })).result;
+    const boolean = (await rpc(options, 'localapply:command', { request: { action: 'createField', payload: { profileId, definition: { label: '合成布尔来源', type: 'boolean', group: '求职' }, value: true } } })).result;
+    const protectedValue = (await rpc(options, 'localapply:command', { request: { action: 'createField', payload: { profileId, definition: { label: '合成操作来源', type: 'text', group: '求职' }, value: '同意隐私协议' } } })).result;
+    const before = (await rpc(options, 'localapply:read')).database; const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message));
+    await page.goto(api.base + '/test-pages/native-controls.html'); await page.locator('#react-native-select').waitFor(); await page.locator('#vue-native-select').waitFor();
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    // 测试旁路只保留合成意图，仍由原 API 经生产授权和后台数据来源校验。
+    await worker.evaluate(() => { const original = chrome.tabs.sendMessage; globalThis.__nativeMessages = {}; chrome.tabs.sendMessage = function (...args) { if (args[1]?.type === 'learning:fill') globalThis.__nativeMessages[args[1].scanId] = structuredClone(args[1]); return original.apply(chrome.tabs, args); }; });
+    const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true });
+    // 每条测试明确选择真实已保存的来源，不能向 UI 消息塞入自制值或计划。
+    async function fill(label, fieldId = 'builtin.gender') {
+      const row = scan.rows.find((row) => row.field.label === label); assert.ok(row, '扫描字段：' + label);
+      await rpc(options, 'learning:select', { sessionId: scan.sessionId, scanId: row.field.scanId, fieldId, entryId: null });
+      const result = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true }); return result.rows.find((item) => item.field.scanId === row.field.scanId);
+    }
+    await t.test('标签转编码、独立 for 标签、布尔和多选集合真实写入，相同内容零重复事件', async () => {
+      const cases = [['性别', 'builtin.gender'], ['单选性别', 'builtin.gender'], ['合成多选方向', multi], ['方向多选', multi], ['具备实习经历', boolean]];
+      for (const [label, fieldId] of cases) { const result = await fill(label, fieldId); assert.equal(result.status, 'success', label + '：' + result.reason); }
+      assert.equal(await page.locator('#native-select').inputValue(), 'M'); assert.equal(await page.locator('#native-male').isChecked(), true);
+      assert.deepEqual(await page.locator('[name=nativeChecks]:checked').evaluateAll((nodes) => nodes.map((node) => node.value)), ['dev', 'test']);
+      assert.deepEqual(await page.locator('#native-multiple option:checked').evaluateAll((nodes) => nodes.map((node) => node.value)), ['dev', 'test']); assert.equal(await page.locator('#native-boolean').isChecked(), true);
+      const events = await page.evaluate(() => [__nativeClicks, __nativeChanges]);
+      for (const [label, fieldId] of cases) assert.equal((await fill(label, fieldId)).status, 'success');
+      assert.deepEqual(await page.evaluate(() => [__nativeClicks, __nativeChanges]), events);
+    });
+    await t.test('重复标签、禁用组及受保护选项拒绝；已有不同单选/多选完整保留', async () => {
+      const events = await page.evaluate(() => [__nativeClicks, __nativeChanges]);
+      assert.equal((await fill('重复标签')).status, 'failed'); assert.equal((await fill('禁用候选')).status, 'unsupported'); assert.equal((await fill('操作候选', protectedValue)).status, 'unsupported');
+      assert.deepEqual(await page.evaluate(() => [__nativeClicks, __nativeChanges]), events);
+      await page.locator('#native-select').selectOption('F'); assert.equal((await fill('性别')).status, 'needs_confirmation'); assert.equal(await page.locator('#native-select').inputValue(), 'F');
+      await page.locator('#native-multiple').selectOption('ops'); assert.equal((await fill('方向多选', multi)).status, 'needs_confirmation'); assert.deepEqual(await page.locator('#native-multiple option:checked').evaluateAll((nodes) => nodes.map((node) => node.value)), ['ops']);
+      // 不在扫描可见成员中的同名单选也受浏览器联动，不能因插件点击而清除其原选择。
+      await page.evaluate(() => { const node = document.createElement('input'); node.id = 'hidden-radio'; node.type = 'radio'; node.name = 'nativeRadio'; node.value = 'private'; node.hidden = true; document.querySelector('form').append(node); node.checked = true; });
+      assert.equal((await fill('单选性别')).status, 'unsupported'); assert.equal(await page.locator('#hidden-radio').isChecked(), true); await page.locator('#hidden-radio').evaluate((node) => node.remove());
+    });
+    await t.test('真实 React/Vue 接受 select/radio/checkbox 状态，重绘保留，拒绝组件不报假成功', async () => {
+      for (const framework of ['React', 'Vue']) {
+        for (const [suffix, fieldId] of [['选择', 'builtin.gender'], ['单选', 'builtin.gender'], ['布尔', boolean]]) { const result = await fill(framework + suffix, fieldId); assert.equal(result.status, 'success', framework + suffix + '：' + result.reason); }
+        const rejected = await fill(framework + '拒绝选择'); assert.equal(rejected.status, 'failed'); assert.match(rejected.reason, /回退/);
+      }
+      const expected = { gender: 'M', radio: 'M', checked: true };
+      assert.deepEqual(await page.evaluate(() => __nativeProbe.react()), expected); assert.deepEqual(await page.evaluate(() => __nativeProbe.vue()), expected);
+      await page.evaluate(() => { __nativeProbe.redrawReact(); __nativeProbe.redrawVue(); });
+      for (const framework of ['react', 'vue']) { assert.equal(await page.locator(`#${framework}-native-select`).inputValue(), 'M'); assert.equal(await page.locator(`#${framework}-native-check`).isChecked(), true); assert.equal(await page.locator(`#${framework}-native-reject`).inputValue(), ''); }
+    });
+    await t.test('私有多选计划拒绝同形候选替换、篡改、重放；取消后没有后续点击', async () => {
+      const row = scan.rows.find((row) => row.field.label === '合成多选方向'); const encoded = await worker.evaluate((scanId) => JSON.stringify(globalThis.__nativeMessages[scanId].intent), row.field.scanId);
+      const checks = await worker.evaluate(async ({ tabId, encoded }) => (await chrome.scripting.executeScript({ target: { tabId }, args: [encoded], func: async (encoded) => {
+        const intent = JSON.parse(encoded); const S = globalThis.LocalApplyPageScanner; const P = globalThis.LocalApplyFillPlanner; const V = globalThis.LocalApplyVerifiedFill;
+        const item = S.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId); item.members.forEach((node) => { node.checked = false; });
+        // 只验证合成局部节点的私有身份，不用 JSON 副本冒充生产计划。
+        const rejected = (fn) => { try { fn(); return false; } catch { return true; } };
+        const plan = P.prepare(item, intent).plan; const id = plan.adapterId; const old = item.members[1]; const clone = old.cloneNode(true); old.replaceWith(clone);
+        const replaced = rejected(() => P.validate(plan, item, intent)); clone.replaceWith(old);
+        const tamperedPlan = P.prepare(item, intent).plan; tamperedPlan.targetOptions[0].value = 'ops'; const tampered = rejected(() => P.validate(tamperedPlan, item, intent));
+        const replayPlan = P.prepare(item, intent).plan; P.validate(replayPlan, item, intent, true); const replay = rejected(() => P.validate(replayPlan, item, intent));
+        const cancel = new AbortController(); item.members[0].addEventListener('click', () => cancel.abort(), { once: true });
+        const result = await V.fill(item, intent.value, { intent, signal: cancel.signal }); await new Promise((resolve) => setTimeout(resolve, 550));
+        return { id, replaced, tampered, replay, status: result.status, selected: item.members.map((node) => node.checked) };
+      } }))[0].result, { tabId, encoded });
+      assert.deepEqual(checks, { id: 'checkbox', replaced: true, tampered: true, replay: true, status: 'failed', selected: [true, false, false] });
+    });
+    await t.test('零 AI/提交/协议点击，个人库/缓存和旧备份不受计划影响，诊断没有候选或值', async () => {
+      assert.ok(!scan.rows.some((row) => /协议|同步更新/.test(row.field.label)));
+      const diagnostics = JSON.stringify(await rpc(options, 'diagnostics:read')); const backup = JSON.stringify((await rpc(options, 'localapply:exportBackup')).backup);
+      for (const text of ['intent.', 'plan.', 'targetOptions', '同意隐私协议', 'dev', '合成多选来源']) assert.ok(!diagnostics.includes(text), text);
+      for (const text of ['intent.', 'plan.', 'targetOptions']) assert.ok(!backup.includes(text), text);
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => __submitCount), 0);
+      assert.equal(await page.locator('#agreement').isChecked(), false); assert.equal(await page.locator('#sync').isChecked(), false); assert.deepEqual(errors, []);
+      await page.screenshot({ path: path.join(testRoot, 'native-registry-controls.png'), fullPage: true });
+    });
+  } finally { await context?.close(); api.server.closeAllConnections(); await new Promise((resolve) => api.server.close(resolve)); assert.ok(path.resolve(profile).startsWith(path.resolve(testRoot) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 缓存专项通过真实后台、实际本地存储及整进程重启，文件页使用真实 IndexedDB/Web Lock。
 test('存储缓存：真实通知、保存失败草稿、权限及重启', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'storage-cache-')); let context;
@@ -133,7 +216,8 @@ test('分层第三步：固定注册表与文本执行路径', { timeout: 90000 
         await new Promise((resolve) => setTimeout(resolve, 600)); S.scan(true);
         return { ids: R.ids, frozen: Object.isFrozen(R), register: typeof R.register, adapterId, stopped: stopped.status, beforeWrites, cancelled: cancelled.status, revoked: revoked.status, writes: globalThis.__textWrites - writes, marks: globalThis.__textMarks - marks, legacy: globalThis.__legacyTextCalls };
       } }))[0].result, { tabId, encoded });
-      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
+      // 第四步新增三类固定能力；保留完整列表及全部取消/撤销断言，不降低白名单校验。
+      assert.deepEqual(result, { ids: ['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox'], frozen: true, register: 'undefined', adapterId: 'text', stopped: 'failed', beforeWrites: 0, cancelled: 'failed', revoked: 'failed', writes: 2, marks: 0, legacy: 0 });
     });
     await t.test('保留个人库、日志白名单及零模型/提交，扫描撤销后可重新使用', async () => {
       scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true }); assert.ok(scan.rows.length > 0);
@@ -961,7 +1045,7 @@ async function serve() {
   const calls = [];
   const modelRequests = [];
   const modelApi = { status: 200, data: { data: [{ id: 'synthetic-local' }, { id: 'synthetic-other' }, { id: 'synthetic-local' }] }, hold: false };
-  let frameworkBundle = null; // 真正的 React/Vue 仅临时打包到测试响应，不写入发行资源。
+  const frameworkBundles = new Map(); // 真正的 React/Vue 仅临时打包到测试响应，不写入发行资源。
   const server = http.createServer(async (req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
     // 文件页必须由服务端明确允许 Origin: null；测试不关闭浏览器 CORS 防护。
@@ -1028,9 +1112,9 @@ async function serve() {
       if (modelApi.chatHold) { modelApi.releaseChat = respond; modelApi.onChat?.(); } else respond();
       return;
     }
-    if (pathname === '/test-pages/phase3-frameworks.js') {
-      frameworkBundle ||= require('esbuild').build({ entryPoints: [path.join(ROOT, 'test-pages/phase3-frameworks.js')], bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"', '__VUE_OPTIONS_API__': 'true', '__VUE_PROD_DEVTOOLS__': 'false', '__VUE_PROD_HYDRATION_MISMATCH_DETAILS__': 'false' } });
-      const output = await frameworkBundle; res.setHeader('Content-Type', 'application/javascript'); res.end(output.outputFiles[0].contents); return;
+    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js'].includes(pathname)) {
+      if (!frameworkBundles.has(pathname)) frameworkBundles.set(pathname, require('esbuild').build({ entryPoints: [path.join(ROOT, pathname)], bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"', '__VUE_OPTIONS_API__': 'true', '__VUE_PROD_DEVTOOLS__': 'false', '__VUE_PROD_HYDRATION_MISMATCH_DETAILS__': 'false' } }));
+      const output = await frameworkBundles.get(pathname); res.setHeader('Content-Type', 'application/javascript'); res.end(output.outputFiles[0].contents); return;
     }
     if (!/^\/test-pages\/[a-z0-9-]+\.html$/.test(pathname)) { res.writeHead(404); res.end(); return; }
     try { const body = await fs.readFile(path.join(ROOT, pathname)); res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(body); }

@@ -167,7 +167,7 @@ async function injectContentScripts(tabId) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/controls/text.js', 'content/controls/registry.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'],
+      files: ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/detector.js', 'content/filler.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/registry.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'],
     });
     await new Promise((r) => setTimeout(r, 700)); // 等detector完成首次检测
     return true;

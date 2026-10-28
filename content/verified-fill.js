@@ -15,12 +15,7 @@
     const { el, members } = item; const control = controlOf(item);
     if (!el.isConnected || el.getAttribute('aria-invalid') === 'true' || el.validity?.valid === false) return false;
     if (A.handles(item)) return A.accepted(item, expected);
-    if (control.type === 'checkbox') {
-      if (members.length === 1) return typeof expected === 'boolean' && el.checked === expected;
-      return Array.isArray(expected) && JSON.stringify(members.filter((node) => node.checked).map((node) => node.value).sort()) === JSON.stringify([...expected].map(String).sort());
-    }
-    if (control.type === 'radio') return members.some((node) => node.checked && (node.value === String(expected) || node.closest('label')?.textContent.trim() === String(expected)));
-    if (control.type === 'select') return [...el.selectedOptions].some((option) => option.value === String(expected) || option.textContent.trim() === String(expected));
+    if (['select', 'radio', 'checkbox'].includes(control.type)) return global.LocalApplyNativeChoices.accepted(item, expected);
     if (control.type === 'combobox') {
       if (A.dropdown(el)) return A.dropdownAccepted(el, expected);
       const menu = el.getRootNode().getElementById?.(el.getAttribute('aria-controls') || el.getAttribute('aria-owns'));
@@ -56,9 +51,8 @@
   function structure(item) {
     const type = controlOf(item).type;
     return JSON.stringify({ field: global.FieldMatchingEngine.features(item.field), control: controlOf(item),
-      attributes: ['type', 'readonly', 'contenteditable', 'role', 'min', 'max', 'placeholder', 'aria-controls', 'aria-owns', 'aria-disabled', 'aria-readonly', 'aria-autocomplete', 'aria-haspopup'].map((name) => item.el.getAttribute(name)),
-      candidates: ['select', 'radio'].includes(type) ? nativeCandidates(item).map((node) => ({ value: node.value,
-        label: (type === 'select' ? node.textContent : node.closest('label')?.textContent)?.trim() || '', disabled: !!node.disabled || !!node.closest('optgroup[disabled]') })) : [] });
+      attributes: ['type', 'readonly', 'contenteditable', 'role', 'min', 'max', 'placeholder', 'aria-controls', 'aria-owns', 'aria-disabled', 'aria-readonly', 'aria-autocomplete', 'aria-haspopup', 'multiple', 'name', 'form'].map((name) => item.el.getAttribute(name)),
+      candidates: ['select', 'radio', 'checkbox'].includes(type) ? global.LocalApplyNativeChoices.snapshot(item).rows?.map(({ node, ...row }) => row) || [] : [] });
   }
 
   // 适配器只持有当前项和固定守卫；每次执行/回读重新检查文档授权及原节点。
@@ -68,11 +62,13 @@
       assertActive() {
         const current = global.LocalApplyPageScanner.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId);
         if (current.el !== item.el || controlOf(current).fingerprint !== controlOf(item).fingerprint) throw new Error('填写控件已变化');
+        if (['radio', 'checkbox'].includes(controlOf(item).type) && (current.members.length !== item.members.length
+          || current.members.some((node, index) => node !== item.members[index]))) throw new Error('填写候选已变化');
       },
       // 状态读取沿用已有真实性及校验检查，不读取框架私有对象。
       accepted(value) { return accepted(item, value); },
       // 执行器须消费原计划，不能绕过私有身份、来源和非空快照检查。
-      consumePlan(plan) { return validatePrepared(plan, item, intent, true); }
+      consumePlan(plan) { validatePrepared(plan, item, intent, true); return preparedPlans.get(plan).adapterState; }
     };
   }
 
@@ -84,9 +80,9 @@
     if (prepared?.error) return prepared;
     if (adapted) { const existing = A.plan(item, value); if (existing.error) return { error: { ...existing.error, diagnostic: { phase: 'plan' } } }; }
     const blocked = conflict(item, value, options); if (blocked) return { error: { ...blocked, diagnostic: { phase: 'protect', reasonCode: 'existing_value_preserved' } } };
-    let operation = prepared?.operation || (adapted || ['checkbox', 'combobox'].includes(control.type) ? 'legacy-interaction' : 'write-value'); let targetOption; let optionNode;
+    let operation = prepared?.operation || (adapted || ['checkbox', 'combobox'].includes(control.type) ? 'legacy-interaction' : 'write-value'); let targetOption = prepared?.targetOption; let optionNode;
     if (accepted(item, value)) operation = 'verify-existing';
-    else if (!adapted && ['select', 'radio'].includes(control.type)) {
+    else if (!adapter && !adapted && ['select', 'radio'].includes(control.type)) {
       const candidates = nativeCandidates(item); const found = candidates.filter((node) => node.value === String(value)
         || (control.type === 'select' ? node.textContent : node.closest('label')?.textContent)?.trim() === String(value));
       if (found.length !== 1) return { error: { status: 'failed', ok: false, reason: '没有唯一的精确选项，未进行模糊选择', diagnostic: { phase: 'options', candidateCount: candidates.length, matchCount: found.length, reasonCode: found.length ? 'ambiguous_option' : 'no_exact_option' } } };
@@ -97,10 +93,13 @@
     const date = adapted && !['phone', 'address'].includes(item.compound?.kind) ? A.dateValue(value) : null;
     const plan = { version: C.VERSION, planId: 'plan.' + crypto.randomUUID(), intentId: intent.intentId,
       binding: { ...intent.binding }, source: { ...intent.source }, controlFingerprint: control.fingerprint, operation,
-      verification: ({ 'write-value': 'value', 'select-option': 'selected-option' })[operation] || 'legacy-delayed', state: operation === 'legacy-interaction' ? 'delegated' : 'ready',
-      ...(adapter ? { adapterId: adapter.id } : {}), ...(targetOption ? { targetOption } : {}), ...(date ? { datePrecision: date.precision } : {}) };
+      verification: ({ 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state' })[operation] || 'legacy-delayed', state: operation === 'legacy-interaction' ? 'delegated' : 'ready',
+      ...(adapter ? { adapterId: adapter.id } : {}), ...(targetOption ? { targetOption } : {}),
+      ...(prepared?.targetOptions ? { targetOptions: prepared.targetOptions } : {}), ...(typeof prepared?.checked === 'boolean' ? { checked: prepared.checked } : {}), ...(date ? { datePrecision: date.precision } : {}) };
     C.validatePlan(plan, intent);
-    preparedPlans.set(plan, { item, optionNode, structure: structure(item), current: JSON.stringify(global.LocalApplyPageScanner.readValue(item)),
+    preparedPlans.set(plan, { item, optionNode, adapterState: prepared?.adapterState, candidates: ['select', 'radio', 'checkbox'].includes(control.type) ? [...nativeCandidates(item)] : null,
+      selection: ['select', 'radio', 'checkbox'].includes(control.type) ? nativeCandidates(item).map((node) => control.type === 'select' ? node.selected : node.checked) : null,
+      structure: structure(item), current: JSON.stringify(global.LocalApplyPageScanner.readValue(item)),
       intent: JSON.stringify(intent), encoded: JSON.stringify(plan), createdAt: Date.now(), used: false });
     return { plan };
   }
@@ -112,6 +111,8 @@
     const current = global.LocalApplyPageScanner.record(intent.binding.scanId, intent.binding.documentId, intent.binding.semanticId);
     if (saved.item.el !== item.el || current.el !== item.el || structure(current) !== saved.structure
       || JSON.stringify(global.LocalApplyPageScanner.readValue(current)) !== saved.current
+      || saved.candidates && (nativeCandidates(current).length !== saved.candidates.length || nativeCandidates(current).some((node, index) => node !== saved.candidates[index]
+        || (controlOf(current).type === 'select' ? node.selected : node.checked) !== saved.selection[index]))
       || saved.optionNode && !nativeCandidates(current).includes(saved.optionNode)) throw new Error('填写控件或候选已变化，请重新准备');
     if (plan.adapterId && R.resolve(controlOf(current), { item: current }) !== R.get(plan.adapterId)) throw new Error('填写适配器已变化');
     if (consume) saved.used = true;
@@ -153,7 +154,7 @@
     if (result.ok) global.WangshenFiller.markFilled(el);
     return { ...result, diagnostic: { phase: 'verify', reasonCode: result.ok ? 'verified' : 'value_not_accepted' } };
   }
-  // 文本意图交固定注册表执行；尚未接入的控件保留旧路径，失败不再双重执行。
+  // 文本及原生选择意图交固定注册表执行；复杂控件保留旧路径，失败不双重执行。
   async function fill(item, value, options = {}) {
     A.diagnostic?.(item, true); let result;
     if (options.intent) {

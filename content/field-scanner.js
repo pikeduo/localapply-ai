@@ -137,6 +137,7 @@
     if (A.dropdown(item.el)) return A.dropdownText(item.el);
     if (control.type === 'radio') return item.members.find((el) => el.checked)?.value || '';
     if (control.type === 'checkbox') return item.members.length === 1 ? item.el.checked : item.members.filter((el) => el.checked).map((el) => el.value);
+    if (control.type === 'select' && item.el.multiple) return [...item.el.selectedOptions].map((option) => option.value);
     if (control.type === 'combobox' && !('value' in item.el)) return item.el.textContent.trim();
     return item.el.isContentEditable ? (global.WangshenFiller?.readText?.(item.el) ?? item.el.textContent) : item.el.value;
   }

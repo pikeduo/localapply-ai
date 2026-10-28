@@ -9,14 +9,14 @@ const path = require('node:path');
 // 载入生产契约与填写验证器，保留真实匹配/日期逻辑，只替代原生节点接口。
 function fixture(storageType = 'select', value = '男', controlType = 'select') {
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date, setTimeout });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'content/field-adapters.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), context);
   const db = { revision: 7, activeProfileId: 'profile.a', profiles: [{ profileId: 'profile.a' }, { profileId: 'profile.b' }], entries: [{ profileId: 'profile.b', entryId: 'entry.b' }],
     fieldDefinitions: [{ fieldId: 'builtin.synthetic', type: storageType }], fieldValues: [{ profileId: 'profile.a', fieldId: 'builtin.synthetic', entryId: null, value }] };
   const M = context.FieldMatchingEngine; const C = context.LocalApplyFillContract;
   const field = { scanId: 'scan.synthetic', label: '合成字段', name: '', placeholder: '', options: [], group: '', kind: '', degree: '', index: 0, type: controlType }; field.semanticId = M.semanticId(field);
   const intent = C.createIntent(db, 'profile.a', { fieldId: 'builtin.synthetic', entryId: null }, field, { sessionId: 'session.a', documentId: 'document.a', tabId: 42 });
   // 桩只提供本步骤实际读取的接口；不模拟点击成功或伪造框架状态。
-  const option = (label, code) => ({ textContent: label, value: code, disabled: false, getAttribute: () => null, closest: () => null });
+  const option = (label, code) => ({ tagName: 'OPTION', textContent: label, value: code, selected: false, disabled: false, getAttribute: () => null, closest: () => null });
   const attrs = { type: controlType }; const el = { tagName: controlType === 'select' ? 'SELECT' : 'INPUT', type: controlType, value: '', isConnected: true, options: [option('男', 'M'), option('女', 'F')], selectedOptions: [], getAttribute: (name) => attrs[name] ?? null, matches: () => false, closest: () => null };
   const item = { el, members: [el], field, control: M.controlDescriptor(field) }; let current = item;
   context.LocalApplyPageScanner = { record: () => current, readValue: (next) => next.el.value };

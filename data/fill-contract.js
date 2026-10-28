@@ -2,7 +2,7 @@
 (function (global) {
   'use strict';
   const VERSION = 1;
-  const ADAPTER_IDS = Object.freeze(['text', 'textarea', 'contenteditable']);
+  const ADAPTER_IDS = Object.freeze(['text', 'textarea', 'contenteditable', 'select', 'radio', 'checkbox']);
   const logicalTypes = { text: 'string', textarea: 'string', select: 'enum', number: 'number', boolean: 'boolean', date: 'date', multiSelect: 'string-array' };
   const bindingKeys = ['sessionId', 'tabId', 'documentId', 'scanId', 'semanticId'];
   const sourceKeys = ['profileId', 'fieldId', 'entryId', 'revision'];
@@ -80,21 +80,36 @@
 
   // 计划只有固定操作及验证类型；它不是脚本，执行还必须持有本页私有句柄并重新核对节点。
   function validatePlan(plan, intent) {
-    validateIntent(intent); shape(plan, ['version', 'planId', 'intentId', 'binding', 'source', 'controlFingerprint', 'operation', 'verification', 'state', 'targetOption', 'datePrecision', 'adapterId']);
+    validateIntent(intent); shape(plan, ['version', 'planId', 'intentId', 'binding', 'source', 'controlFingerprint', 'operation', 'verification', 'state', 'targetOption', 'targetOptions', 'checked', 'datePrecision', 'adapterId']);
     check(plan.version === VERSION && typeof plan.planId === 'string' && /^plan\.[\w.-]+$/.test(plan.planId) && plan.intentId === intent.intentId);
     shape(plan.binding, bindingKeys); shape(plan.source, sourceKeys);
     check(bindingKeys.every((key) => plan.binding[key] === intent.binding[key]) && sourceKeys.every((key) => plan.source[key] === intent.source[key]), '填写来源或文档已变化');
     check(typeof plan.controlFingerprint === 'string' && /^control\.v1\.[a-f0-9]{16}$/.test(plan.controlFingerprint));
-    const pairs = { 'write-value': 'value', 'select-option': 'selected-option', 'verify-existing': 'legacy-delayed', 'legacy-interaction': 'legacy-delayed' };
+    const pairs = { 'write-value': 'value', 'select-option': 'selected-option', 'select-options': 'selected-options', 'set-checked': 'checked-state', 'verify-existing': 'legacy-delayed', 'legacy-interaction': 'legacy-delayed' };
     check(Object.hasOwn(pairs, plan.operation) && plan.verification === pairs[plan.operation]);
     check(plan.state === (plan.operation === 'legacy-interaction' ? 'delegated' : 'ready'));
-    // 注册能力仅来自固定白名单，旧委托计划没有 adapterId，不能冒用文本执行器。
-    if (Object.hasOwn(plan, 'adapterId')) check(ADAPTER_IDS.includes(plan.adapterId) && ['write-value', 'verify-existing'].includes(plan.operation));
+    // 每种注册能力只能使用其固定操作，选择控件不能冒用文本或旧委托路径。
+    if (Object.hasOwn(plan, 'adapterId')) {
+      const operations = { text: ['write-value'], textarea: ['write-value'], contenteditable: ['write-value'], select: ['select-option', 'select-options'], radio: ['select-option'], checkbox: ['set-checked', 'select-options'] };
+      check(ADAPTER_IDS.includes(plan.adapterId) && [...operations[plan.adapterId], 'verify-existing'].includes(plan.operation));
+    } else check(!['select-options', 'set-checked'].includes(plan.operation));
+    // 单项和多项选项共享严格形状，句柄/编码不允许夹带可执行属性。
+    function validateOption(option) {
+      shape(option, ['handle', 'label', 'value']); reference(option.handle);
+      check(/^option\.[\w.-]+$/.test(option.handle));
+      for (const key of ['label', 'value']) check(typeof option[key] === 'string' && option[key].length <= 100000);
+    }
     if (plan.operation === 'select-option') {
-      shape(plan.targetOption, ['handle', 'label', 'value']); reference(plan.targetOption.handle);
-      check(/^option\.[\w.-]+$/.test(plan.targetOption.handle));
-      for (const key of ['label', 'value']) check(typeof plan.targetOption[key] === 'string' && plan.targetOption[key].length <= 100000);
+      validateOption(plan.targetOption);
     } else check(!Object.hasOwn(plan, 'targetOption'));
+    if (plan.operation === 'select-options') {
+      check(Array.isArray(intent.value) && Array.isArray(plan.targetOptions) && plan.targetOptions.length > 0 && plan.targetOptions.length <= 200);
+      plan.targetOptions.forEach(validateOption);
+      check(new Set(plan.targetOptions.map((option) => option.handle)).size === plan.targetOptions.length
+        && new Set(plan.targetOptions.map((option) => option.value)).size === plan.targetOptions.length);
+    } else check(!Object.hasOwn(plan, 'targetOptions'));
+    if (plan.operation === 'set-checked') check(typeof plan.checked === 'boolean' && plan.checked === intent.value && intent.valueType.logicalType === 'boolean');
+    else check(!Object.hasOwn(plan, 'checked'));
     if (Object.hasOwn(plan, 'datePrecision')) check(['year', 'month', 'day'].includes(plan.datePrecision));
     return plan;
   }

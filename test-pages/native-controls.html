@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成原生选择控件 · 分层第四步</title>
+<style>body{font:15px/1.6 system-ui;max-width:880px;margin:28px auto}fieldset{margin:12px 0;padding:14px;border:1px solid #ccd6e2;border-radius:10px}select{padding:8px;margin:5px;min-width:150px}label{margin-right:12px}output{display:block;color:#456}</style></head>
+<body><h1>合成招聘申请：原生选择控件</h1><form>
+<fieldset><legend>个人信息</legend><label for="native-select">性别</label><select id="native-select"><option value="">请选择</option><option value="M">男</option><option value="F">女</option></select></fieldset>
+<fieldset><legend>单选性别</legend><input id="native-male" name="nativeRadio" type="radio" value="M"><label for="native-male">男</label><input id="native-female" name="nativeRadio" type="radio" value="F"><label for="native-female">女</label></fieldset>
+<fieldset><legend>合成多选方向</legend><label><input name="nativeChecks" type="checkbox" value="dev">开发</label><label><input name="nativeChecks" type="checkbox" value="test">测试</label><label><input name="nativeChecks" type="checkbox" value="ops">运维</label></fieldset>
+<fieldset><legend>多选下拉</legend><label for="native-multiple">方向多选</label><select id="native-multiple" multiple><option value="dev">开发</option><option value="test">测试</option><option value="ops">运维</option></select></fieldset>
+<fieldset><legend>布尔选项</legend><label><input id="native-boolean" type="checkbox">具备实习经历</label></fieldset>
+<fieldset><legend>拒绝案例</legend>
+<label for="native-duplicate">重复标签</label><select id="native-duplicate"><option value="">请选择</option><option value="M">男</option><option value="other">男</option></select>
+<label for="native-disabled">禁用候选</label><select id="native-disabled"><option value="">请选择</option><optgroup label="禁用分组" disabled><option value="M">男</option></optgroup></select>
+<label for="native-protected">操作候选</label><select id="native-protected"><option value="">请选择</option><option value="yes">同意隐私协议</option></select>
+</fieldset><div id="native-react"></div><div id="native-vue"></div>
+<fieldset><legend>受保护区域</legend><label><input id="agreement" type="checkbox">我同意隐私协议</label><label><input id="sync" type="checkbox">同步更新在线简历</label><button type="submit">提交申请</button></fieldset>
+</form><script>
+// 合成事件计数只用于断言不重复点击、不提交，不访问真实用户数据。
+window.__nativeClicks = 0; window.__nativeChanges = 0; window.__submitCount = 0;
+document.querySelector('form').addEventListener('click', (event) => { if (event.target.matches('input[type=radio],input[type=checkbox]')) window.__nativeClicks++; });
+document.querySelector('form').addEventListener('change', () => { window.__nativeChanges++; });
+document.querySelector('form').addEventListener('submit', (event) => { event.preventDefault(); window.__submitCount++; });
+</script><script src="/test-pages/native-frameworks.js"></script></body></html>
