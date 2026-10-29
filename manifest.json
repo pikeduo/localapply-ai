@@ -55,6 +55,7 @@
       "js": [
         "data/templates.js",
         "data/field-matching.js",
+        "data/value-resolver.js",
         "data/fill-contract.js",
         "data/fill-result.js",
         "data/applications.js",

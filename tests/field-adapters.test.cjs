@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const context = vm.createContext({ Date, setTimeout });
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../data/value-resolver.js'), 'utf8'), context);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../content/field-adapters.js'), 'utf8'), context);
 const A = context.LocalApplyFieldAdapters;
 

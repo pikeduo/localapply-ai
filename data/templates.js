@@ -5,6 +5,8 @@
 
   // 参考简历页允许重复的八个模块；所有记录共用字段定义，英语能力等单份模块不在此列。
   const RECORD_GROUPS = { education: '教育背景', internship: '实习经历', employment: '工作经历', project: '项目经历', family: '家庭成员', award: '获奖经历', certificate: '证书信息', publication: '论文期刊' };
+  // 自主整理的少量明确同义词；运行时也供已存在的目录使用，不迁移或重建用户字段。
+  const FIELD_ALIASES = { workExperience: ['工作年限', '工作经验年限'], educationStartDate: ['入学日期', '入学时间'] };
   // 只统一已知模块别名，用户自定义分类不按文字相似度猜测为经历模块。
   function recordKind(group) {
     const aliases = { '教育经历': '教育背景', '教育': '教育背景', '工作经验': '工作经历', '实习经验': '实习经历', '项目经验': '项目经历' };
@@ -370,7 +372,7 @@
         options: options.length ? [...new Set([...(old?.options || []), ...options])] : undefined,
         sensitive: old?.sensitive || /家庭|电话|手机|证件|身份证|地址|薪资|工资|联系人|证书编号|出生/.test(group + label),
         autoFill: old ? old.autoFill : false,
-        patterns: [...new Set([...(old?.patterns || []), label])] };
+        patterns: [...new Set([...(old?.patterns || []), label, ...(FIELD_ALIASES[key] || [])])] };
     });
     return fields;
   }
@@ -568,6 +570,7 @@
 
   global.WangshenTemplates = {
     RECORD_GROUPS,
+    FIELD_ALIASES,
     recordKind,
     SYNONYMS,
     TEMPLATES,

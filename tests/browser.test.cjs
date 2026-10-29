@@ -8,6 +8,158 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 两个loopback来源模拟不同网站；验证历史建议不自动执行，UI选择后才走新控件回读。
+test('跨网站建议：历史来源按钮、明确选择与新控件独立验证', { timeout: 60000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'cross-site-'));
+  const firstApi = await serve(); const secondApi = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.gender', value: '男' } } });
+    // 只有同一字段语义，不同origin和控件类型；标准性别字段不参与此测试的自动匹配。
+    async function open(api, type) {
+      const page = await context.newPage(); await page.goto(api.base + '/test-pages/native-controls.html'); await page.locator('#react-native-select').waitFor();
+      await page.evaluate((type) => { const block = document.createElement('fieldset'); block.innerHTML = '<legend>个人信息</legend><label for="cross-site-field">合成跨站代号</label>' + (type === 'text' ? '<input id="cross-site-field">' : '<select id="cross-site-field"><option value="">请选择</option><option value="M">男</option><option value="F">女</option></select>'); document.querySelector('form').prepend(block); }, type);
+      const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url()); return { page, tabId };
+    }
+    const first = await open(firstApi, 'text'); let view = await rpc(options, 'learning:scanPage', { tabId: first.tabId, confirmed: true }); let row = view.rows.find((item) => item.field.label === '合成跨站代号');
+    await rpc(options, 'learning:select', { sessionId: view.sessionId, scanId: row.field.scanId, fieldId: 'builtin.gender', entryId: null });
+    view = await rpc(options, 'learning:fill', { sessionId: view.sessionId, scanId: row.field.scanId, confirmed: true }); assert.equal(view.rows.find((item) => item.field.scanId === row.field.scanId).status, 'success');
+    await rpc(options, 'learning:remember', { sessionId: view.sessionId, scanId: row.field.scanId, confirmed: true }); const old = (await rpc(options, 'localapply:read')).database.mappingRules[0];
+    const second = await open(secondApi, 'select'); const sidebar = await context.newPage(); await sidebar.goto(`chrome-extension://${extensionId}/sidepanel/sidepanel.html`); await sidebar.locator('#profileSel option').first().waitFor({ state: 'attached' }); await sidebar.locator('#tabSmartBtn').click();
+    await second.page.bringToFront(); await sidebar.locator('#smartPageConsent').check(); await sidebar.locator('#smartScan').click();
+    const card = sidebar.locator('.smart-row').filter({ has: sidebar.locator('h4').filter({ hasText: '合成跨站代号' }) });
+    await t.test('跨站只显示来源建议，不预选、不写入、不复制旧验证状态', async () => {
+      await card.locator('.smart-history-choice').waitFor(); assert.equal(await card.locator('.smart-source').inputValue(), ''); assert.equal(await second.page.locator('#cross-site-field').inputValue(), '');
+      assert.equal((await rpc(options, 'localapply:read')).database.mappingRules.length, 1);
+      await card.scrollIntoViewIfNeeded(); await sidebar.screenshot({ path: path.join(root, 'cross-site-suggestion.png') });
+    });
+    await t.test('主动选择后新下拉真实填入M，独立记忆且不改原网站规则', async () => {
+      await card.locator('.smart-history-choice').click(); await card.locator('p').filter({ hasText: '用户已选择本地来源' }).waitFor();
+      const sessionId = await sidebar.locator('#tab-smart').getAttribute('data-session-id'); view = await rpc(sidebar, 'learning:session', { sessionId }); row = view.rows.find((item) => item.field.label === '合成跨站代号');
+      assert.equal(row.source, 'manual'); assert.equal(row.verification, undefined);
+      view = await rpc(sidebar, 'learning:fill', { sessionId, scanId: row.field.scanId, confirmed: true }); assert.equal(view.rows.find((item) => item.field.scanId === row.field.scanId).status, 'success');
+      assert.equal(await second.page.locator('#cross-site-field').inputValue(), 'M'); assert.equal((await rpc(options, 'localapply:read')).database.mappingRules.length, 1);
+      await rpc(sidebar, 'learning:remember', { sessionId, scanId: row.field.scanId, confirmed: true }); const db = (await rpc(options, 'localapply:read')).database;
+      assert.equal(db.mappingRules.length, 2); assert.deepEqual(db.mappingRules.find((item) => item.origin === old.origin), old); assert.ok(db.mappingRules.find((item) => item.origin !== old.origin).lastVerifiedAt > old.lastVerifiedAt);
+      assert.ok(!JSON.stringify((await rpc(options, 'localapply:exportBackup')).backup).includes('historyCandidates'));
+      assert.equal(firstApi.calls.length + secondApi.calls.length, 0); assert.equal(await second.page.evaluate(() => __submitCount), 0);
+    });
+  } finally { if (context) await context.close(); for (const api of [firstApi, secondApi]) { api.server.closeAllConnections(); await new Promise((resolve) => api.server.close(resolve)); } assert.ok(path.resolve(profile).startsWith(path.resolve(root) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+// 两种真实存储入口均经过设置页差异确认，并关闭整个浏览器验证回执/资料持久性。
+test('离线规则包：双入口差异确认、版本保护、回滚及浏览器重启', { timeout: 120000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true });
+  for (const withExtension of [true, false]) {
+    const mode = withExtension ? 'extension' : 'file'; const profile = await fs.mkdtemp(path.join(root, 'rule-package-' + mode + '-')); let context; let page;
+    try {
+      context = await launch(profile, withExtension); context.setDefaultTimeout(10000);
+      const url = withExtension ? `chrome-extension://${(await extension(context)).extensionId}/options/options.html` : require('node:url').pathToFileURL(path.join(ROOT, 'options/options.html')).href;
+      page = await context.newPage(); await page.goto(url); await workspacePage(page, 'privacySettings');
+      // 调用公共入口，文件模式不注入Chrome API或存储替身。
+      const call = async (type, payload = {}) => { const response = await page.evaluate(({ type, payload }) => sendMessage(type, payload), { type, payload }); assert.equal(response.ok, true, response.error); return response; };
+      const before = (await call('localapply:read')).database; const profileId = before.activeProfileId;
+      const pack = await page.evaluate(() => LocalApplyRulePackages.create({ kind: 'localapply-rule-package', formatVersion: 1, packageId: 'localapply.browser-test', release: 1,
+        compatibility: { minSchema: 5, maxSchema: 5, fillContract: 1 }, source: { name: '合成测试审核', reference: '' },
+        fields: [{ fieldId: 'public.browser-offline', label: '合成规则字段', type: 'text', group: '其他', aliases: ['合成附加称呼'], options: [], description: '', version: 1 }] }));
+      // 模拟用户选择本地JSON；只有后台预览完成后才允许勾选确认。
+      const upload = async (data) => {
+        await page.locator('#publicFieldsFile').setInputFiles({ name: 'synthetic-offline-rules.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(data)) });
+        await page.locator('#publicPackagePreview').waitFor({ state: 'visible' });
+      };
+      await t.test(mode + '：选择文件/取消/差异预览均零写入，确认后保存公共元数据', async () => {
+        await upload(pack); assert.equal(await page.locator('#btnApplyPublicPackage').isDisabled(), true); assert.deepEqual((await call('localapply:read')).database, before);
+        await page.locator('#btnCancelPublicPackage').click(); assert.deepEqual((await call('localapply:read')).database, before);
+        await upload(pack); await page.locator('#publicPackageChanges summary').first().click(); await page.screenshot({ path: path.join(root, 'rule-package-preview-' + mode + '.png'), fullPage: true });
+        await page.locator('#publicPackageConsent').check(); await page.locator('#btnApplyPublicPackage').click(); await page.locator('#publicPackagePreview').waitFor({ state: 'hidden' });
+        const db = (await call('localapply:read')).database; assert.equal(db.schemaVersion, 5); assert.ok(db.fieldDefinitions.some((def) => def.fieldId === 'public.browser-offline'));
+        assert.equal((await call('localapply:command', { request: { action: 'listRulePackages' } })).result.length, 1);
+      });
+      await t.test(mode + '：完整浏览器重启后回执仍在，有值时阻止删除回滚', async () => {
+        await context.close(); context = await launch(profile, withExtension); context.setDefaultTimeout(10000); if (withExtension) await extension(context);
+        page = await context.newPage(); await page.goto(url); await workspacePage(page, 'privacySettings');
+        const list = (await call('localapply:command', { request: { action: 'listRulePackages' } })).result; assert.equal(list[0].packageId, pack.packageId);
+        await call('localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'public.browser-offline', value: '合成必须保留资料' } } });
+        const preview = await call('localapply:command', { request: { action: 'previewRuleRollback', payload: { packageId: pack.packageId } } }); assert.equal(preview.result.conflicts[0].reason, 'has_values');
+        const rejected = await page.evaluate((request) => sendMessage('localapply:command', { request }), { action: 'rollbackRulePackage', expectedRevision: preview.revision, payload: { packageId: pack.packageId, confirmed: true } }); assert.equal(rejected.ok, false);
+        assert.equal((await call('localapply:read')).database.fieldValues.find((row) => row.fieldId === 'public.browser-offline').value, '合成必须保留资料');
+      });
+      await t.test(mode + '：清空后受限回滚只删除包贡献，旧公共包仍逐项预览确认', async () => {
+        await call('localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'public.browser-offline', value: '' } } });
+        await page.reload(); await workspacePage(page, 'privacySettings');
+        await page.locator('details').filter({ has: page.locator('#installedRulePackages') }).locator('summary').click();
+        await page.locator('#installedRulePackages button').click(); await page.locator('#publicPackagePreview').waitFor({ state: 'visible' });
+        await page.locator('#publicPackageConsent').check(); await page.locator('#btnApplyPublicPackage').click(); await page.locator('#publicPackagePreview').waitFor({ state: 'hidden' });
+        const db = (await call('localapply:read')).database; assert.ok(!db.fieldDefinitions.some((def) => def.fieldId === 'public.browser-offline')); assert.deepEqual(db.fieldValues, before.fieldValues);
+        const legacy = { kind: 'localapply-public-fields', version: 1, fields: [{ ...pack.fields[0], fieldId: 'public.browser-legacy' }] };
+        await upload(legacy); assert.ok(!(await call('localapply:read')).database.fieldDefinitions.some((def) => def.fieldId === 'public.browser-legacy'));
+        await page.locator('#publicPackageConsent').check(); await page.locator('#btnApplyPublicPackage').click(); await page.locator('#publicPackagePreview').waitFor({ state: 'hidden' });
+        assert.ok((await call('localapply:read')).database.fieldDefinitions.some((def) => def.fieldId === 'public.browser-legacy'));
+        const backup = (await call('localapply:exportBackup')).backup; assert.equal(backup.schemaVersion, 5); assert.ok(!JSON.stringify(backup).includes('rulePackages'));
+      });
+    } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(root) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+  }
+});
+
+// 自有词典及选项等价贯穿真实后台、计划与浏览器回读，不运行第三方扩展。
+test('公共语义：别名、原生及自定义选项、框架状态与非空保护', { timeout: 120000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'public-semantics-'));
+  const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    for (const [key, value] of [['gender', '男性'], ['workExperience', '不足一年']]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.' + key, value } } });
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/native-controls.html'); await page.locator('#vue-native-select').waitFor(); await page.locator('#react-native-select').waitFor();
+    // 构造无业务脚本依赖的合成控件，事件仅模拟本控件的候选确认和原生选中状态。
+    await page.evaluate(() => {
+      const block = document.createElement('fieldset'); block.innerHTML = '<legend>个人信息</legend><label for="semantic-work">工作年限</label><select id="semantic-work"><option value="">请选择</option><option value="below">1 年以下</option><option value="above">1年以上</option></select><label for="semantic-custom">工作经验年限</label><input id="semantic-custom" role="combobox" readonly aria-controls="semantic-menu"><div id="semantic-menu" role="listbox" hidden><div role="option" data-value="below" aria-selected="false">１ 年以下</div></div>';
+      document.querySelector('form').prepend(block); window.__semanticClicks = 0;
+      const input = document.getElementById('semantic-custom'); const menu = document.getElementById('semantic-menu');
+      input.addEventListener('focus', () => { menu.hidden = false; }); input.addEventListener('blur', () => { menu.hidden = true; });
+      menu.addEventListener('click', (event) => { const option = event.target.closest('[role=option]'); if (!option) return; window.__semanticClicks++; for (const row of menu.children) row.setAttribute('aria-selected', String(row === option)); input.value = option.textContent; });
+    });
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    const scan = await rpc(options, 'learning:scanPage', { tabId, confirmed: true });
+    // 仅绑定已存在的规范来源，不从测试界面发送任意网页写入值。
+    async function fill(label, fieldId) {
+      const row = scan.rows.find((item) => item.field.label === label); assert.ok(row, label);
+      if (fieldId) await rpc(options, 'learning:select', { sessionId: scan.sessionId, scanId: row.field.scanId, fieldId, entryId: null });
+      const result = await rpc(options, 'learning:fill', { sessionId: scan.sessionId, scanId: row.field.scanId, confirmed: true }); return result.rows.find((item) => item.field.scanId === row.field.scanId);
+    }
+    await t.test('本地别名无需AI，选项按同一语义实际点选并回读', async () => {
+      for (const label of ['工作年限', '工作经验年限']) {
+        assert.equal(scan.rows.find((row) => row.field.label === label).target.fieldId, 'builtin.workExperience');
+        const result = await fill(label); assert.equal(result.status, 'success', result.reason);
+      }
+      assert.equal(await page.locator('#semantic-work').inputValue(), 'below'); assert.equal(await page.locator('#semantic-custom').inputValue(), '１ 年以下');
+      assert.equal(await page.evaluate(() => __semanticClicks), 1);
+      assert.equal((await fill('工作经验年限')).status, 'success'); assert.equal(await page.evaluate(() => __semanticClicks), 1);
+    });
+    await t.test('男性到男/M编码经真实React/Vue接受，回退仍准确失败', async () => {
+      for (const label of ['性别', 'React选择', 'Vue选择']) { const result = await fill(label, 'builtin.gender'); assert.equal(result.status, 'success', result.reason); }
+      assert.deepEqual(await page.evaluate(() => [__nativeProbe.react().gender, __nativeProbe.vue().gender]), ['M', 'M']);
+      await page.evaluate(() => { __nativeProbe.redrawReact(); __nativeProbe.redrawVue(); }); await page.waitForTimeout(80);
+      assert.equal(await page.locator('#react-native-select').inputValue(), 'M'); assert.equal(await page.locator('#vue-native-select').inputValue(), 'M');
+      for (const label of ['React拒绝选择', 'Vue拒绝选择']) assert.equal((await fill(label, 'builtin.gender')).status, 'failed');
+    });
+    await t.test('等价多候选不猜选，已填不同内容保持，库与日志无候选值泄漏', async () => {
+      await page.locator('#semantic-work').selectOption('above'); assert.equal((await fill('工作年限')).status, 'needs_confirmation'); assert.equal(await page.locator('#semantic-work').inputValue(), 'above');
+      await page.evaluate(() => { const menu = document.getElementById('semantic-menu'); const option = document.createElement('div'); option.setAttribute('role', 'option'); option.dataset.value = 'other'; option.textContent = '不足一年'; menu.append(option); for (const row of menu.children) row.setAttribute('aria-selected', 'false'); document.getElementById('semantic-custom').value = ''; });
+      const result = await fill('工作经验年限'); assert.notEqual(result.status, 'success'); assert.equal(result.diagnostic.reasonCode, 'ambiguous_option'); assert.equal(await page.evaluate(() => __semanticClicks), 1);
+      const saved = (await rpc(options, 'localapply:read')).database; assert.equal(saved.schemaVersion, 5);
+      assert.equal(saved.fieldValues.find((row) => row.profileId === profileId && row.fieldId === 'builtin.workExperience' && row.entryId === null).value, '不足一年');
+      const logs = JSON.stringify(await worker.evaluate(() => chrome.storage.local.get('localapply.diagnostics'))); assert.ok(!logs.includes('不足一年') && !logs.includes('semantic-custom'));
+      assert.equal(await page.evaluate(() => __submitCount), 0); await page.screenshot({ path: path.join(root, 'public-semantics-completed.png'), fullPage: true });
+    });
+  } finally {
+    if (context) await context.close(); api.server.closeAllConnections(); await new Promise((resolve) => api.server.close(resolve));
+    assert.ok(path.resolve(profile).startsWith(path.resolve(root) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
 // 阶段六只用合成语义结构与真实 React；平台登录限制不以理想化夹具冒充线上通过。
 test('阶段六：语义重复记录、嵌套下拉、原生角色及分步 React 表单', { timeout: 120000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'stage6-')); const api = await serve(); let context; let page; let frame;
@@ -2539,7 +2691,7 @@ test('阶段三：授权、智能字段学习、真实框架、规则管理与�
     catch (error) { throw new Error('扫描未完成：' + await sidebar.locator('#smartStatus').textContent(), { cause: error }); }
   };
   // 模型调用始终先展示 payload，再通过复选框确认发送。
-  const recognize = async () => { await selectUnknownAI(sidebar); const oldToken = await sidebar.locator('#smartAIReview').getAttribute('data-token'); await sidebar.locator('#smartAI').click(); await sidebar.waitForFunction((token) => document.getElementById('smartAIReview').dataset.token !== token && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', oldToken); await sidebar.locator('#smartAIConsent').check(); await sidebar.locator('#smartAISend').click(); };
+  const recognize = async () => { await selectUnknownAI(sidebar); const oldToken = await sidebar.locator('#smartAIReview').getAttribute('data-token'); await sidebar.locator('#smartAI').click(); await sidebar.waitForFunction((token) => document.getElementById('smartAIReview').dataset.token !== token && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', oldToken); assert.match(await sidebar.locator('#smartAICoverage').textContent(), /本次目录包含 \d+\/\d+ 个字段/); await sidebar.locator('#smartAIConsent').check(); await sidebar.locator('#smartAISend').click(); };
   try {
     context = await launch(profile); context.setDefaultTimeout(10000); ({ extensionId } = await extension(context));
     context.on('page', (newPage) => { newPage.on('pageerror', (error) => pageErrors.push(error.message)); newPage.on('console', (message) => { if (message.text().includes('synthetic-phase3-key')) leaks.push('发现凭据输出'); }); });

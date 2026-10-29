@@ -35,11 +35,26 @@ async function fixture() {
   const send = (view, type, payload = {}) => service.handle({ type: 'learning:' + type, sessionId: view.sessionId, ...(type === 'prepareAI' ? { scanIds: view.rows.filter((row) => !row.target).map((row) => row.field.scanId) } : {}), ...payload });
   const setValue = (fieldId, value, entryId = null) => repo.command({ action: 'setValue', payload: { profileId, fieldId, entryId, value } });
   return { context, repo, disk, profileId, calls, aiCalls, field, scan, send, service, setValue,
-    response: (next) => { response = next; }, navigate: () => { url += '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, completion: (value) => { completion = value; },
+    response: (next) => { response = next; }, navigate: (next) => { url = next || url + '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, completion: (value) => { completion = value; },
     recordBlocks: (value) => { recordBlocks = value; }, pageFields: (value) => { fields = value; }, onAdd: (callback) => { onAdd = callback; }, diagnostic: (value) => { fillDiagnostic = value; }, protocol: (value) => { fillContractVersion = value; },
     sessionProtocol:(version)=>{fillSessionVersion=version;},
     holdFill: () => { let release; fillGate = new Promise((resolve) => { release = resolve; }); return release; } };
 }
+
+// 历史建议没有执行权限；新的选择、填写和记忆分别走原确认链路。
+test('跨网站历史建议必须手选后填写，新验证成功并确认才创建当前网站规则', async () => {
+  const env = await fixture(); await env.setValue('builtin.gender', '男'); const field = env.field('合成跨站代号', { group: '个人信息' });
+  await learnMapping(env, field); const old = (await env.repo.read()).mappingRules[0]; const previous = JSON.stringify(old);
+  env.navigate('https://another.example.test/apply'); const next = env.field('合成跨站代号', { group: '个人信息', type: 'select' }); let view = await env.scan(next);
+  assert.equal(view.rows[0].target, null); assert.equal(view.rows[0].status, 'needs_confirmation'); assert.equal(view.rows[0].historyCandidates[0].fieldId, 'builtin.gender');
+  assert.equal(view.rows[0].verification, undefined); await assert.rejects(env.send(view, 'fill', { scanId: next.scanId, confirmed: true }), /来源|选择/);
+  view = await env.send(view, 'select', { scanId: next.scanId, fieldId: 'builtin.gender' }); view = await env.send(view, 'fill', { scanId: next.scanId, confirmed: true });
+  assert.equal(view.rows[0].status, 'success'); assert.equal((await env.repo.read()).mappingRules.length, 1);
+  view = await env.send(view, 'remember', { scanId: next.scanId, confirmed: true }); const db = await env.repo.read();
+  assert.equal(db.mappingRules.length, 2); assert.equal(JSON.stringify(db.mappingRules.find((rule) => rule.origin === old.origin)), previous);
+  assert.ok(db.mappingRules.find((rule) => rule.origin !== old.origin).lastVerifiedAt > old.lastVerifiedAt);
+  assert.ok(!JSON.stringify(await env.repo.exportBackup()).includes('historyCandidates')); assert.equal(env.aiCalls.length, 0);
+});
 
 // 模型建议只允许引用本次元数据中存在的字段与来源。
 function suggestion(payload, fieldId = null, definition = null) {
@@ -285,6 +300,39 @@ test('网页完成标记独立于字段元数据，清空后可再次填写且�
 });
 
 // 页面明确标题可以匹配本地字段，不通过降低相似度阈值放宽薪资/公司等歧义语义。
+// 审计发现的重复别名不能经旧词典回退静默选中；已确认记忆仍优先。
+test('词典审计修复：同组多目标不回退猜选，明确模块及历史确认可消歧', async () => {
+  const env = await fixture(); await env.setValue('builtin.name', '合成本人');
+  await env.repo.command({ action: 'createField', payload: { profileId: env.profileId, definition: { label: '另一姓名', group: '基本信息', aliases: ['姓名'], type: 'text' }, value: '合成另一来源' } });
+  const name = env.field('姓名', { group: '基本信息' }); let view = await env.scan(name);
+  assert.equal(view.rows[0].target, null); assert.equal(view.rows[0].status, 'needs_confirmation');
+  view = await env.send(view, 'select', { scanId: name.scanId, fieldId: 'builtin.name' });
+  view = await env.send(view, 'fill', { scanId: name.scanId, confirmed: true });
+  view = await env.send(view, 'remember', { scanId: name.scanId, confirmed: true });
+  view = await env.scan(name); assert.equal(view.rows[0].source, 'memory'); assert.equal(view.rows[0].target.fieldId, 'builtin.name');
+  await env.setValue('builtin.employmentRegion', '合成任职地'); await env.setValue('builtin.expectedCity', '合成意向地');
+  view = await env.scan(env.field('工作地点'), env.field('工作地点', { kind: 'employment', group: '工作经历' }), env.field('工作地点', { group: '求职意向' }));
+  assert.equal(view.rows[0].target, null); assert.equal(view.rows[1].target.fieldId, 'builtin.employmentRegion'); assert.equal(view.rows[2].target.fieldId, 'builtin.expectedCity');
+  assert.equal(env.aiCalls.length, 0);
+});
+
+// 少量明确同义词供旧目录即时识别；不迁移或补回已删字段，不触发 AI。
+test('公共语义补齐：旧目录识别工作年限和入学日期，删除后不补字段', async () => {
+  const env = await fixture(); await env.setValue('builtin.workExperience', '1年以下'); await env.setValue('builtin.educationStartDate', '2020-09');
+  const before = await env.repo.read(); const born = env.field('出生日期'); await env.setValue('builtin.birthDate', '2000-06');
+  let view = await env.scan(env.field('工作年限'), env.field('工作经验年限'), env.field('入学日期', { kind: 'education' }), env.field('入学时间', { kind: 'education' }), born);
+  assert.deepEqual(view.rows.slice(0, 4).map((row) => row.target?.fieldId), ['builtin.workExperience', 'builtin.workExperience', 'builtin.educationStartDate', 'builtin.educationStartDate']);
+  assert.equal(view.rows[4].target.fieldId, 'builtin.birthDate');
+  assert.equal((await env.repo.read()).fieldDefinitions.length, before.fieldDefinitions.length);
+  // 公共字段按实际设置页投影移出当前简历，不能调用仅用于私有字段的全局删除。
+  const original = await env.repo.readLegacy(); const edited = structuredClone(original);
+  edited.profiles.find((profile) => profile.id === env.profileId).fields = edited.profiles.find((profile) => profile.id === env.profileId).fields.filter((field) => field.key !== 'workExperience');
+  await env.repo.saveLegacy(original, edited);
+  view = await env.scan(env.field('工作年限')); assert.equal(view.rows[0].status, 'missing_value'); assert.equal(view.rows[0].value, null);
+  const after = await env.repo.read(); assert.ok(!after.bindings.some((row) => row.profileId === env.profileId && row.fieldId === 'builtin.workExperience'));
+  assert.ok(!after.fieldValues.some((row) => row.profileId === env.profileId && row.fieldId === 'builtin.workExperience')); assert.equal(env.aiCalls.length, 0);
+});
+
 test('岗位申请页明确别名与模块对应，无内容时保持缺资料且不猜薪资周期', async () => {
   const env = await fixture(); await env.setValue('builtin.birthDate', '2000-06'); await env.setValue('builtin.employmentResponsibilities', '合成职责');
   const view = await env.scan(env.field('出生日期 (年龄)'), env.field('工作职责', { kind: 'employment' }), env.field('项目描述', { kind: 'project' }), env.field('当前薪资'));
@@ -424,6 +472,21 @@ test('目录基础模块与附加经历均可匹配，本科硕士不混用，�
 });
 
 // 选项本身不是模型调用许可，后台也必须校验明确的未知字段 ID 集合。
+// 后添加的相关定义不能被前200项截断丢弃；Mock AI 仍只引用预览中实际发送的来源。
+test('AI候选目录按上下文预算，旧目录后段可推荐且预览前不联网', async () => {
+  const env = await fixture(); const before = await env.repo.read();
+  const fields = Array.from({ length: 205 }, (_, i) => ({ fieldId: 'public.synthetic.' + i, label: i === 204 ? '入读方向' : '合成附加项' + i,
+    group: i === 204 ? '教育背景' : '其他', type: 'text', aliases: [], options: [], description: '', version: 1 }));
+  await env.repo.command({ action: 'mergePublicFields', expectedRevision: before.revision, payload: { kind: 'localapply-public-fields', version: 1, fields } });
+  await env.setValue('public.synthetic.204', '合成不应发送值');
+  const view = await env.scan(env.field('入读方向补充', { kind: 'education', group: '教育背景' })); const preview = await env.send(view, 'prepareAI');
+  assert.equal(env.aiCalls.length, 0); assert.ok(preview.coverage.omitted > 0); assert.ok(preview.payload.catalog.some((def) => def.fieldId === 'public.synthetic.204'));
+  assert.ok(!JSON.stringify(preview.payload).includes('合成不应发送值'));
+  env.response(() => JSON.stringify(suggestion(preview.payload, 'public.synthetic.204')));
+  const result = await env.send(view, 'recognize', { token: preview.token, confirmed: true }); assert.equal(result.rows[0].suggestion.existingFieldId, 'public.synthetic.204');
+  assert.equal(result.rows[0].status, 'needs_confirmation'); assert.equal(env.aiCalls.length, 1);
+});
+
 test('新版 AI 只接收显式选中的未知字段，拒绝未选择、已匹配及伪造字段', async () => {
   const env = await fixture(); await env.setValue('builtin.name', '合成姓名');
   const view = await env.scan(env.field('姓名'), env.field('未知甲'), env.field('未知乙'));

@@ -7,12 +7,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 
-// 构造具有原生事件/setter 接口的局部节点，禁止旧通用路径，保持实际生产计划校验。
-function fixture(type = 'select', value = '男', multiple = false) {
+// 构造局部原生节点和可信来源 ID，禁止旧路径，保持实际生产计划与回读校验。
+function fixture(type = 'select', value = '男', multiple = false, fieldId = 'field.a') {
   const root = {}; let writes = 0; let marks = 0; let active = true;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date, setTimeout, clearTimeout, AbortController,
     Event: class { constructor(type) { this.type = type; } }, HTMLSelectElement: class {}, HTMLOptionElement: class {} });
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/fill-result.js', 'content/field-adapters.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/value-resolver.js', 'data/fill-contract.js', 'data/fill-result.js', 'content/field-adapters.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   // 标签通过原生 labels 暴露，另保留属性供测试模拟禁用/标签变更。
   function node(label, code, tagName = 'INPUT') {
     const attrs = {}; const row = { tagName, type, name: 'synthetic', form: null, textContent: label, labels: [{ textContent: label }], value: code,
@@ -35,11 +35,22 @@ function fixture(type = 'select', value = '男', multiple = false) {
   };
   context.WangshenFiller = { fillElement() { throw new Error('禁止回退旧路径'); }, markFilled() { marks++; } };
   const storageType = single ? 'boolean' : Array.isArray(value) ? 'multiSelect' : 'select'; const C = context.LocalApplyFillContract;
-  const db = { revision: 1, activeProfileId: 'profile.a', profiles: [{ profileId: 'profile.a' }], entries: [], fieldDefinitions: [{ fieldId: 'field.a', type: storageType }], fieldValues: [{ profileId: 'profile.a', fieldId: 'field.a', entryId: null, value }] };
-  const intent = C.createIntent(db, 'profile.a', { fieldId: 'field.a', entryId: null }, field, { sessionId: 'session.a', documentId: 'document.a', tabId: 42 });
+  const db = { revision: 1, activeProfileId: 'profile.a', profiles: [{ profileId: 'profile.a' }], entries: [], fieldDefinitions: [{ fieldId, type: storageType }], fieldValues: [{ profileId: 'profile.a', fieldId, entryId: null, value }] };
+  const intent = C.createIntent(db, 'profile.a', { fieldId, entryId: null }, field, { sessionId: 'session.a', documentId: 'document.a', tabId: 42 });
   return { context, C, item, rows, node, intent, planner: context.LocalApplyFillPlanner, writes: () => writes, marks: () => marks,
     fill: (options = {}) => context.LocalApplyVerifiedFill.fill(item, value, { intent, ...options }), revoke: () => { active = false; } };
 }
+
+// 业务等价在真实计划的准备、冲突保护和多次回读中保持一致。
+test('公共选项语义经原生计划填写和回读，等价已选值不重写，冲突及歧义保留', async () => {
+  const env = fixture('select', '不足一年', false, 'builtin.workExperience'); env.rows[0].textContent = '1 年以下'; env.rows[1].textContent = '1年以上';
+  assert.equal((await env.fill()).status, 'success'); assert.equal(env.writes(), 1); assert.equal(env.item.el.value, 'M');
+  assert.equal((await env.fill()).status, 'success'); assert.equal(env.writes(), 1);
+  env.rows[0].selected = false; env.rows[1].selected = true; env.item.el.value = 'F';
+  assert.equal((await env.fill()).status, 'needs_confirmation'); assert.equal(env.writes(), 1);
+  const ambiguous = fixture('select', '不足一年', false, 'builtin.workExperience'); ambiguous.rows[0].textContent = '1年以下'; ambiguous.rows[1].textContent = '少于一年';
+  assert.equal((await ambiguous.fill()).diagnostic.reasonCode, 'ambiguous_option'); assert.equal(ambiguous.writes(), 0);
+});
 
 test('select/radio 精确标签解析为 M 编码，prepare 零写入，实际选中且相同值不重复操作', async () => {
   for (const type of ['select', 'radio']) {

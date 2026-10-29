@@ -38,10 +38,20 @@
     const rows = state.moka ? A.dropdownOptions(state.el) : [...(menu?.querySelectorAll('[role="option"]') || [])].filter(safe);
     return { menu, rows };
   }
-  // 值编码可显式匹配，标签只复用原有有界等价规则，不新增业务语义猜测。
-  function matches(node, state) { return A.optionEqual(D.optionLabel(node), state.value, state.fieldLabel, state.unit) || node.getAttribute('data-value') === state.value; }
+  // 业务同义词由可信来源 fieldId 解析；日期子项保持明确单位转换，不从标签猜业务类型。
+  function matches(node, state) {
+    const semantic = state.fieldId && global.LocalApplyValueResolver;
+    return (semantic && !state.unit ? semantic.equivalent(state.fieldId, D.optionLabel(node), state.value) : A.optionEqual(D.optionLabel(node), state.value, state.fieldLabel, state.unit)) || node.getAttribute('data-value') === state.value;
+  }
+  // 同义匹配也不能绕过重复编码；候选集合供准备及每次鼠标动作共同复核。
+  function matchingRows(state, rows) {
+    const found = rows.filter((node) => matches(node, state));
+    if (found.length !== 1) return found;
+    const code = found[0].getAttribute('data-value');
+    return code === null ? found : rows.filter((node) => node === found[0] || node.getAttribute('data-value') === code);
+  }
   // 同一已点选候选的确认标记及显示值都须保持；单有搜索文本/折叠状态不能冒充成功。
-  function accepted(el, value) {
+  function accepted(el, value, fieldId = '') {
     const expected = String(value); const saved = receipts.get(el); const actual = A.dropdown(el) ? D.selectedText(el) : display(el);
     if (A.dropdown(el) && (actual === null || actual === '')) return false;
     if (saved && [saved.value, saved.label, saved.code].includes(expected) && [saved.label, saved.code, saved.value].includes(actual)) {
@@ -50,13 +60,13 @@
     }
     if (A.dropdown(el)) return false;
     const selected = [...(linked(el)?.querySelectorAll('[role="option"][aria-selected="true"]') || [])];
-    return selected.length === 1 && matches(selected[0], { value: expected, fieldLabel: '', unit: '' })
+    return selected.length === 1 && matches(selected[0], { value: expected, fieldId, fieldLabel: '', unit: '' })
       && [D.optionLabel(selected[0]), selected[0].getAttribute('data-value')].includes(actual);
   }
 
   // 按下事件可直接提交 Sugar 单选；以独立显示结果证明接受，不能靠尚未登记回执或搜索文字。
   function selectedByEvent(state, saved) {
-    if (!state.moka) return accepted(state.el, state.value);
+    if (!state.moka) return accepted(state.el, state.value, state.fieldId);
     const text = D.selectedText(state.el);
     return typeof text === 'string' && text !== '' && [saved.label, saved.code].includes(text);
   }
@@ -88,9 +98,9 @@
   // 只在已知的当前节点动作之后更新观察值；父级日期/电话仍检查其他子项。
   function changed(state) { state.lifecycle?.changed?.(state.el); state.observed = observed(state.el); }
 
-  // 第一阶段只打开本控件并查询，返回会话，不把搜索输入当成完成。
+  // 第一阶段仅打开并查询；fieldId 来自后台意图，不接受网页或 AI 传入策略。
   async function query(el, value, options = {}) {
-    const owner = A.dropdown(el); const state = { el, value: String(value), fieldLabel: options.fieldLabel || '', unit: options.unit || '', signal: options.signal,
+    const owner = A.dropdown(el); const state = { el, value: String(value), fieldId: options.fieldId || '', fieldLabel: options.fieldLabel || '', unit: options.unit || '', signal: options.signal,
       lifecycle: options.lifecycle, owner, moka: !!owner, linkId: linkId(el), menu: owner ? null : linked(el), shape: shape(el), observed: observed(el), started: Date.now(), closed: false };
     state.trace = { adapter: owner ? 'moka-dropdown' : 'aria-combobox', phase: 'open', candidateCount: 0, matchCount: 0, searchable: el.tagName === 'INPUT' && !el.readOnly && (!owner || !owner.classList.contains('select')) };
     active.set(el, state); receipts.delete(el);
@@ -112,7 +122,7 @@
     let previous = null;
     for (let attempt = 0; attempt < 30; attempt++) {
       await delay(60, state.signal); check(state);
-      const { menu, rows } = candidates(state); const visible = D.popupRoots(); const found = rows.filter((node) => matches(node, state));
+      const { menu, rows } = candidates(state); const visible = D.popupRoots(); const found = matchingRows(state, rows);
       Object.assign(state.trace, { phase: 'options', candidateCount: rows.length, matchCount: found.length, associatedPopup: !!menu || rows.length > 0,
         popupRelation: state.moka ? menu ? state.el.getAttribute('aria-controls') || state.el.getAttribute('aria-owns') ? 'aria' : 'portal' : rows.length ? 'local' : 'none' : menu ? 'aria' : 'none', popupCount: visible.length,
         newPopupCount: visible.filter((node) => !state.before.has(node)).length, focused: true, elapsedMs: Date.now() - state.started });
@@ -131,7 +141,7 @@
   // 第三阶段再次核对候选归属/身份/内容后只点一次；准备后重绘或失焦不能用旧节点。
   async function commitChoice(state, selection) {
     try {
-      check(state); const saved = choices.get(selection); const current = candidates(state); const found = current.rows.filter((node) => matches(node, state));
+      check(state); const saved = choices.get(selection); const current = candidates(state); const found = matchingRows(state, current.rows);
       if (!saved || saved.used || saved.state !== state || state.choice !== selection || Date.now() - saved.at > 3000 || current.menu !== saved.menu || found.length !== 1 || found[0] !== saved.node || !safe(saved.node)
         || D.optionLabel(saved.node) !== saved.label || saved.node.getAttribute('data-value') !== saved.code) throw failure('准备的候选已变化，未执行点选', 'write_rejected', 'failed');
       saved.used = true;
@@ -148,7 +158,7 @@
     } catch (error) { close(state); throw error; }
   }
   // 鼠标事件之间也复核唯一候选和原节点；重绘/标签变化不能继续向已脱离的旧节点发动作。
-  function checkCandidate(state,saved){const current=candidates(state);const found=current.rows.filter((node)=>matches(node,state));if(current.menu!==saved.menu||found.length!==1||found[0]!==saved.node||!safe(saved.node)||D.optionLabel(saved.node)!==saved.label||saved.node.getAttribute('data-value')!==saved.code)throw failure('点选期间候选已变化，已停止选择','write_rejected','failed');}
+  function checkCandidate(state,saved){const current=candidates(state);const found=matchingRows(state,current.rows);if(current.menu!==saved.menu||found.length!==1||found[0]!==saved.node||!safe(saved.node)||D.optionLabel(saved.node)!==saved.label||saved.node.getAttribute('data-value')!==saved.code)throw failure('点选期间候选已变化，已停止选择','write_rejected','failed');}
   // 释放本次活动候选，迟到响应不能重新激活旧会话；不点击网页关闭/提交按钮。
   function close(state) { state.closed = true; state.choice = null; }
   // 旧日期/电话子项也复用相同三阶段管线，失败不转入原单体路径。
@@ -175,7 +185,7 @@
       executed.add(plan);
       if (context.signal?.aborted) return failure('已取消填写', 'write_rejected', 'failed');
       if (plan.operation === 'verify-existing') return { ok: true };
-      return interact(context.item.el, context.intent.value, { fieldLabel: context.item.field.label, signal: context.signal, lifecycle: { check: () => context.assertActive() } });
+      return interact(context.item.el, context.intent.value, { fieldId: context.intent.source.fieldId, fieldLabel: context.item.field.label, signal: context.signal, lifecycle: { check: () => context.assertActive() } });
     },
     // 真正选中证据和页面显示须跨重绘窗口保持，搜索文字/仅关闭菜单均不足以成功。
     async verify(plan, context) {

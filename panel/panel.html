@@ -15,7 +15,7 @@
         <label class="filter-toggle"><input type="checkbox" id="smartOnlyUnknown">只看未知字段</label><div id="smartMetrics" class="metrics" aria-label="扫描结果统计"></div>
         <label><input id="smartRememberAfter" type="checkbox" /> 填写验证成功后记住映射</label>
       </div>
-      <div id="smartAIReview" class="card" hidden><h3>确认模型接收方与发送内容</h3><p id="smartRecipient"></p><p>仅发送以下脱敏元数据及本地来源引用，不发送实际值、完整简历或网页 HTML。</p><pre id="smartAIPayload"></pre><label><input type="checkbox" id="smartAIConsent" /> 我确认向该服务商发送上述内容（可能计费）</label><button id="smartAISend" class="btn">确认发送并识别</button><button id="smartAICancel" class="btn ghost">取消</button></div>
+      <div id="smartAIReview" class="card" hidden><h3>确认模型接收方与发送内容</h3><p id="smartRecipient"></p><p id="smartAICoverage" role="status"></p><p>仅发送以下脱敏元数据及本地来源引用，不发送实际值、完整简历或网页 HTML。</p><pre id="smartAIPayload"></pre><label><input type="checkbox" id="smartAIConsent" /> 我确认向该服务商发送上述内容（可能计费）</label><button id="smartAISend" class="btn">确认发送并识别</button><button id="smartAICancel" class="btn ghost">取消</button></div>
       <h3 id="smartMatchedHeading" hidden>未填写字段 / 待处理及缺少资料</h3><div id="smartMatched"></div>
       <h3 id="smartUnknownHeading" hidden>未填写的未知字段</h3><div id="smartUnknown"></div>
       <section id="smartRulesPanel" class="card" hidden><h3>本地字段映射</h3><p class="muted">修改目标后必须重新填写验证。撤销仅针对本会话最近一次规则操作。</p><div class="smart-actions"><button id="smartUndo" class="btn ghost">撤销上次规则操作</button><button id="smartExportV3" class="btn ghost">导出兼容旧版 v3 的备份</button></div><div id="smartRuleList"></div></section>

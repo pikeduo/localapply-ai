@@ -46,7 +46,7 @@
       try { response = await browser.tabs.sendMessage(tabId, message); }
       catch (error) {
         if (!inject) throw new Error('页面未连接，请重新授权扫描');
-        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/fill-session.js', 'content/detector.js', 'content/filler.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'] });
+        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'data/value-resolver.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/applications.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/fill-session.js', 'content/detector.js', 'content/filler.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'] });
         response = await browser.tabs.sendMessage(tabId, message);
       }
       check(response?.ok, response?.error || '页面操作失败'); return response;
@@ -234,13 +234,10 @@
         const fields = msg.scanIds.map((scanId) => { const row = rowOf(item, scanId); check(!row.target && !row.ignored && row.status !== 'unsupported', '只能选择未忽略的未知字段使用 AI'); return row.field; });
         const settings = await repository.readAiSettings(); const provider = global.LocalApplyProviders.resolve(settings);
         check(settings.model, '请先配置模型；不配置 AI 仍可手动匹配');
-        const catalog = db.fieldDefinitions.filter((def) => item.sources.some((source) => source.fieldId === def.fieldId)).slice(0, 200)
-          .map((def) => ({ fieldId: def.fieldId, label: M.redact(def.label), type: def.type, group: M.redact(def.group), aliases: def.aliases.slice(0, 20).map((alias) => M.redact(alias)), options: def.options.slice(0, 100).map((option) => M.redact(option)) }));
-        const payload = { fields, catalog, sources: item.sources.filter((source) => catalog.some((def) => def.fieldId === source.fieldId))
-          .map(({ ref, fieldId, kind, hasValue }) => ({ ref, fieldId, kind, hasValue })) };
-        check(JSON.stringify(payload).length <= 60000, '发送元数据过多，请先手动匹配部分字段');
+        // 只在用户主动预览时按上下文分配目录预算，省略范围必须可见，不改变本地匹配。
+        const { payload, coverage } = global.FieldSuggestions.catalogPreview(db.fieldDefinitions, item.sources, fields);
         item.aiPreview = { token: crypto.randomUUID(), payload, context: await aiContext(settings), revision: db.revision, createdAt: Date.now() };
-        return { token: item.aiPreview.token, recipient: { name: provider.name, baseUrl: provider.baseUrl, protocol: provider.protocol, model: settings.model }, payload };
+        return { token: item.aiPreview.token, recipient: { name: provider.name, baseUrl: provider.baseUrl, protocol: provider.protocol, model: settings.model }, payload, coverage };
       }
       if (msg.type === 'learning:recognize') {
         const preview = item.aiPreview; check(msg.confirmed === true && preview?.token === msg.token && Date.now() - preview.createdAt < 300000, '请先预览接收方和发送内容并确认');

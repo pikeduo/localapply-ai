@@ -20,7 +20,7 @@ function fixture() {
   context.LocalApplyFieldAdapters = { dropdown: () => null, handles: () => false, exclusion: () => null, optionEqual: (a, b) => a === b };
   context.LocalApplyDropdownDOM = { usable: (node) => node.isConnected && !node.disabled, optionLabel: (node) => node.textContent.trim(), popupRoots: () => [menu], trace() {},
     async openControl(node, calendar, lifecycle) { lifecycle.check(); node.focus(); lifecycle.changed(node); return new Set([menu]); } };
-  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/fill-contract.js', 'data/fill-result.js', 'content/controls/verification.js', 'content/controls/dropdown.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
+  for (const file of ['data/templates.js', 'data/field-matching.js', 'data/value-resolver.js', 'data/fill-contract.js', 'data/fill-result.js', 'content/controls/verification.js', 'content/controls/dropdown.js']) vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), context);
   return { el, nodes, menu, attrs, document, option, context, U: context.LocalApplyDropdownControls, C: context.LocalApplyFillContract, adapter: context.LocalApplyDropdownAdapters[0], clicks: () => clicks, writes: () => writes };
 }
 
@@ -30,6 +30,26 @@ test('查询、准备及点选分离：前两阶段零点击，真实选中才�
   const choice = await env.U.prepareChoice(state); assert.equal(env.clicks(), 0); assert.deepEqual(Object.keys(choice), ['handle']);
   assert.equal((await env.U.commitChoice(state, choice)).ok, true); assert.equal(env.clicks(), 1); assert.equal(env.U.accepted(env.el, '男'), true);
   await assert.rejects(env.U.commitChoice(state, choice)); assert.equal(env.clicks(), 1);
+});
+
+// ARIA 使用 fieldId 解析业务等价，搜索输入本身仍不能冒充选中状态。
+test('公共选项语义经下拉三阶段点选，回读不把搜索词或其他字段当成已选', async () => {
+  const env = fixture(); env.nodes[0] = env.option('1 年以下', 'below-one');
+  const state = await env.U.query(env.el, '不足一年', { fieldId: 'builtin.workExperience' });
+  assert.equal(env.U.accepted(env.el, '不足一年', 'builtin.workExperience'), false);
+  const choice = await env.U.prepareChoice(state); await env.U.commitChoice(state, choice);
+  assert.equal(env.U.accepted(env.el, '不足一年', 'builtin.workExperience'), true); assert.equal(env.clicks(), 1);
+  env.el.value = '不应被接受的搜索词'; assert.equal(env.U.accepted(env.el, '不足一年', 'builtin.workExperience'), false);
+  const other = fixture(); other.nodes[0] = other.option('1 年以下', 'below-one'); other.nodes[0].attrs['aria-selected'] = 'true'; other.el.value = '1 年以下';
+  assert.equal(other.U.accepted(other.el, '不足一年', 'private.workExperience'), false);
+  assert.equal(other.U.accepted(other.el, '不足一年', 'builtin.workExperience'), true);
+});
+
+// 标签只命中一项但编码重复也须拒绝，不能产生准备句柄或任何点选。
+test('下拉等价匹配不绕过重复编码保护', async () => {
+  const env = fixture(); env.nodes[0] = env.option('1 年以下', 'same'); env.nodes.push(env.option('其他', 'same'));
+  const state = await env.U.query(env.el, '不足一年', { fieldId: 'builtin.workExperience' });
+  await assert.rejects(env.U.prepareChoice(state), (error) => error.diagnostic?.reasonCode === 'ambiguous_option'); assert.equal(env.clicks(), 0);
 });
 
 test('鼠标按下时取消或重绘候选，不再向旧节点发送抬起/点击',async()=>{

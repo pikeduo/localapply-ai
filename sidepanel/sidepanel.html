@@ -50,7 +50,7 @@
         <button id="smartStopFill" class="btn ghost" type="button" hidden>停止填写</button><p id="smartStatus" role="status"></p>
         <div class="smart-actions"><button id="smartAI" class="btn ghost">检测到未知字段，是否使用 AI 识别？</button><button id="smartFillAll" class="btn">一键填写预览</button><button id="smartRules" class="btn ghost">历史映射规则</button></div>
       </div>
-      <div id="smartAIReview" class="card" hidden><h3>确认模型接收方与发送内容</h3><p id="smartRecipient"></p><p>仅发送以下脱敏元数据及本地来源引用，不发送实际值、完整简历或网页 HTML。</p><pre id="smartAIPayload"></pre><label><input type="checkbox" id="smartAIConsent" /> 我确认向该服务商发送上述内容（可能计费）</label><button id="smartAISend" class="btn">确认发送并识别</button><button id="smartAICancel" class="btn ghost">取消</button></div>
+      <div id="smartAIReview" class="card" hidden><h3>确认模型接收方与发送内容</h3><p id="smartRecipient"></p><p id="smartAICoverage" role="status"></p><p>仅发送以下脱敏元数据及本地来源引用，不发送实际值、完整简历或网页 HTML。</p><pre id="smartAIPayload"></pre><label><input type="checkbox" id="smartAIConsent" /> 我确认向该服务商发送上述内容（可能计费）</label><button id="smartAISend" class="btn">确认发送并识别</button><button id="smartAICancel" class="btn ghost">取消</button></div>
       <div id="smartFillReview" class="card" hidden><h3>核对即将填入网页的资料</h3><pre id="smartFillPayload"></pre><label><input id="smartFillConsent" type="checkbox" /> 我已核对字段、来源和实际值，确认填写（不会提交申请）</label><label><input id="smartRememberAfter" type="checkbox" /> 填写验证成功后记住本次映射</label><div class="smart-actions"><button id="smartFillConfirm" class="btn">确认填写</button><button id="smartFillCancel" class="btn ghost">取消</button></div></div>
       <h3>已匹配 / 待确认及缺少资料</h3><div id="smartMatched"></div>
       <h3>未知字段</h3><div id="smartUnknown"></div>

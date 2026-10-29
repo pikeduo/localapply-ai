@@ -131,20 +131,28 @@
     return entries.map((entry) => targetForRecord(db, profileId, field, fieldId, entry.entryId));
   }
 
-  // 词典精确命中优先，上下文仅做有界显式规则；相似度不够时留给 AI 或人工。
+  // 精确命中必须先消除模块歧义；多目标不能借旧词典回退静默选中，旧指纹算法保持不变。
   function definitionFor(db, field) {
     const normalize = global.WangshenTemplates.normalizeLabel;
     const norm = normalize(field.label);
-    const exact = db.fieldDefinitions.filter((def) => [def.label, ...def.aliases].some((alias) => normalize(alias) === norm));
-    const group = global.WangshenTemplates.RECORD_GROUPS[field.kind];
-    const contextual = group ? exact.filter((definition) => global.WangshenTemplates.recordKind(definition.group) === field.kind) : [];
+    // 申请人字段不从家庭成员取值，明确经历模块也不能套用其他模块的同名字段。
+    const compatible = (def) => {
+      const kind = global.WangshenTemplates.recordKind(def.group);
+      return kind !== 'family' && (!field.kind || !kind || kind === field.kind);
+    };
+    const exact = db.fieldDefinitions.filter((def) => compatible(def) && [def.label, ...def.aliases].some((alias) => normalize(alias) === norm));
+    const group = ({ '个人信息': '基本信息' })[field.group] || field.group;
+    const contextual = exact.filter((definition) => field.kind ? global.WangshenTemplates.recordKind(definition.group) === field.kind : group && normalize(definition.group) === normalize(group));
     if (contextual.length === 1) return { definition: contextual[0], reason: '字段及经历模块精确匹配' };
+    if (contextual.length > 1) return null;
     if (exact.length === 1) return { definition: exact[0], reason: '标准字段或别名精确匹配' };
+    if (exact.length > 1) return null;
     // 只映射页面中含义明确的同义标题；薪资周期、最近公司等含义不明项不猜。
     const aliases = { education: { '学校名称': 'school', '专业名称': 'major' }, employment: { '工作职责': 'employmentResponsibilities' }, internship: { '工作职责': 'internshipDescription' }, project: { '职责': 'projectRole', '项目描述': 'projectDescription' } };
     const language = /英语能力|语言能力/.test(field.group) ? ({ '掌握程度': 'englishProficiency', '听说': 'englishListening', '读写': 'englishReading' })[norm] : '';
-    const alias = aliases[field.kind]?.[field.label] || language || ({ '出生日期年龄': 'birthDate', '自我描述': 'selfIntroduction', '所在地': 'currentCity', '现居住地址': 'currentCity' })[norm];
-    if (alias) { const definition = db.fieldDefinitions.find((def) => def.fieldId === 'builtin.' + alias); if (definition) return { definition, reason: '明确字段别名与模块匹配' }; }
+    const publicAlias = Object.entries(global.WangshenTemplates.FIELD_ALIASES).find(([, labels]) => labels.some((label) => normalize(label) === norm))?.[0];
+    const alias = aliases[field.kind]?.[field.label] || language || publicAlias || ({ '出生日期年龄': 'birthDate', '自我描述': 'selfIntroduction', '所在地': 'currentCity', '现居住地址': 'currentCity' })[norm];
+    if (alias) { const definition = db.fieldDefinitions.find((def) => def.fieldId === 'builtin.' + alias); if (definition && compatible(definition)) return { definition, reason: '明确字段别名与模块匹配' }; }
     let key = '';
     if (/院校|学校/.test(field.label) && (field.kind === 'education' || field.degree)) key = 'school';
     else if (/专业/.test(field.label) && field.kind === 'education') key = 'major';
@@ -153,7 +161,7 @@
     else if (/项目名称/.test(field.label) && field.kind === 'project') key = 'title';
     else { const match = global.WangshenTemplates.matchLabel(field.label); if (match?.score >= 0.95) key = match.key; }
     const definition = db.fieldDefinitions.find((def) => def.fieldId === 'builtin.' + key) || db.fieldDefinitions.find((def) => def.fieldId === 'resume.' + key);
-    return definition && key ? { definition, reason: '标准词典与明确上下文匹配' } : null;
+    return definition && key && compatible(definition) ? { definition, reason: '标准词典与明确上下文匹配' } : null;
   }
 
   // 精确记忆优先，语义兼容须带完整字段集合与本次记录绑定，控件执行仍独立准备/验证。
@@ -167,7 +175,10 @@
       const saved = memory(db, profileId, origin, field, fields, bindings);
       if (saved) return { ...base, ...saved, status: saved.target && saved.confirmed ? hasValue(valueOf(db, profileId, saved.target)?.value) ? 'matched' : 'missing_value' : 'needs_confirmation', source: 'memory' };
       const found = definitionFor(db, semantic);
-      if (!found) return base;
+      if (!found) {
+        const historyCandidates = global.LocalApplyMappingCompat?.suggest?.(db, profileId, origin, field, fields, bindings) || [];
+        return historyCandidates.length ? { ...base, historyCandidates, reason: '其他网站有同语义历史来源，仅供选择；当前网站和控件尚未验证' } : base;
+      }
       const candidates = targetsFor(db, profileId, semantic, found.definition.fieldId);
       if (candidates.length !== 1) return { ...base, candidates, reason: candidates.length ? '存在多段经历，请明确选择来源' : '缺少符合该学历或经历语义的资料', source: 'context' };
       const target = candidates[0];

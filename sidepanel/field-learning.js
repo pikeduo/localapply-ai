@@ -189,6 +189,11 @@
         else if (row.diagnostic.reasonCode === 'stale_context') card.append(node('p', '未收到具体保护检查；请重新加载扩展并刷新招聘页后重试，在“运行日志与错误诊断”中查看本次记录。', 'muted smart-guard'));
       }
       card.append(sourceSelect(row, async (source) => { selected.add(row.field.scanId); update(await request('select', { scanId: row.field.scanId, fieldId: source.fieldId, entryId: source.entryId })); }));
+      // 跨站建议不预选、不填写；点击仅等同手选来源，仍须新控件回读和独立确认记忆。
+      if (!row.target) for (const candidate of row.historyCandidates || []) {
+        const source = current.sources.find((source) => source.fieldId === candidate.fieldId && source.entryId === candidate.entryId);
+        if (source) card.append(button('选择历史建议来源：' + source.label, async () => { selected.add(row.field.scanId); update(await request('select', { scanId: row.field.scanId, fieldId: source.fieldId, entryId: source.entryId })); }, 'btn ghost smart-history-choice'));
+      }
       if (!row.target && row.status !== 'unsupported') {
         const aiLabel = node('label'); const aiCheck = node('input'); aiCheck.type = 'checkbox'; aiCheck.className = 'smart-ai-check'; aiCheck.checked = aiSelected.has(row.field.scanId);
         aiCheck.addEventListener('change', () => aiCheck.checked ? aiSelected.add(row.field.scanId) : aiSelected.delete(row.field.scanId)); aiLabel.append(aiCheck, document.createTextNode(' 选择此字段使用 AI（可选）'));
@@ -261,7 +266,7 @@
   $('smartOnlyUnknown')?.addEventListener('change', render);
   $('smartRefresh').addEventListener('click', () => task(async () => { if (directFill && !current) await scanPage(); else update(await request('session')); }));
   $('smartRevoke').addEventListener('click', async () => {const sessionId=current?.sessionId;await stopFill();if(sessionId)await sendMessage('learning:revoke',{sessionId}).catch(()=>{});clear();$('smartStatus').textContent=directFill?'已清除扫描结果，点击即可重新填写':'已撤销本页授权';});
-  $('smartAI').addEventListener('click', () => task(async () => { if (directFill) await ensureCurrent(); aiPreview = await request('prepareAI', { scanIds: current.rows.filter((row) => !row.target && !row.ignored && aiSelected.has(row.field.scanId)).map((row) => row.field.scanId) }); $('smartRecipient').textContent = `${aiPreview.recipient.name} · ${aiPreview.recipient.baseUrl} · ${aiPreview.recipient.model} · ${aiPreview.recipient.protocol}`; $('smartAIPayload').textContent = JSON.stringify(aiPreview.payload, null, 2); $('smartAIConsent').checked = false; $('smartAIReview').dataset.token = aiPreview.token; $('smartAIReview').hidden = false; }));
+  $('smartAI').addEventListener('click', () => task(async () => { if (directFill) await ensureCurrent(); aiPreview = await request('prepareAI', { scanIds: current.rows.filter((row) => !row.target && !row.ignored && aiSelected.has(row.field.scanId)).map((row) => row.field.scanId) }); $('smartRecipient').textContent = `${aiPreview.recipient.name} · ${aiPreview.recipient.baseUrl} · ${aiPreview.recipient.model} · ${aiPreview.recipient.protocol}`; $('smartAICoverage').textContent = aiPreview.coverage ? `本次目录包含 ${aiPreview.coverage.included}/${aiPreview.coverage.available} 个字段；按分类与标签分配预算。${aiPreview.coverage.omitted ? '部分字段未发送，未见不代表不存在；可取消后手动匹配。' : '已有资料实际值不会发送。'}` : '请核对候选目录，不确定时可取消并手动匹配。'; $('smartAIPayload').textContent = JSON.stringify(aiPreview.payload, null, 2); $('smartAIConsent').checked = false; $('smartAIReview').dataset.token = aiPreview.token; $('smartAIReview').hidden = false; }));
   // 取消按钮不进入忙碌屏障，能够中止正在等待的模型请求并丢弃晚到建议。
   $('smartAICancel').addEventListener('click', async () => { aiPreview = null; $('smartAIReview').hidden = true; if (current) { try { await request('cancelAI'); } catch { /* 失效会话无需继续等待取消。 */ } } });
   $('smartAISend').addEventListener('click', () => task(async () => { if (!$('smartAIConsent').checked || !aiPreview) throw new Error('请先核对模型接收方及发送内容并勾选确认'); const preview = aiPreview; aiPreview = null; $('smartAICancel').disabled = false; const result = await request('recognize', { token: preview.token, confirmed: true }); update(result); $('smartAIReview').hidden = true; $('smartStatus').textContent = `AI 返回 ${result.suggestionCount} 条待确认建议；没有修改个人资料`; }));

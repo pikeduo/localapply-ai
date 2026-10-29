@@ -8,6 +8,7 @@
   const VAULT_KEY = 'localapply.keyVault';
   const DEVICE_KEY = 'localapply.deviceKeys';
   const CATALOG_KEY = 'localapply.fieldCatalog'; // 独立升级标记，用户删掉字段后不再自动补回。
+  const RULE_PACKAGES_KEY = 'localapply.rulePackages'; // 安装回执独立于v5个人库，默认备份不携带。
   const SCHEMA_VERSION = 5; // v5 新增本地申请记录，原简历表和独立凭据保持不变。
   const TYPES = ['text', 'textarea', 'select', 'number', 'boolean', 'date', 'multiSelect'];
   const LEGACY_KINDS = ['education', 'internship', 'employment', 'project'];
@@ -104,12 +105,29 @@
       // 原项目允许 select 保存自定义文字，保留这一兼容行为。
     }
   }
-  // 从指定模板取得公共元数据，默认包含参考页结构，不复制个人值或界面专用属性。
+  // 公共同义词增补使用字段版本2；既有库不自动迁移或补绑定，供显式离线包合并。
   function builtins(template = global.WangshenTemplates.PROFILE_TEMPLATE) {
     return template.map((field) => makeDefinition({
       fieldId: 'builtin.' + field.key, label: field.label, type: field.inputType, group: field.group,
-      aliases: (field.patterns || []).filter((alias) => !alias.startsWith('re:')), options: field.options || [],
+      aliases: (field.patterns || []).filter((alias) => !alias.startsWith('re:')), options: field.options || [], version: global.WangshenTemplates.FIELD_ALIASES[field.key] ? 2 : 1,
     }));
+  }
+  // 公共字段合并共用既有逐字段版本语义，已有定义不重建被用户移除的简历绑定。
+  function mergePublicFieldsInto(db, input) {
+    keys(input, ['kind', 'version', 'fields'], '公共字段包');
+    check(input.kind === 'localapply-public-fields' && input.version === 1, '公共字段包版本错误');
+    list(input.fields, '公共字段', 2000);
+    for (const item of input.fields) {
+      const def = definition(item); const existing = db.fieldDefinitions.find((row) => row.fieldId === def.fieldId);
+      if (existing) {
+        if (equal(existing, def) || def.version < existing.version) continue;
+        check(db.publicFieldIds.includes(def.fieldId) && def.version > existing.version, '公共字段 ID/版本冲突，请人工处理');
+        Object.assign(existing, def); continue;
+      }
+      db.fieldDefinitions.push(def); db.publicFieldIds.push(def.fieldId);
+      for (const profile of db.profiles) db.bindings.push({ profileId: profile.profileId, fieldId: def.fieldId, fid: id('field'), key: def.fieldId,
+        sensitive: false, autoFill: false, material: false, custom: true });
+    }
   }
   // 一次性补齐参考目录：仅升级未改动的旧标准定义，新增空白绑定，保留旧值及用户已删的旧字段。
   function upgradeFieldCatalog(db) {
@@ -527,7 +545,7 @@
     };
     // SHA-256 同时绑定通知前后值；排序对象键以兼容 Chrome 存储序列化的键顺序变化。
     async function signature(changes) {
-      const value = [DB_KEY, CATALOG_KEY].filter((key) => Object.hasOwn(changes, key)).map((key) => [key, changes[key].oldValue, changes[key].newValue]);
+      const value = [DB_KEY, CATALOG_KEY, RULE_PACKAGES_KEY].filter((key) => Object.hasOwn(changes, key)).map((key) => [key, changes[key].oldValue, changes[key].newValue]);
       const encoded = JSON.stringify(value, (_key, row) => object(row) ? Object.fromEntries(Object.keys(row).sort().map((key) => [key, row[key]])) : row);
       return Array.from(new Uint8Array(await global.crypto.subtle.digest('SHA-256', new TextEncoder().encode(encoded))), (byte) => byte.toString(16).padStart(2, '0')).join('');
     }
@@ -535,7 +553,7 @@
     function invalidate() { snapshot = queryIndex = null; generation++; metrics.invalidations++; }
     // 通知处理与仓库操作在异步边界会合；旧自身通知只消费摘要，绝不回写旧快照。
     function changed(changes, area) {
-      if (disposed || area !== 'local' || ![DB_KEY, CATALOG_KEY].some((key) => Object.hasOwn(changes, key))) return;
+      if (disposed || area !== 'local' || ![DB_KEY, CATALOG_KEY, RULE_PACKAGES_KEY].some((key) => Object.hasOwn(changes, key))) return;
       events = events.then(async () => {
         const digest = await signature(changes); const index = notifications.indexOf(digest);
         if (index >= 0) notifications.splice(index, 1); else invalidate();
@@ -548,7 +566,7 @@
     async function persist(values, oldValues, expected) {
       await current(expected); let digest;
       if (enabled && options.changes) {
-        const changes = Object.fromEntries([DB_KEY, CATALOG_KEY].filter((key) => Object.hasOwn(values, key) && !equal(values[key], oldValues[key])).map((key) => [key, { oldValue: oldValues[key], newValue: values[key] }]));
+        const changes = Object.fromEntries([DB_KEY, CATALOG_KEY, RULE_PACKAGES_KEY].filter((key) => Object.hasOwn(values, key) && !equal(values[key], oldValues[key])).map((key) => [key, { oldValue: oldValues[key], newValue: values[key] }]));
         if (Object.keys(changes).length) { digest = await signature(changes); await current(expected); notifications.push(digest); if (notifications.length > 16) notifications.shift(); }
       }
       try { await storage.set(values); await current(expected); }
@@ -628,14 +646,15 @@
       queue = task.catch(() => {});
       return task;
     }
-    // 一次数据库写入为提交单位；API 配置独立存储，仅必要时同时更新。
-    async function commit(db, api, previous, recovery = false) {
+    // 先校验和保存恢复点，再等待同次批量持久化；不宣称Chrome多键具有事务性。
+    async function commit(db, api, previous, recovery = false, rulePackages) {
       validate(db); db.revision = previous.db.revision + 1;
       const write = { [DB_KEY]: db };
       if (api && !equal(api, previous.api)) write[API_KEY] = apiSettings(api);
+      if (rulePackages !== undefined) write[RULE_PACKAGES_KEY] = global.LocalApplyRulePackages.registry(rulePackages);
       await current(previous.generation);
       if (recovery) { await storage.set({ [RECOVERY_KEY]: clone(previous.db) }); await current(previous.generation); }
-      await persist(write, { [DB_KEY]: previous.db }, previous.generation);
+      await persist(write, { [DB_KEY]: previous.db, [RULE_PACKAGES_KEY]: previous.rulePackages }, previous.generation);
       // 命令结果可能引用工作副本；发布独立副本，外部修改返回值不能污染可信缓存。
       if (enabled) { snapshot = clone(db); queryIndex = null; }
       return clone(db);
@@ -1023,23 +1042,48 @@
             if (index >= 0) db.mappingRules[index] = rule; else db.mappingRules.push(rule);
             result = rule.mappingId; break;
           }
-          case 'mergePublicFields': {
-            keys(input, ['kind', 'version', 'fields'], '公共字段包');
-            check(input.kind === 'localapply-public-fields' && input.version === 1, '公共字段包版本错误');
-            list(input.fields, '公共字段', 2000);
-            for (const item of input.fields) {
-              const def = definition(item);
-              const existing = db.fieldDefinitions.find((row) => row.fieldId === def.fieldId);
-              if (existing) {
-                if (equal(existing, def) || def.version < existing.version) continue;
-                check(db.publicFieldIds.includes(def.fieldId) && def.version > existing.version, '公共字段 ID/版本冲突，请人工处理');
-                Object.assign(existing, def); continue;
-              }
-              db.fieldDefinitions.push(def); db.publicFieldIds.push(def.fieldId);
-              for (const profile of db.profiles) db.bindings.push({ profileId: profile.profileId, fieldId: def.fieldId, fid: id('field'), key: def.fieldId,
-                sensitive: false, autoFill: false, material: false, custom: true });
+          case 'mergePublicFields': mergePublicFieldsInto(db, input); break;
+          case 'previewPublicFields': {
+            const next = clone(db); mergePublicFieldsInto(next, input); validate(next);
+            return { result: { revision: db.revision, changes: next.fieldDefinitions.filter((def) => !equal(def, db.fieldDefinitions.find((row) => row.fieldId === def.fieldId)))
+              .map((after) => ({ fieldId: after.fieldId, before: db.fieldDefinitions.find((def) => def.fieldId === after.fieldId) || null, after })) }, revision: db.revision };
+          }
+          case 'previewRulePackage':
+          case 'installRulePackage':
+          case 'previewRuleRollback':
+          case 'rollbackRulePackage':
+          case 'listRulePackages': {
+            const P = global.LocalApplyRulePackages; check(P, '规则包组件未加载，请重新加载设置页');
+            const stored = (await storage.get(RULE_PACKAGES_KEY))[RULE_PACKAGES_KEY]; const records = P.registry(stored);
+            if (request.action === 'listRulePackages') {
+              keys(input, [], '规则包列表');
+              return { result: records.packages.map((entry) => { const last = entry.releases.at(-1); const plan = P.rollback(db, records, entry.packageId);
+                return { packageId: entry.packageId, release: last.release, source: last.source, canRollback: !plan.conflicts.length, conflicts: plan.conflicts }; }), revision: db.revision };
             }
-            break;
+            const install = ['previewRulePackage', 'installRulePackage'].includes(request.action);
+            const previewOnly = request.action.startsWith('preview');
+            keys(input, install ? ['package', ...(previewOnly ? [] : ['confirmed'])] : ['packageId', ...(previewOnly ? [] : ['confirmed'])], '规则包操作');
+            const plan = install ? await P.preview(input.package, db, records) : P.rollback(db, records, input.packageId);
+            if (previewOnly) return { result: plan, revision: db.revision };
+            check(input.confirmed === true && request.expectedRevision !== undefined, '规则包安装/回滚需要预览版本及明确确认');
+            check(!plan.conflicts.length, '规则包存在冲突或已有资料引用，请先人工处理');
+            if (install && plan.alreadyInstalled) return { result: { alreadyInstalled: true }, revision: db.revision };
+            let next;
+            if (install) {
+              mergePublicFieldsInto(db, { kind: 'localapply-public-fields', version: 1, fields: plan.changes.map((change) => change.after) });
+              next = P.installed(plan, db, records);
+            } else {
+              for (const change of plan.changes) {
+                if (change.before) db.fieldDefinitions[db.fieldDefinitions.findIndex((def) => def.fieldId === change.fieldId)] = clone(change.before);
+                else {
+                  db.fieldDefinitions = db.fieldDefinitions.filter((def) => def.fieldId !== change.fieldId); db.publicFieldIds = db.publicFieldIds.filter((fieldId) => fieldId !== change.fieldId);
+                  db.bindings = db.bindings.filter((binding) => binding.fieldId !== change.fieldId); db.fieldValues = db.fieldValues.filter((row) => row.fieldId !== change.fieldId);
+                }
+              }
+              next = clone(records); const entry = next.packages.find((row) => row.packageId === input.packageId); entry.releases.pop(); next.packages = next.packages.filter((row) => row.releases.length);
+            }
+            await commit(db, null, { ...previous, rulePackages: stored }, true, next);
+            return { result: { changed: plan.changes.length, packageId: plan.packageId, release: plan.release }, revision: db.revision };
           }
           case 'publishDefinition': {
             // 对外共享必须提供独立审核后的元数据，绝不自动复制私有字段标签/经历标题。

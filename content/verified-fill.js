@@ -10,14 +10,14 @@
   // 扫描器提供独立控件描述；兼容旧的本页调用封套，不使用语义 key 选择写入方式。
   function controlOf(item) { return item.control || global.FieldMatchingEngine.controlDescriptor(item.field); }
 
-  // 按控件描述比较真实选中状态和编辑器分行文本，显示变化不能代替控件接受。
-  function accepted(item, expected) {
+  // 按可信来源语义及控件状态回读，来源 fieldId 只驻留本次调用，不加入扫描/持久化契约。
+  function accepted(item, expected, fieldId = '') {
     const { el, members } = item; const control = controlOf(item);
     if (!el.isConnected || el.getAttribute('aria-invalid') === 'true' || el.validity?.valid === false) return false;
     if (A.handles(item)) return A.accepted(item, expected);
-    if (['select', 'radio', 'checkbox'].includes(control.type)) return global.LocalApplyNativeChoices.accepted(item, expected);
+    if (['select', 'radio', 'checkbox'].includes(control.type)) return global.LocalApplyNativeChoices.accepted(item, expected, fieldId);
     if (control.type === 'combobox') {
-      if (global.LocalApplyDropdownControls) return global.LocalApplyDropdownControls.accepted(el, expected);
+      if (global.LocalApplyDropdownControls) return global.LocalApplyDropdownControls.accepted(el, expected, fieldId);
       if (A.dropdown(el)) return A.dropdownAccepted(el, expected);
       const menu = el.getRootNode().getElementById?.(el.getAttribute('aria-controls') || el.getAttribute('aria-owns'));
       const selected = [...(menu?.querySelectorAll('[role="option"][aria-selected="true"]') || [])];
@@ -41,12 +41,12 @@
     return global.LocalApplyFillVerification.run(context);
   }
 
-  // 按当前控件读取非空冲突；覆盖许可仍绑定用户刚核对的旧值。
+  // 非空冲突按同一可信来源解析；等价的已选值不重写，不同内容仍须逐项覆盖确认。
   function conflict(item, value, options) {
     const before = global.LocalApplyPageScanner.readValue(item);
     const occupied = Array.isArray(before) ? before.length > 0 : before !== '' && before !== null && before !== undefined && before !== false && !(controlOf(item).type === 'combobox' && /^(请选择|请选择一项|Select|Please select)$/i.test(before));
     if (options.overwrite && JSON.stringify(before) !== JSON.stringify(options.expectedCurrent)) return { status: 'needs_confirmation', ok: false, reason: '网页内容在确认后已变化，请重新核对差异', conflict: { before, after: value } };
-    const different = item.compound ? A.hasConflict(item, value) : occupied && !accepted(item, value);
+    const different = item.compound ? A.hasConflict(item, value) : occupied && !accepted(item, value, options.intent?.source.fieldId);
     if (!options.overwrite && different) return { status: 'needs_confirmation', ok: false, reason: '网页已有不同内容，已保留；核对差异后可单独允许覆盖', conflict: { before, after: value } };
     return null;
   }
@@ -73,8 +73,8 @@
           || current.members.some((node, index) => node !== item.members[index]))) throw new Error('填写候选已变化');
         return current;
       },
-      // 状态读取沿用已有真实性及校验检查，不读取框架私有对象。
-      accepted(value) { return accepted(item, value); },
+      // 准备和最终回读使用同一来源语义，不读取框架私有对象。
+      accepted(value) { return accepted(item, value, intent.source.fieldId); },
       // 执行器须消费原计划，不能绕过私有身份、来源和非空快照检查。
       consumePlan(plan) { validatePrepared(plan, item, intent, true); return preparedPlans.get(plan).adapterState; }
     };
@@ -89,9 +89,9 @@
     const prepared = adapter?.prepare(control, intent, adapterContext(item, intent, options));
     if (prepared?.error) return prepared;
     if (adapted) { const existing = A.plan(item, value); if (existing.error) return { error: { ...existing.error, diagnostic: { phase: 'plan' } } }; }
-    const blocked = conflict(item, value, options); if (blocked) return { error: { ...blocked, diagnostic: { phase: 'protect', reasonCode: 'existing_value_preserved' } } };
+    const blocked = conflict(item, value, { ...options, intent }); if (blocked) return { error: { ...blocked, diagnostic: { phase: 'protect', reasonCode: 'existing_value_preserved' } } };
     let operation = prepared?.operation || (adapted || ['checkbox', 'combobox'].includes(control.type) ? 'legacy-interaction' : 'write-value'); let targetOption = prepared?.targetOption; let optionNode;
-    if (accepted(item, value)) operation = 'verify-existing';
+    if (accepted(item, value, intent.source.fieldId)) operation = 'verify-existing';
     else if (!adapter && !adapted && ['select', 'radio'].includes(control.type)) {
       const candidates = nativeCandidates(item); const found = candidates.filter((node) => node.value === String(value)
         || (control.type === 'select' ? node.textContent : node.closest('label')?.textContent)?.trim() === String(value));

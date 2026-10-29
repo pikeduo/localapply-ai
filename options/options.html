@@ -225,9 +225,16 @@
       <button id="btnRestoreRecovery" class="btn ghost">恢复到上次导入或清理前</button>
       <div class="row">
         <button id="btnPublicExport" class="btn plain">导出已审核公共字段定义</button>
-        <button id="btnPublicImport" class="btn ghost">合并公共字段定义</button>
+        <button id="btnPublicImport" class="btn ghost">导入离线规则包 / 公共字段</button>
         <input id="publicFieldsFile" type="file" accept=".json,application/json" hidden />
       </div>
+      <div id="publicPackagePreview" class="card" hidden aria-label="公共规则包差异预览">
+        <p id="publicPackageSummary" role="status"></p><div id="publicPackageChanges"></div>
+        <label><input id="publicPackageConsent" type="checkbox" /> 我已核对公共元数据、来源及以上变化，确认执行</label>
+        <div class="row"><button id="btnApplyPublicPackage" class="btn" disabled>确认按差异导入</button><button id="btnCancelPublicPackage" class="btn ghost">取消预览</button></div>
+      </div>
+      <details><summary>已安装的离线规则包</summary><div id="installedRulePackages" role="status"></div></details>
+      <p class="muted">离线包先预览再确认，不自动下载或上传。安装回执独立保存在本机，不进入个人备份；恢复备份后可重新导入包核对。回滚只处理公共定义，有个人值、映射或后续改动时不会删除。</p>
       <p class="muted">公共字段导出只含元数据；个人自定义字段默认不公开，不包含个人值、档案、记录或 Key。本阶段不连接 GitHub。</p>
       <p class="muted" id="backupMsg">备份包含全部档案和字段值，<b>不含 API Key</b>。换电脑或重装浏览器前建议先导出。</p>
       <p class="muted">
@@ -272,6 +279,7 @@
   <script src="../data/field-matching.js"></script>
   <script src="../data/applications.js"></script>
   <script src="../data/local-store.js"></script>
+  <script src="../data/rule-packages.js"></script>
   <script src="../data/model-capabilities.js"></script>
   <script src="../data/responses.js"></script>
   <script src="../data/ai-client.js"></script>

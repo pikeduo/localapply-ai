@@ -107,3 +107,34 @@ test('投影不读取个人值，范围只暴露固定控件类别，不进入�
 test('关闭兼容模块即回到旧精确查询，不需要迁移或恢复个人库',()=>{
   const env=fixture();env.context.LocalApplyMappingCompat=undefined;assert.equal(env.match([env.field('radio')])[0].source,'unknown');assert.equal(env.match([env.field()])[0].memoryMatch,'exact');
 });
+
+// 跨站历史不设置target、不复制验证状态，不靠同标签跨组或跨档案匹配。
+test('跨网站历史仅提示来源，当前域/档案/分组边界及规则状态保持隔离', () => {
+  const env = fixture(); const field = env.field('radio'); const origin = 'https://other.example.test'; const before = JSON.stringify(env.db);
+  let row = env.match([field], 'profile.a', origin)[0]; assert.equal(row.target, null); assert.equal(row.status, 'needs_confirmation'); assert.equal(row.historyCandidates[0].fieldId, 'builtin.gender');
+  assert.ok(!JSON.stringify(row.historyCandidates).includes('2026-01-01')); assert.equal(JSON.stringify(env.db), before);
+  assert.equal(env.match([field], 'profile.b', origin)[0].historyCandidates, undefined);
+  assert.equal(env.match([env.field('radio', { group: '其他组' })], 'profile.a', origin)[0].historyCandidates, undefined);
+  env.db.mappingRules[0].enabled = false; env.db.revision++; assert.equal(env.match([field], 'profile.a', origin)[0].historyCandidates, undefined);
+  env.db.mappingRules[0].enabled = true; env.db.mappingRules[0].confirmed = false; env.db.revision++; assert.equal(env.match([field], 'profile.a', origin)[0].historyCandidates, undefined);
+});
+
+test('跨站建议不旁路本站禁用或来源冲突，删除/修改规则立即更新', () => {
+  const env = fixture(); const origin = 'https://other.example.test'; const field = env.field('radio');
+  env.db.mappingRules.push(env.rule(field, { origin, enabled: false })); env.db.revision++; assert.equal(env.U.suggest(env.db, 'profile.a', origin, field).length, 0);
+  env.db.mappingRules.pop(); env.db.mappingRules.push(env.rule(env.field(), { origin: 'https://third.example.test', fieldId: 'builtin.email' })); env.db.revision++;
+  assert.equal(env.U.suggest(env.db, 'profile.a', origin, field).length, 0);
+  env.db.mappingRules.pop(); env.db.mappingRules[0].fieldId = 'builtin.email'; env.db.revision++;
+  assert.equal(env.U.suggest(env.db, 'profile.a', origin, field)[0].fieldId, 'builtin.email');
+  env.db.mappingRules = []; env.db.revision++; assert.equal(env.U.suggest(env.db, 'profile.a', origin, field).length, 0);
+});
+
+test('跨站重复经历只提示当前绑定，缺绑定或学历不符不借历史entryId', () => {
+  const env = fixture(); env.db.entries = [{ entryId: 'entry.old', profileId: 'profile.a', kind: 'education' }, { entryId: 'entry.new', profileId: 'profile.a', kind: 'education' }];
+  const field = env.field('combobox', { kind: 'education', group: '教育经历' }); env.db.mappingRules = [env.rule(env.field('select', { kind: 'education', group: '教育经历' }), { fieldId: 'builtin.school', entryId: 'entry.old' })];
+  const origin = 'https://other.example.test'; assert.equal(env.U.suggest(env.db, 'profile.a', origin, field).length, 0);
+  const binding = { [field.scanId]: { kind: 'education', entryId: 'entry.new' } }; const candidate = env.U.suggest(env.db, 'profile.a', origin, field, [field], binding)[0];
+  assert.equal(candidate.entryId, 'entry.new'); assert.equal(candidate.fieldId, 'builtin.school');
+  const explicit = env.field('combobox', { kind: 'education', group: '教育经历', degree: 'master' });
+  assert.equal(env.U.suggest(env.db, 'profile.a', origin, explicit, [explicit], { [explicit.scanId]: { kind: 'education', entryId: 'entry.new' } }).length, 0);
+});

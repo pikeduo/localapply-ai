@@ -1,0 +1,53 @@
+{
+  "kind": "localapply-rule-package",
+  "formatVersion": 1,
+  "packageId": "localapply.core-aliases",
+  "release": 1,
+  "compatibility": {
+    "minSchema": 5,
+    "maxSchema": 5,
+    "fillContract": 1
+  },
+  "source": {
+    "name": "LocalApply 自主整理公共别名",
+    "reference": ""
+  },
+  "fields": [
+    {
+      "fieldId": "builtin.educationStartDate",
+      "label": "开始日期",
+      "type": "date",
+      "group": "教育背景",
+      "aliases": [
+        "开始日期",
+        "入学日期",
+        "入学时间"
+      ],
+      "options": [],
+      "description": "",
+      "version": 2
+    },
+    {
+      "fieldId": "builtin.workExperience",
+      "label": "工作经验",
+      "type": "select",
+      "group": "基本信息",
+      "aliases": [
+        "工作经验",
+        "工作年限",
+        "工作经验年限"
+      ],
+      "options": [
+        "应届生",
+        "1年以下",
+        "1-3年",
+        "3-5年",
+        "5-10年",
+        "10年以上"
+      ],
+      "description": "",
+      "version": 2
+    }
+  ],
+  "sha256": "a41173ba3403e31ee5dfebf7bb3959d737f7814648bc8524739df824628588f5"
+}

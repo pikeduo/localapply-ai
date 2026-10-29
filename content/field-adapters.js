@@ -87,12 +87,13 @@
     return (label?.textContent || node.getAttribute('aria-label') || node.textContent).trim();
   }
 
-  // 工作经验兼容“1 年以下”的单位空白及明确的小于一年同义词；其他字段保留词间空格和语义边界。
+  // 旧日期/下拉调用保留局部兼容；业务等价复用公共解析器，新计划直接按可信 fieldId 调用。
   function optionEqual(actual, expected, fieldLabel = '', unit = '') {
     const normalize = (text) => String(text).normalize('NFKC').replace(/[\u200b-\u200d\ufeff]/g, '').replace(/\s+/g, ' ').trim();
     const left = normalize(actual); const right = normalize(expected);
     if (left === right) return true;
     if (unit && new RegExp('^\\d+' + unit + '?$').test(left)) return Number(left.replace(unit, '')) === Number(right);
+    if (global.LocalApplyValueResolver) return /^工作经验$/.test(fieldLabel) && global.LocalApplyValueResolver.equivalent('builtin.workExperience', left, right);
     const belowOne = /^(?:(?:1|一)\s*年以下(?:(?:工作)?经验)?|不足\s*(?:1|一)\s*年|少于\s*(?:1|一)\s*年)$/;
     return /^工作经验$/.test(fieldLabel) && belowOne.test(left) && belowOne.test(right);
   }

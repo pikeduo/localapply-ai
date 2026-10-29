@@ -48,8 +48,8 @@
       protected: select && protectedNode(node) })), multiple: select && !!item.el.multiple };
   }
 
-  // 标签与编码均须精确且唯一；同标签不同码、同码不同标签也不能猜选首项。
-  function resolve(item, value) {
+  // 使用可信来源 fieldId 解析明确等价；标签/编码和候选身份仍须唯一，不猜选首项。
+  function resolve(item, value, fieldId = '') {
     const state = snapshot(item); if (state.error) return state;
     const { rows } = state; const type = item.control?.type || item.field.type;
     const singleCheck = type === 'checkbox' && rows.length === 1;
@@ -57,7 +57,9 @@
     if (singleCheck ? typeof value !== 'boolean' : many ? !Array.isArray(value) || !value.length : !['string', 'number'].includes(typeof value)) return { error: failure('原生控件需要明确的布尔值、单选值或选项数组') };
     const targets = [];
     for (const wanted of singleCheck ? [] : many ? value : [value]) {
-      const found = rows.filter((row) => row.value === String(wanted) || row.label === String(wanted));
+      const resolution = global.LocalApplyValueResolver?.resolve(fieldId, wanted, rows);
+      if (resolution && resolution.status !== 'resolved') return { error: failure('选项缺失、存在歧义或不可操作，未进行猜选', resolution.reasonCode === 'unsupported_control' ? 'unsupported' : 'failed', resolution.reasonCode, { candidateCount: rows.length, matchCount: resolution.matchCount }) };
+      const found = resolution ? [rows[resolution.index]] : rows.filter((row) => row.value === String(wanted) || row.label === String(wanted));
       const counts = { candidateCount: rows.length, matchCount: found.length };
       if (found.length !== 1) return { error: failure('没有唯一的精确选项，未进行模糊选择', 'failed', found.length ? 'ambiguous_option' : 'no_exact_option', counts) };
       const target = found[0];
@@ -81,8 +83,8 @@
       && item.el.getAttribute('aria-invalid') !== 'true' && item.el.validity?.valid !== false;
   }
 
-  // 非空保护复用同一标签/编码解析，已经相同的选中集合只验证、不再次点击。
-  function accepted(item, value) { const state = resolve(item, value); return !state.error && matches(item, state); }
+  // 非空保护与准备复用同一来源语义，已经等价的选中集合只验证、不再次点击。
+  function accepted(item, value, fieldId = '') { const state = resolve(item, value, fieldId); return !state.error && matches(item, state); }
 
   // 每次动作/回读重新核对原节点和候选；取消、换文档、换候选均停止，不重走旧路径。
   function guard(context, state) {
@@ -108,7 +110,7 @@
       // 先解析真实候选，再生成最小固定操作；准备阶段零点击、零写入。
       prepare(control, intent, context) {
         const blocked = guard(context); if (blocked) return { error: blocked };
-        const state = resolve(context.item, intent.value); if (state.error) return state;
+        const state = resolve(context.item, intent.value, intent.source.fieldId); if (state.error) return state;
         const operation = matches(context.item, state) ? 'verify-existing' : state.singleCheck ? 'set-checked' : state.many ? 'select-options' : 'select-option';
         return { operation, adapterState: state,
           ...(operation === 'select-option' ? { targetOption: option(state.targets[0]) } : {}),

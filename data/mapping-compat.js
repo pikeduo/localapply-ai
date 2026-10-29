@@ -13,17 +13,19 @@
   function indexFor(db) {
     const previous = indexes.get(db);
     if (previous?.revision === db.revision && previous.rules === db.mappingRules) return previous.buckets;
-    const buckets = new Map();
+    const buckets = new Map(); const crossBuckets = new Map();
     for (const rule of db.mappingRules) {
       if (!rule.semanticId || !rule.features) continue; // 最老无特征规则仍需重新学习，不能升级为已验证。
       try { M.validateField({ ...rule.features, scanId:'scan.compat', semanticId:rule.semanticId, name:'', placeholder:'', options:[] }); }
       catch { continue; }
       const semantic = M.semanticDescriptor(rule.features); const bucket = key(rule.origin, rule.profileId, semantic);
-      const row = { mappingId:rule.mappingId, semantic, control:M.controlDescriptor(rule.features), fieldId:rule.fieldId, entryId:rule.entryId,
+      const row = { mappingId:rule.mappingId, origin:rule.origin, semantic, control:M.controlDescriptor(rule.features), fieldId:rule.fieldId, entryId:rule.entryId,
         enabled:rule.enabled === true, verified:rule.confirmed === true && typeof rule.lastVerifiedAt === 'string' && Number.isFinite(Date.parse(rule.lastVerifiedAt)) };
       if (!buckets.has(bucket)) buckets.set(bucket, []); buckets.get(bucket).push(row);
+      const crossKey = JSON.stringify([rule.profileId, semantic.key]);
+      if (!crossBuckets.has(crossKey)) crossBuckets.set(crossKey, []); crossBuckets.get(crossKey).push(row);
     }
-    indexes.set(db, { revision:db.revision, rules:db.mappingRules, buckets }); return buckets;
+    indexes.set(db, { revision:db.revision, rules:db.mappingRules, buckets, crossBuckets }); return buckets;
   }
 
   // 校验当前档案绑定及记录归属；索引只存元数据，不索引用户实际字段值。
@@ -66,6 +68,27 @@
     return { ...base, target, candidates:[target], confirmed:true, reason:'已复用本地字段语义；当前控件尚未验证，填写后独立回读' };
   }
 
+  // 跨网站仅建议fieldId，绝不返回自动目标/旧验证时间；重复经历必须使用本次整条绑定。
+  function suggest(db, profileId, origin, field, fields = [field], bindings = {}) {
+    const semantic = M.semanticDescriptor(field); if (!semantic.label || !semantic.group) return [];
+    indexFor(db);
+    const rows = (indexes.get(db).crossBuckets.get(JSON.stringify([profileId, semantic.key])) || []).filter((row) => equal(row.semantic, semantic));
+    // 本站有任何规则时遵循本站状态，不能用外站旁路禁用、未验证或冲突记录。
+    if (!rows.length || rows.some((row) => row.origin === origin || !row.enabled || !row.verified)) return [];
+    const ids = new Set(rows.map((row) => row.fieldId)); if (ids.size !== 1) return [];
+    const fieldId = rows[0].fieldId; const definition = db.fieldDefinitions.find((row) => row.fieldId === fieldId);
+    const kind = semantic.kind || global.WangshenTemplates.recordKind(definition?.group) || '';
+    let entryId = null;
+    if (kind) {
+      const binding = bindings[field.scanId];
+      if (!binding || binding.kind !== kind || !Object.hasOwn(binding, 'entryId')) return [];
+      entryId = binding.entryId;
+    } else if (fields.filter((row) => equal(M.semanticDescriptor(row), semantic)).length !== 1) return [];
+    const target = { fieldId, entryId };
+    if (!owned(db, profileId, target, kind) || kind === 'education' && !M.sourceRole(db, profileId, target, semantic.degree)) return [];
+    return [target];
+  }
+
   // 管理页只获得变体范围和控件类型，不把内存索引/语义 key 写回规则或备份。
   function scopes(db) {
     const result = [];
@@ -79,5 +102,5 @@
     }
     return result;
   }
-  global.LocalApplyMappingCompat = Object.freeze({ find, scopes });
+  global.LocalApplyMappingCompat = Object.freeze({ find, scopes, suggest });
 })(globalThis);
