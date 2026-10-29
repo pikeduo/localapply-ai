@@ -55,6 +55,18 @@ async function learnMapping(env, field, fieldId = 'builtin.gender', entryId = nu
   view=await env.send(view,'fill',{scanId:field.scanId,confirmed:true});return env.send(view,'remember',{scanId:field.scanId,confirmed:true});
 }
 
+// 不认识的会话命令不能落入单字段校验，避免将版本不一致误报为网页未授权。
+test('学习命令分派：未知命令不执行，旧扫描项和受保护字段仍拒绝', async () => {
+  const env = await fixture(); await env.setValue('builtin.name', '合成姓名'); const field = env.field('姓名'); const view = await env.scan(field);
+  const before = await env.repo.read(); const calls = env.calls.length;
+  for (const payload of [{}, { scanId: field.scanId }]) await assert.rejects(env.send(view, 'unknownCommand', payload), /未知字段学习操作/);
+  await assert.rejects(env.send(view, 'fill', { scanId: 'scan.removed', confirmed: true }), /网页字段不在授权扫描范围内/);
+  const protectedField = env.field('验证码'); const restricted = await env.scan(protectedField);
+  await assert.rejects(env.send(restricted, 'select', { scanId: protectedField.scanId, fieldId: 'builtin.name' }), /网页字段不在授权扫描范围内/);
+  assert.equal(env.calls.filter((row) => row.type === 'learning:fill' || row.type === 'learning:read').length, 0);
+  assert.equal(env.calls.length, calls + 1); assert.deepEqual(await env.repo.read(), before); assert.equal(env.aiCalls.length, 0);
+});
+
 test('分层第十步：批次须当前文档/版本，拒绝伪批次、重复开始及缺少取消组件',async()=>{
   const env=await fixture();await env.setValue('builtin.name','合成姓名');const field=env.field('姓名');let view=await env.scan(field);const before=await env.repo.read();const batch=await env.send(view,'beginFill',{confirmed:true});
   await assert.rejects(env.send(view,'beginFill',{confirmed:true}),/已有/);await assert.rejects(env.send(view,'fill',{scanId:field.scanId,batchId:'operation.fake',confirmed:true}),/批次/);

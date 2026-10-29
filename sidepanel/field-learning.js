@@ -26,13 +26,27 @@
     catch (error) { if (started === generation) { $('smartStatus').textContent = error.message; $('smartStatus').className = 'err'; } }
     finally { busy = false; $('tab-smart').setAttribute('aria-busy', 'false'); $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = button.id === 'smartUndo' ? !rulesView?.canUndo : false; }); }
   }
-  // 所有阶段三业务均经受信后台；日志未落盘时单独提示，不掩盖真实填写结果。
+  // 所有业务仍经后台校验；区分旧后台误分派和单项扫描失效，恢复不转移旧字段许可。
   async function request(type, payload = {}) {
-    const started = generation;
-    const result = await sendMessage('learning:' + type, { sessionId: current?.sessionId, ...payload });
+    const started = generation; const sessionId = payload.sessionId || current?.sessionId;
+    const result = await sendMessage('learning:' + type, { sessionId, ...payload });
     if (result.diagnosticsSaved === false && $('logsStorageStatus')) { $('logsStorageStatus').textContent = '本次操作的日志保存失败；填写结果仍有效，请打开诊断面板检查存储并重试。'; $('logsStorageStatus').className = 'err'; }
     if (started !== generation) throw new Error(directFill ? '页面或档案已切换，请重新点击填写' : '页面或档案已切换，请重新授权');
-    if (!result.ok) throw new Error(result.error); return result;
+    if (!result.ok) {
+      // 这些批次命令不接受 scanId；旧后台误走 rowOf 时必须停止，不能降级绕过批次安全检查。
+      if (['beginFill', 'leaseFill', 'prepareRecords'].includes(type) && ['网页字段不在授权扫描范围内', '未知字段学习操作'].some((message) => result.error?.startsWith(message))) {
+        throw new Error('扩展组件版本不一致，请在扩展管理页点击“重新加载”，再刷新招聘页后重试。无需卸载，已保存资料会保留。');
+      }
+      if (result.error === '网页字段不在授权扫描范围内' && typeof payload.scanId === 'string' && current?.sessionId === sessionId) {
+        const fresh = await sendMessage('learning:session', { sessionId });
+        if (started !== generation || current?.sessionId !== sessionId) throw new Error('页面或档案已切换，请重新点击填写');
+        if (!fresh.ok) throw new Error(fresh.error);
+        update(fresh); aiPreview = null; $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true;
+        const error = new Error('网页字段已更新，列表已刷新，请重新选择此项。'); error.code = 'stale_field'; throw error;
+      }
+      throw new Error(result.error);
+    }
+    return result;
   }
   // 停止不进入忙碌屏障：先释放暂停等待，再通过原会话停止内容任务，保留已完成字段。
   async function stopFill() {
@@ -283,7 +297,9 @@
           await waitForPage(job);job.check();if(attempted.has(scanId))continue;attempted.add(scanId);
           const row=current.rows.find((row)=>row.field.scanId===scanId);if(!row||!row.target||directFill&&!unfinished(row))continue;
           const card=[...document.querySelectorAll('.smart-row')].find((node)=>node.dataset.scanId===scanId);if(card){card.dataset.status='filling';card.querySelector('h4').append(document.createTextNode(' · 正在填写'));}
-          update(await job.send('fill',{scanId,confirmed:true}));const status=current.rows.find((row)=>row.field.scanId===scanId)?.status;
+          // 动态批量只让后续扫描重新匹配新节点；旧手选/覆盖令牌绝不按相同标签继承。
+          try{update(await job.send('fill',{scanId,confirmed:true}));}catch(error){if(error.code==='stale_field'&&includeDynamic){pending++;continue;}throw error;}
+          const status=current.rows.find((row)=>row.field.scanId===scanId)?.status;
           if(status==='success'){success++;if(remember)update(await job.send('remember',{scanId,confirmed:true}));}else if(status==='needs_confirmation')pending++;else failed++;
         }
         queue=[];if(!includeDynamic)break;

@@ -9,6 +9,45 @@ const context = vm.createContext({ Date, setTimeout });
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../content/field-adapters.js'), 'utf8'), context);
 const A = context.LocalApplyFieldAdapters;
 
+// 仅提供 Sugar 的确认结构；若错误读取搜索框值，测试立即失败。
+test('Moka 选中证据只取唯一独立显示节点，不回退搜索词', () => {
+  let rows = []; const owner = { querySelectorAll: () => rows };
+  const el = { matches: () => true, closest: () => owner, get value() { throw new Error('不应读取查询值'); } };
+  const selectedText = context.LocalApplyDropdownDOM.selectedText;
+  assert.equal(selectedText(el), null);
+  rows = [{ textContent: '' }]; assert.equal(selectedText(el), '');
+  rows = [{ textContent: '  合成大学  ' }]; assert.equal(selectedText(el), '合成大学');
+  rows.push({ textContent: '另一个显示节点' }); assert.equal(selectedText(el), null);
+});
+
+// 复合日期也只能复用已确认的年/月，不能因查询文字恰好等于来源而跳过点选。
+test('Moka 年月回读要求每个下拉均有真实选中显示', () => {
+  // 用独立确认节点与查询值表示同一个子项的两种状态，不读取其他字段。
+  function part(text, query) {
+    const row = { textContent: text }; const owner = { querySelector: () => row, querySelectorAll: () => [row] };
+    return { el: { tagName: 'INPUT', isConnected: true, value: query, getAttribute: () => null, matches: () => true, closest: () => owner }, row };
+  }
+  const year = part('', '2020'); const month = part('9', '');
+  const item = { el: year.el, compound: { kind: 'date', parts: { year: year.el, month: month.el } } };
+  assert.equal(A.accepted(item, '2020-09'), false);
+  year.row.textContent = '2020'; assert.equal(A.accepted(item, '2020-09'), true);
+  month.row.textContent = ''; month.el.value = '9'; assert.equal(A.accepted(item, '2020-09'), false);
+});
+
+// 显式 ID 也不能跳过可见性和唯一性，隐藏旧菜单不得阻止本次主动重开。
+test('Moka 弹层关联拒绝隐藏、重复 ID 及多目标 ARIA', () => {
+  const node = { isConnected: true, getClientRects: () => [{}], visibility: 'visible' }; let count = 1; let linked = 'menu';
+  const root = { getElementById: () => node, querySelectorAll: () => Array(count).fill(node) };
+  const el = { getAttribute: () => linked, getRootNode: () => root };
+  const env = vm.createContext({ setTimeout, getComputedStyle: (menu) => ({ visibility: menu.visibility }), CSS: { escape: (key) => key } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../content/field-adapters.js'), 'utf8'), env);
+  const popupFor = env.LocalApplyDropdownDOM.popupFor;
+  assert.equal(popupFor(el), node); node.visibility = 'hidden'; assert.equal(popupFor(el), null);
+  node.visibility = 'visible'; count = 2; assert.equal(popupFor(el), null);
+  count = 1; linked = 'menu another'; assert.equal(popupFor(el), null);
+  linked = 'menu'; node.isConnected = false; assert.equal(popupFor(el), null);
+});
+
 // 等价表达必须保持经验区间边界；院校/专业的校区、标点及英文词间空格不能随意删除。
 test('下拉正式标签的空白及一年以下同义表达有界匹配', () => {
   for (const label of ['1年以下', '一年以下经验', '1年以下工作经验', '不足一年']) assert.equal(A.optionEqual(label, '1年以下', '工作经验'), true);

@@ -259,6 +259,8 @@
         suggestions.forEach((suggestion) => { const row = rowOf(item, suggestion.scanId); row.suggestion = suggestion; row.status = 'needs_confirmation'; row.reason = 'AI 建议尚未确认；置信度不能代替用户核对'; });
         return { ...view(item, db), suggestionCount: suggestions.length };
       }
+      // 会话命令先明确分派；未知/旧版本命令不能误报为缺少单字段扫描授权。
+      check(['learning:ignore', 'learning:select', 'learning:readField', 'learning:previewValue', 'learning:commitValue', 'learning:fill', 'learning:remember'].includes(msg.type), '未知字段学习操作，请重新加载扩展并刷新招聘页');
       const row = rowOf(item, msg.scanId);
       if (msg.type === 'learning:ignore') { row.ignored = msg.ignored === true; item.aiPreview = null; return view(item, db); }
       if (msg.type === 'learning:select') {

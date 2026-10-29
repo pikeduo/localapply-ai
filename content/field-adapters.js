@@ -14,14 +14,21 @@
     return last;
   }
 
+  // visibility 隐藏的保留弹层仍有布局框，关联与重开判断必须同时核对可见性。
+  function popupVisible(node) { return !!node?.isConnected && node.getClientRects().length > 0 && getComputedStyle(node).visibility === 'visible'; }
+
   // 只枚举明确的列表/日历弹层；用于将一次主动打开中新出现的唯一弹层绑定回输入框。
-  function popupRoots() { return [...document.querySelectorAll('[role="listbox"],[role="dialog"],[class*="sd-Dropdown-popup-"],[class*="sd-Dropdown-overlay-"],[class*="sd-Dropdown-dropdown-"],[class*="sd-picker-panel-"],.rc-picker-dropdown,.ant-picker-dropdown')].filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden'); }
+  function popupRoots() { return [...document.querySelectorAll('[role="listbox"],[role="dialog"],[class*="sd-Dropdown-popup-"],[class*="sd-Dropdown-overlay-"],[class*="sd-Dropdown-dropdown-"],[class*="sd-picker-panel-"],.rc-picker-dropdown,.ant-picker-dropdown')].filter(popupVisible); }
 
   // portal 没有 aria-controls 时也须有本次打开的证据；多个新弹层或焦点已离开时拒绝猜归属。
   function popupFor(el, before) {
     const linked = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
-    if (linked) return el.getRootNode().getElementById?.(linked) || null;
-    const cached = popups.get(el); if (cached?.isConnected && cached.getClientRects().length) return cached;
+    if (linked) {
+      const root = el.getRootNode(); const key = linked.trim();
+      if (!key || /\s/.test(key) || root.querySelectorAll('#' + CSS.escape(key)).length !== 1) return null;
+      const node = root.getElementById?.(key); return popupVisible(node) ? node : null;
+    }
+    const cached = popups.get(el); if (popupVisible(cached)) return cached;
     if (!before || !(document.activeElement === el || dropdown(el)?.contains(document.activeElement))) return null;
     const opened = popupRoots().filter((node) => !before.has(node));
     const roots = opened.filter((node) => !opened.some((other) => other !== node && other.contains(node)));
@@ -50,6 +57,12 @@
 
   // Moka 有时将已选文本放在独立显示节点，搜索输入为空不能据此判定未选择。
   function dropdownText(el) { return dropdown(el)?.querySelector('[class*="sd-Input-display-value-"]')?.textContent.trim() || el.value || ''; }
+
+  // Sugar 的独立显示节点才是单选确认结构；查询词与多个显示节点均不能提供选中证据。
+  function dropdownSelectionText(el) {
+    const rows = [...(dropdown(el)?.querySelectorAll('[class*="sd-Input-display-value-"]') || [])];
+    return rows.length === 1 ? rows[0].textContent.trim() : null;
+  }
 
   // 只允许可见、未禁用的候选；组件把禁用标记放在父包装时同样拒绝点击。
   function usable(node) { return node.isConnected && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden' && !node.closest('[disabled],[aria-disabled="true"],[class*="sd-Menu-disabled-"],[class*="sd-Select-disabled-"],[class*="sd-basic-disabled-"]'); }
@@ -306,7 +319,7 @@
     return item.compound.kind === 'date' ? [values.year, values.month?.padStart(2, '0'), ...(parts.day ? [values.day?.padStart(2, '0')] : [])].join('-') : Object.values(values).join(' / ');
   }
 
-  // 复读全部成员和实际日期精度；年月日历只接受真实选中且回读为相同年月的值。
+  // 复读全部成员和实际日期精度；年月下拉须有独立选中显示，不能把子项查询词视为日期内容。
   function accepted(item, value) {
     if (item.compound?.kind === 'address' && global.LocalApplyAddressControls) return global.LocalApplyAddressControls.accepted(item, value);
     const next = plan(item, value); if (next.error) return false;
@@ -316,14 +329,14 @@
       const actual = dateValue(item.el.value); const expected = dateValue(next.value); const selected = selections.get(item.el);
       return !!actual && (actual.iso === expected?.iso && actual.time === expected.time || selected?.kind === 'calendar' && selected.expected === next.value && actual.iso === selected.iso && actual.precision === selected.precision);
     }
-    return Object.entries(item.compound.parts).every(([key, el]) => el.isConnected && el.getAttribute('aria-invalid') !== 'true' && el.validity?.valid !== false && (el.tagName === 'SELECT' ? optionFor(el, next.parts[key], { year: '年', month: '月', day: '日' }[key])?.value === el.value : dropdown(el) ? dropdownAccepted(el, next.parts[key]) || dropdownText(el) === next.parts[key] : el.value === next.parts[key]));
+    return Object.entries(item.compound.parts).every(([key, el]) => el.isConnected && el.getAttribute('aria-invalid') !== 'true' && el.validity?.valid !== false && (el.tagName === 'SELECT' ? optionFor(el, next.parts[key], { year: '年', month: '月', day: '日' }[key])?.value === el.value : dropdown(el) ? dropdownAccepted(el, next.parts[key]) || dropdownSelectionText(el) === next.parts[key] : el.value === next.parts[key]));
   }
 
-  // 子控件通过原生 setter 和事件进入框架；先校验全部静态选项，避免半填日期。
+  // 子控件通过原生 setter 和事件进入框架；只有已选结果相同才跳过，查询词仍须选择候选。
   async function setPart(el, value, key, lifecycle) {
     lifecycle?.check();
     if (dropdown(el)) {
-      if (dropdownText(el) === String(value)) return true;
+      if (dropdownSelectionText(el) === String(value)) return true;
       return (await fillDropdown(el, value, { year: '年', month: '月', day: '日' }[key] || '', '', lifecycle)).ok;
     }
     if (el.tagName === 'SELECT') {
@@ -442,7 +455,7 @@
   }
   global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, optionEqual, fillDropdown, dropdownAccepted, diagnostic };
   // 只向打包的下拉桥接模块提供成熟局部探测及脱敏轨迹入口，不开放网页消息接口。
-  global.LocalApplyDropdownDOM = Object.freeze({ openControl, popupFor, popupRoots, optionLabel, usable,
+  global.LocalApplyDropdownDOM = Object.freeze({ openControl, popupFor, popupRoots, optionLabel, usable, selectedText: dropdownSelectionText,
     trace(el, detail) { traces.set(el, detail); }
   });
   // 地址桥接只复用成熟的局部 setter/事件，选项路径和私有计划由地址模块负责。

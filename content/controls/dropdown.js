@@ -42,7 +42,8 @@
   function matches(node, state) { return A.optionEqual(D.optionLabel(node), state.value, state.fieldLabel, state.unit) || node.getAttribute('data-value') === state.value; }
   // 同一已点选候选的确认标记及显示值都须保持；单有搜索文本/折叠状态不能冒充成功。
   function accepted(el, value) {
-    const expected = String(value); const saved = receipts.get(el); const actual = display(el);
+    const expected = String(value); const saved = receipts.get(el); const actual = A.dropdown(el) ? D.selectedText(el) : display(el);
+    if (A.dropdown(el) && (actual === null || actual === '')) return false;
     if (saved && [saved.value, saved.label, saved.code].includes(expected) && [saved.label, saved.code, saved.value].includes(actual)) {
       if (A.dropdown(el)) return true;
       if (saved.node.getAttribute('aria-selected') === 'true' || saved.code !== null && el.getAttribute('data-value') === saved.code) return true;
@@ -51,6 +52,13 @@
     const selected = [...(linked(el)?.querySelectorAll('[role="option"][aria-selected="true"]') || [])];
     return selected.length === 1 && matches(selected[0], { value: expected, fieldLabel: '', unit: '' })
       && [D.optionLabel(selected[0]), selected[0].getAttribute('data-value')].includes(actual);
+  }
+
+  // 按下事件可直接提交 Sugar 单选；以独立显示结果证明接受，不能靠尚未登记回执或搜索文字。
+  function selectedByEvent(state, saved) {
+    if (!state.moka) return accepted(state.el, state.value);
+    const text = D.selectedText(state.el);
+    return typeof text === 'string' && text !== '' && [saved.label, saved.code].includes(text);
   }
   // 取消结束等待且释放监听器；计时器只回读，不安排任何迟到点选。
   function delay(ms, signal) {
@@ -129,9 +137,9 @@
       saved.used = true;
       // 沿用成熟填写器的鼠标事件顺序；mousedown 已确认选中时不再补 click，每次动作前仍复核取消。
       if(saved.node.dispatchEvent&&global.MouseEvent){
-        for(const type of ['mousedown','mouseup']){check(state);checkCandidate(state,saved);saved.node.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));changed(state);if(accepted(state.el,state.value))break;}
+        for(const type of ['mousedown','mouseup']){check(state);checkCandidate(state,saved);saved.node.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}));changed(state);if(selectedByEvent(state,saved))break;}
       }
-      if(!accepted(state.el,state.value)){check(state);checkCandidate(state,saved);saved.node.click();changed(state);}
+      if(!selectedByEvent(state,saved)){check(state);checkCandidate(state,saved);saved.node.click();changed(state);}
       state.committed = true;
       receipts.set(state.el, { value: state.value, label: saved.label, code: saved.code, node: saved.node });
       await delay(60, state.signal); check(state, false); state.el.blur(); changed(state);
