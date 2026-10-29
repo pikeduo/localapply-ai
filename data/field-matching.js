@@ -143,7 +143,7 @@
     // 只映射页面中含义明确的同义标题；薪资周期、最近公司等含义不明项不猜。
     const aliases = { education: { '学校名称': 'school', '专业名称': 'major' }, employment: { '工作职责': 'employmentResponsibilities' }, internship: { '工作职责': 'internshipDescription' }, project: { '职责': 'projectRole', '项目描述': 'projectDescription' } };
     const language = /英语能力|语言能力/.test(field.group) ? ({ '掌握程度': 'englishProficiency', '听说': 'englishListening', '读写': 'englishReading' })[norm] : '';
-    const alias = aliases[field.kind]?.[field.label] || language || ({ '出生日期年龄': 'birthDate', '自我描述': 'selfIntroduction', '所在地': 'currentCity' })[norm];
+    const alias = aliases[field.kind]?.[field.label] || language || ({ '出生日期年龄': 'birthDate', '自我描述': 'selfIntroduction', '所在地': 'currentCity', '现居住地址': 'currentCity' })[norm];
     if (alias) { const definition = db.fieldDefinitions.find((def) => def.fieldId === 'builtin.' + alias); if (definition) return { definition, reason: '明确字段别名与模块匹配' }; }
     let key = '';
     if (/院校|学校/.test(field.label) && (field.kind === 'education' || field.degree)) key = 'school';

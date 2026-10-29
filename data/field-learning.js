@@ -89,7 +89,7 @@
         const assigned = item.recordTargets?.[row.field.scanId]; const assignedTarget = assigned && { fieldId: assigned.fieldId, entryId: assigned.entryId };
         if (assigned?.semanticId === row.field.semanticId && row.source !== 'memory' && db.publicFieldIds.includes(assigned.fieldId)) Object.assign(row, { target: assignedTarget, candidates: [assignedTarget], source: 'record', reason: '当前简历的整条经历已绑定此网页记录，只填写空白项', status: M.hasValue(M.valueOf(db, item.profileId, assignedTarget)?.value) ? 'matched' : 'missing_value' });
         const previous = old.find((value) => value.field.scanId === row.field.scanId && value.field.semanticId === row.field.semanticId);
-        if (previous) row.webFilled = previous.webFilled === true;
+        if (previous) { row.webFilled = previous.webFilled === true; row.webOccupied = previous.webOccupied === true; }
         if (previous?.ignored) row.ignored = true;
         const source = previous?.target && item.sources?.find((source) => source.fieldId === previous.target.fieldId && source.entryId === previous.target.entryId);
         const sameTarget = JSON.stringify(row.target) === JSON.stringify(previous?.target);
@@ -124,12 +124,12 @@
         definitions: db.fieldDefinitions.filter((def) => item.sources.some((source) => source.fieldId === def.fieldId)),
         excluded: item.excluded || [], canUndo: !!undo };
     }
-    // 完成状态只接受当前扫描项的布尔标记；清空已成功字段后允许用户再次填写。
+    // 完成/占用只接受当前项布尔标记；兼容旧快照，但禁止将实际值或矛盾标记带入会话。
     function completion(item, snapshot) {
       const rows = snapshot.completion || [];
-      check(Array.isArray(rows) && rows.length <= item.rows.length && rows.every((row) => row && Object.keys(row).sort().join() === 'present,scanId' && typeof row.present === 'boolean' && item.rows.some((item) => item.field.scanId === row.scanId)) && new Set(rows.map((row) => row.scanId)).size === rows.length, '网页完成状态格式错误');
+      check(Array.isArray(rows) && rows.length <= item.rows.length && rows.every((row) => row && ['present,scanId', 'occupied,present,scanId'].includes(Object.keys(row).sort().join()) && typeof row.present === 'boolean' && (!Object.hasOwn(row, 'occupied') || typeof row.occupied === 'boolean' && (row.occupied || !row.present)) && item.rows.some((item) => item.field.scanId === row.scanId)) && new Set(rows.map((row) => row.scanId)).size === rows.length, '网页完成状态格式错误');
       for (const row of item.rows) {
-        const state = rows.find((item) => item.scanId === row.field.scanId); row.webFilled = state?.present === true;
+        const state = rows.find((item) => item.scanId === row.field.scanId); row.webFilled = state?.present === true; row.webOccupied = state?.occupied ?? state?.present === true;
         if (state?.present === false && row.status === 'success' && !(row.field.type === 'checkbox' && row.verification?.value === false)) { row.status = 'matched'; row.reason = '网页内容已清空，可以重新填写'; delete row.verification; }
       }
       // 重复模块只接受本次扫描字段的引用，不接收网页值或任意按钮选择器。

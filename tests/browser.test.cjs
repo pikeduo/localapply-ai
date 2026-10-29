@@ -8,6 +8,81 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 阶段六只用合成语义结构与真实 React；平台登录限制不以理想化夹具冒充线上通过。
+test('阶段六：语义重复记录、嵌套下拉、原生角色及分步 React 表单', { timeout: 120000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'stage6-')); const api = await serve(); let context; let page; let frame;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    // 两条完整来源只在测试私有库创建，不使用真实档案或模型。
+    const set = async (key, value, entryId = null) => rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.' + key, value, entryId } } });
+    for (const [key, value] of [['name','合成阶段六姓名'],['gender','男'],['selfIntroduction','合成介绍第一行\n合成介绍第二行'],['currentCity','合成省 / 合成市 / 合成区'],['school','合成本科大学'],['major','合成本科专业'],['degree','本科'],['educationStartDate','2020-09'],['graduationDate','2024-06-15']]) await set(key, value);
+    const entryId = (await rpc(options, 'localapply:command', { request: { action: 'createEntry', payload: { profileId, kind: 'education', title: '合成阶段六硕士' } } })).result;
+    for (const [key, value] of [['school','合成硕士大学'],['major','合成硕士专业'],['degree','硕士'],['educationStartDate','2024-09'],['graduationDate','2027-06']]) await set(key, value, entryId);
+    const saved = (await rpc(options, 'localapply:read')).database;
+    // 每种故障使用新文档；步骤按钮由测试模拟用户点击，插件没有步骤导航权限。
+    const open = async (mode = '', step = 0) => {
+      if (page && !page.isClosed()) await page.close(); page = await context.newPage(); await page.goto(api.base + '/test-pages/phase6-controls.html?mode=' + mode); await page.locator('#applicant').waitFor();
+      for (let index = 0; index < step; index++) await page.locator('#next').click();
+      if (step) await page.locator(step === 1 ? '#school-0' : '#extra').waitFor({ state: 'visible' });
+      const loaded = page.waitForEvent('framenavigated', { predicate: (next) => next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+      await worker.evaluate(async (url) => floatingPanel.open((await chrome.tabs.query({})).find((tab) => tab.url === url).id), page.url()); frame = await loaded; await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
+    };
+    // 点击产品的真实直填入口，等待业务结束并返回后台会话，不能把 DOM 显示当作执行回执。
+    const fill = async () => { await frame.locator('#smartFillAll').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false'); assert.ok(!(await frame.locator('#smartStatus').getAttribute('class') || '').includes('err'), await frame.locator('#smartStatus').textContent()); return rpc(options, 'learning:session', { sessionId: await frame.locator('#tab-smart').getAttribute('data-session-id') }); };
+    await t.test('原生 combobox 角色仍使用 select，ARIA 隐藏及 inert 步骤不采集，真实受控状态被接受', async () => {
+      await open();
+      await page.locator('#inactive').evaluate((element) => Object.defineProperty(element, 'value', { get() { throw new Error('不应读取隐藏资料'); } }));
+      const view = await fill(); assert.equal(view.rows.length, 3); assert.equal(view.rows.find((row) => row.field.label === '性别').field.type, 'select'); assert.ok(view.rows.every((row) => row.status === 'success'));
+      const state = await page.evaluate(() => __phase6); assert.deepEqual(state.personal, { name: '合成阶段六姓名', gender: 'M', intro: '合成介绍第一行\n合成介绍第二行' }); assert.equal(state.steps, 0); assert.equal(state.adds, 0); assert.equal(state.submissions, 0);
+    });
+    await t.test('教育模块按整条来源添加，嵌套异步下拉只扫描一次，动态结束年月与学校专业不串条', async () => {
+      await page.locator('#next').click(); await page.locator('#school-0').waitFor({ state: 'visible' }); const view = await fill();
+      assert.equal(view.rows.filter((row) => row.field.label === '学校名称').length, 2); assert.equal(view.rows.filter((row) => row.status === 'success').length, 10);
+      const state = await page.evaluate(() => __phase6); assert.equal(state.adds, 1); assert.equal(state.steps, 1); assert.equal(state['school-0'], '合成本科大学'); assert.equal(state['school-1'], '合成硕士大学');
+      assert.deepEqual(state['education-0'], { start: '2020-09', end: '2024-06', degree: 'bachelor', major: '合成本科专业' }); assert.deepEqual(state['education-1'], { start: '2024-09', end: '2027-06', degree: 'master', major: '合成硕士专业' });
+      // 流程中截图保持固定视口，避免全页捕获临时扩高页面而触发浮层 resize 移位。
+      await fill(); assert.equal(await page.evaluate(() => __phase6.adds), 1); assert.equal(await page.locator('.education-item').count(), 2); await page.screenshot({ path: path.join(root, 'stage6-education.png'), fullPage: false });
+    });
+    await t.test('用户自行切步后只填当前地区，返回上一步保留 React 状态与已有值，不触发提交', async () => {
+      await page.locator('#next').click(); await page.locator('#extra').waitFor({ state: 'visible' }); const view = await fill(); const address = view.rows.find((row) => row.field.layout === 'address:province-city-district'); assert.equal(address.status, 'success', address.reason);
+      const state = await page.evaluate(() => __phase6); assert.deepEqual(state.address, { province: 'synthetic-p', city: 'synthetic-c', district: 'synthetic-d' }); assert.equal(state.steps, 2); assert.equal(state.submissions, 0);
+      await page.locator('#previous').click(); await page.locator('#school-0').waitFor({ state: 'visible' }); assert.equal(await page.locator('#school-0').inputValue(), '合成本科大学'); assert.equal(await page.locator('#school-1').inputValue(), '合成硕士大学');
+      await page.locator('#previous').click(); await page.locator('#applicant').waitFor({ state: 'visible' }); assert.equal(await page.locator('#applicant').inputValue(), '合成阶段六姓名'); await page.locator('#applicant').fill('用户合成修改'); await fill(); assert.equal(await page.locator('#applicant').inputValue(), '用户合成修改');
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, saved); assert.equal(api.calls.length, 0);
+    });
+    for (const mode of ['duplicate', 'slow', 'reject']) await t.test(`${mode} 学校候选不确定或未接受时明确失败，迟到候选不点击`, async () => {
+      await open(mode, 1); const view = await fill(); const schools = view.rows.filter((row) => row.field.label === '学校名称'); assert.equal(schools.length, 2); assert.ok(schools.every((row) => row.status !== 'success'));
+      if (mode === 'slow') await page.waitForTimeout(700);
+      const state = await page.evaluate(() => __phase6); assert.equal(state['school-0'], ''); assert.equal(state['school-1'], ''); assert.equal(state.steps, 1); assert.equal(state.submissions, 0); if (mode !== 'reject') assert.equal(state.choices, 0);
+    });
+    for (const mode of ['prefilled', 'ambiguous-add', 'hidden-record']) await t.test(`${mode} 不覆盖已有经历，不猜测添加按钮或隐藏空槽`, async () => {
+      await open(mode, 1); await fill(); assert.equal(await page.evaluate(() => __phase6.adds), 0); if (mode === 'prefilled') assert.equal(await page.locator('#school-0').inputValue(), '网页合成学校');
+    });
+    await t.test('添加时重建旧记录会停止本批，保留已触发的空白记录，不继续错误配对', async () => {
+      await open('replace-record-on-add', 1); await frame.locator('#smartFillAll').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false'); assert.match(await frame.locator('#smartStatus').textContent(), /网页未确认新增一条记录/);
+      assert.equal(await page.evaluate(() => __phase6.adds), 1); assert.equal(await page.evaluate(() => __phase6.choices), 0); assert.equal(await page.locator('#school-0').inputValue(), ''); assert.equal(await page.locator('.education-item').count(), 2);
+    });
+    await t.test('未支持的重复模块不破坏整页扫描，链接型或禁用分组的添加按钮均不点击', async () => {
+      await open();
+      await page.evaluate(() => {
+        globalThis.__phase6UnsafeAdds = 0;
+        // 各组均只含合成元数据；链接型按钮不执行导航，仅计数以检测误点击。
+        for (const [title, role, disabled] of [['获奖经历', '', false], ['教育经历', 'link', false], ['项目经历', '', true]]) {
+          const block = document.createElement('fieldset'); block.disabled = disabled; block.innerHTML = '<legend></legend><div data-experience><h3></h3><label>学校名称<input></label></div><button type="button">添加</button>';
+          block.querySelector('legend').textContent = title; block.querySelector('h3').textContent = title; if (role) block.querySelector('button').setAttribute('role', role);
+          block.querySelector('button').addEventListener('click', () => { globalThis.__phase6UnsafeAdds++; }); document.body.append(block);
+        }
+      });
+      const view = await fill(); assert.ok(view.rows.some((row) => row.status === 'success')); assert.equal(await page.evaluate(() => __phase6UnsafeAdds), 0); assert.equal(await page.evaluate(() => __phase6.submissions), 0);
+    });
+    await t.test('失败与分步轨迹只记固定状态，个人库和 Schema v5 不变', async () => {
+      const logs = await rpc(options, 'diagnostics:read'); for (const text of ['合成阶段六姓名','合成本科大学','合成硕士大学','合成省','用户合成修改',api.base]) assert.ok(!JSON.stringify(logs).includes(text)); assert.deepEqual((await rpc(options, 'localapply:read')).database, saved); assert.equal(api.calls.length, 0); assert.equal(await page.evaluate(() => __phase6.submissions), 0);
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 固定导航、小球与诊断通过真实 iframe/存储/指针和整个浏览器重启验收，不读取用户资料。
 test('卡片导航与小球：固定导航、实时日志、收起拖动及重启持久化', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true });
@@ -1744,7 +1819,7 @@ async function serve() {
       if (modelApi.chatHold) { modelApi.releaseChat = respond; modelApi.onChat?.(); } else respond();
       return;
     }
-    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js', '/test-pages/address-frameworks.js', '/test-pages/verification-frameworks.js'].includes(pathname)) {
+    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js', '/test-pages/address-frameworks.js', '/test-pages/verification-frameworks.js', '/test-pages/phase6-frameworks.js'].includes(pathname)) {
       if (!frameworkBundles.has(pathname)) frameworkBundles.set(pathname, require('esbuild').build({ entryPoints: [path.join(ROOT, pathname)], bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"', '__VUE_OPTIONS_API__': 'true', '__VUE_PROD_DEVTOOLS__': 'false', '__VUE_PROD_HYDRATION_MISMATCH_DETAILS__': 'false' } }));
       const output = await frameworkBundles.get(pathname); res.setHeader('Content-Type', 'application/javascript'); res.end(output.outputFiles[0].contents); return;
     }

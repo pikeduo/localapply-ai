@@ -387,6 +387,24 @@ test('已有非空经历保留原记录，经历结构拒绝实际值及跨模�
   for(const broken of [{...block,value:'禁止夹带值'},{...block,kind:'project'},{...block,records:[{...block.records[0],value:'禁止夹带值'}]}]){env.recordBlocks([broken]);await assert.rejects(env.scan(field),/经历结构/);}
 });
 
+// 未确认的搜索词仍占用网页记录，不能因“尚未完成”就给其他字段混入本地经历。
+test('阶段六占用标记：未确认搜索不算完成，但阻止增补或混填，标记不入个人库', async () => {
+  const env = await fixture(); await env.setValue('builtin.school', '合成本地学校'); await env.setValue('builtin.major', '合成本地专业');
+  const field = env.field('学校名称', { kind: 'education', group: '教育经历', type: 'combobox' }); const empty = env.field('专业名称', { kind: 'education', group: '教育经历' });
+  env.recordBlocks([{ blockId: 'scan.block', kind: 'education', canAdd: true, records: [{ recordId: 'scan.record', scanIds: [field.scanId, empty.scanId] }] }]);
+  env.completion([{ scanId: field.scanId, present: false, occupied: true }, { scanId: empty.scanId, present: false, occupied: false }]);
+  const before = await env.repo.read(); let view = await env.scan(field, empty); view = await env.send(view, 'prepareRecords', { confirmed: true });
+  assert.equal(view.rows[0].webFilled, false); assert.equal(view.rows[0].webOccupied, true); assert.ok(view.rows.every((row) => row.target === null)); assert.equal(env.calls.filter((row) => row.type === 'learning:addRecord').length, 0);
+  await assert.rejects(env.send(view, 'fill', { scanId: empty.scanId, confirmed: true }), /本地来源/); assert.deepEqual(await env.repo.read(), before);
+  for (const flags of [{ present: false, occupied: 'yes' }, { present: true, occupied: false }, { present: false, occupied: true, value: '禁止值' }]) { env.completion([{ scanId: field.scanId, ...flags }]); await assert.rejects(env.scan(field, empty), /完成状态格式/); }
+});
+
+// 明确当前居住地址可复用既有资料，期望或不明确的居住位置仍交给用户选择。
+test('阶段六地址别名只精确关联当前居住地址，无模型调用', async () => {
+  const env = await fixture(); await env.setValue('builtin.currentCity', '合成省 / 合成市 / 合成区'); const view = await env.scan(env.field('现居住地址'), env.field('未来可能居住的地址'));
+  assert.equal(view.rows[0].target.fieldId, 'builtin.currentCity'); assert.equal(view.rows[0].status, 'matched'); assert.equal(view.rows[1].target, null); assert.equal(env.aiCalls.length, 0);
+});
+
 // 语言能力只有明确语种才可直接用对应资料，考试成绩不能推算听说和读写。
 test('项目和语言别名准确匹配，未明确语种的英语建议需要人工选择', async () => {
   const env=await fixture();await env.setValue('builtin.projectRole','合成角色');await env.setValue('builtin.projectResponsibilities','合成项目职责');await env.setValue('builtin.englishListening','熟练');await env.setValue('builtin.englishReading','精通');

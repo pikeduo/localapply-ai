@@ -9,7 +9,7 @@
   const registry = new Map();
   let granted = false; let currentUrl = ''; let lastSignature = ''; let timer;
 
-  // 过滤认证、搜索和协议控件，不读取它们的值；节点不可见或脱离文档时也不能填写。
+  // 过滤认证及未激活步骤，不读取它们的值；ARIA 隐藏、inert 与禁用分组同样禁止扫描。
   function allowed(el) {
     const type = (el.getAttribute('type') || '').toLowerCase();
     // Moka 在普通资料框使用非标准 new_password 禁用补全；真实密码类型/名称仍须排除。
@@ -18,7 +18,7 @@
     return el.isConnected && !el.disabled && el.getAttribute('aria-disabled') !== 'true'
       && !['hidden', 'password', 'file', 'submit', 'reset', 'image', 'search'].includes(type) && (type !== 'button' || el.getAttribute('role') === 'combobox')
       && !/password|captcha|one-time-code|验证码|密码|验证口令|csrf|token/i.test(hint)
-      && !el.closest('[id^="wsa-"], [data-localapply-ui]') && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+      && !el.closest('[id^="wsa-"],[data-localapply-ui],[hidden],[inert],[aria-hidden="true"],fieldset[disabled]') && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
   }
 
   // DOM/无障碍标签优先；不回退到整个容器的正文或 HTML。
@@ -61,12 +61,18 @@
   // 稳定节点引用不写入网页 dataset；语义 ID 另由脱敏结构计算并跨重绘保持一致。
   function id(el) { if (!nodeIds.has(el)) nodeIds.set(el, 'scan.' + crypto.randomUUID()); return nodeIds.get(el); }
 
-  // 从 light DOM 与 open shadow root 收集控件，最多八层，禁止访问跨域 iframe。
+  // 收集当前根控件；明确指向同一列表的嵌套 combobox 只保留内部输入，避免生成两个字段。
   function controls(root = document, depth = 0) {
     if (depth > 8) return [];
     const out = [...root.querySelectorAll('input,textarea,select,[role="combobox"],[contenteditable="true"]')];
     for (const node of root.querySelectorAll('*')) if (node.shadowRoot) out.push(...controls(node.shadowRoot, depth + 1));
-    return [...new Set(out)];
+    return [...new Set(out)].filter((el) => {
+      if (el.getAttribute('role') !== 'combobox' || el.matches('input,select,textarea,button')) return true;
+      const link = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+      if (!link || /\s/.test(link.trim())) return true;
+      const inputs = [...el.querySelectorAll('input[role="combobox"]')];
+      return inputs.length !== 1 || (inputs[0].getAttribute('aria-controls') || inputs[0].getAttribute('aria-owns')) !== link;
+    });
   }
 
   // 下拉仅收集已有选项，不为扫描点击网页；候选值同样脱敏且有数量上限。
@@ -102,8 +108,9 @@
       const rawType = (el.getAttribute('type') || 'text').toLowerCase();
       const members = ['radio', 'checkbox'].includes(rawType) && el.name ? found.filter((node) => node.name === el.name && node.getAttribute('type') === rawType && node.closest('form,fieldset,[role="group"]') === el.closest('form,fieldset,[role="group"]')) : [el];
       members.forEach((member) => used.add(member));
-      const type = compound?.type || (el.getAttribute('role') === 'combobox' || A.dropdown(el) ? 'combobox' : el.isContentEditable ? 'contenteditable'
-        : el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea' : ['email','tel','number','url','date','month','datetime-local','radio','checkbox'].includes(rawType) ? rawType : 'text');
+      const type = compound?.type || (el.tagName === 'SELECT' ? 'select' : el.tagName === 'TEXTAREA' ? 'textarea'
+        : el.getAttribute('role') === 'combobox' || A.dropdown(el) ? 'combobox' : el.isContentEditable ? 'contenteditable'
+        : ['email','tel','number','url','date','month','datetime-local','radio','checkbox'].includes(rawType) ? rawType : 'text');
       let text = compound?.label || label(el);
       if (members.length > 1) text = M.redact(el.closest('fieldset,[role="group"],.form-item,.form-group')?.querySelector('legend,:scope > label,.label')?.textContent || text);
       const field = { scanId: id(el), label: text, name: M.redact(el.getAttribute('name')), type,
@@ -142,51 +149,70 @@
     return item.el.isContentEditable ? (global.WangshenFiller?.readText?.(item.el) ?? item.el.textContent) : item.el.value;
   }
 
-  // 用户主动扫描后仅读取是否已有内容；兼容显示节点的多类名顺序，仅返回布尔标记。
+  // 分别返回是否完成与是否占用：未确认的搜索文本仍占用记录，不能据此自动混入另一条经历。
   function completion() {
     if (!granted || currentUrl !== location.href) throw new Error('请先主动授权扫描当前招聘页面');
     return [...registry.values()].map((item) => {
       const value = readValue(item);
       let present = Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined && value !== false && String(value).trim() !== '' && !/^(请选择|请选择一项|Select|Please select)$/i.test(String(value).trim());
+      const occupied = present;
       if (item.compound?.kind === 'date') present = present && !A.plan(item, value).error;
       if (item.compound?.kind === 'address') present = present && A.accepted(item, value); // 半填地址不能隐藏为已完成。
       if (A.dropdown(item.el) && !item.compound) present = present && (!!A.dropdown(item.el).querySelector('[class*="sd-Input-display-value-"]')?.textContent.trim() || A.dropdownAccepted(item.el, value));
       // ARIA 搜索框的临时查询值不能令卡片隐藏待填项，必须有真正选中的结构证据。
       else if (item.control.type === 'combobox' && global.LocalApplyDropdownControls) present = present && global.LocalApplyDropdownControls.accepted(item.el, value);
-      return { scanId: item.field.scanId, present: present && item.el.getAttribute('aria-invalid') !== 'true' && item.el.validity?.valid !== false };
+      return { scanId: item.field.scanId, occupied, present: present && item.el.getAttribute('aria-invalid') !== 'true' && item.el.validity?.valid !== false };
     });
   }
 
-  // 只描述已识别的 Moka 重复模块；记录/按钮节点不离开本页，字段实际值不进入描述。
+  // 模块节点仅驻留本页；Moka 沿用原结构，语义分组只接受直接记录子项和明确的添加按钮。
+  function recordStructures() {
+    const blocks = [...document.querySelectorAll('[class^="apply-block-"],[class*=" apply-block-"],fieldset,[role="group"]')];
+    return blocks.flatMap((block) => {
+      if (!block.isConnected || !block.getClientRects().length || block.closest('[hidden],[inert],[aria-hidden="true"],fieldset[disabled],[id^="wsa-"]')) return [];
+      const moka = block.matches('[class^="apply-block-"],[class*=" apply-block-"]');
+      const heading = block.querySelector(moka ? ':scope > [class^="blockTitle-"]' : ':scope > legend,:scope > h2,:scope > h3,:scope > [role="heading"]');
+      const title = (moka ? heading?.querySelector('[class^="text-"]')?.textContent : heading?.textContent || block.getAttribute('aria-label'))?.trim();
+      const kind = global.WangshenTemplates.recordKind(title); if (!kind || kind === 'family') return [];
+      // 通用上下文尚不能确定获奖/证书/论文的记录角色，保留单项扫描，不生成不一致的模块封套。
+      if (!moka && !['education', 'internship', 'employment', 'project'].includes(kind)) return [];
+      const records = [...block.children].filter((node) => node.matches(moka ? '[class^="apply-fields-"],[class*=" apply-fields-"]' : '[data-experience],.education-item,.work-item,.project-item'));
+      // 隐藏记录可能已有资料；不能把它当成空槽，也不能因看不到它而继续自动添加。
+      if (records.some((node) => !node.getClientRects().length || node.closest('[hidden],[inert],[aria-hidden="true"]') || getComputedStyle(node).visibility === 'hidden')) return [];
+      const buttons = moka ? heading?.querySelectorAll('button[type="button"]') || [] : block.querySelectorAll(':scope > button[type="button"]');
+      const names = new Set(['添加', '添加经历', '添加记录', '添加' + title]);
+      const add = [...buttons].filter((node) => names.has(node.textContent.trim().replace(/^\+\s*/, '')) && !node.disabled && !node.closest('a,[role="link"]') && node.getAttribute('aria-disabled') !== 'true' && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden');
+      if (!records.length && !add.length || records.some((node) => node.querySelector('[data-experience],.education-item,.work-item,.project-item'))) return [];
+      return [{ block, kind, records, add }];
+    });
+  }
+
+  // 重复模块只投影已扫描的字段引用，不输出节点、按钮或个人字段值。
   function recordBlocks() {
     if (!granted || currentUrl !== location.href) throw new Error('请先主动扫描当前招聘页面');
-    return [...document.querySelectorAll('[class^="apply-block-"],[class*=" apply-block-"]')].flatMap((block) => {
-      const heading = block.querySelector(':scope > [class^="blockTitle-"]');
-      const kind = global.WangshenTemplates.recordKind(heading?.querySelector('[class^="text-"]')?.textContent.trim());
-      if (!kind || ['family'].includes(kind)) return [];
-      const add = [...(heading?.querySelectorAll('button[type="button"]') || [])].filter((node) => /^\+?\s*添加(?:经历|记录)?$/.test(node.textContent.trim()) && !node.disabled && node.getClientRects().length);
-      const records = [...block.children].filter((node) => node.matches('[class^="apply-fields-"],[class*=" apply-fields-"]'));
+    return recordStructures().flatMap(({ block, kind, records, add }) => {
       // 已有超多记录仍可扫描单项，只停止自动增补，不能让整页扫描报错。
       if (records.length > 20) return [];
       return [{ blockId: id(block), kind, canAdd: add.length === 1, records: records.map((node) => ({ recordId: id(node), scanIds: [...registry.values()].filter((item) => node.contains(item.el)).map((item) => item.field.scanId) })) }];
     });
   }
 
-  // 一次只点当前模块唯一的“添加”，必须观察到恰好新增一条；不点击删除/提交或无限重试。
+  // 只点唯一明确添加按钮，并验证原记录身份保留且恰好新增一条；不代点下一步或提交。
   async function addRecord(blockId, expectedDocument, { signal } = {}) {
     if(signal?.aborted)throw new Error('已取消添加记录');
     if (!granted || currentUrl !== location.href || documentId !== expectedDocument) throw new Error('页面已变化，请重新扫描');
-    const block = [...document.querySelectorAll('[class^="apply-block-"],[class*=" apply-block-"]')].find((node) => nodeIds.get(node) === blockId);
+    const structure = recordStructures().find(({ block }) => nodeIds.get(block) === blockId); const block = structure?.block;
     const group = recordBlocks().find((item) => item.blockId === blockId);
     if (!block || !group?.canAdd || group.records.length >= 20) throw new Error('该模块不能安全添加记录或已达到上限');
-    const button = [...block.querySelectorAll(':scope > [class^="blockTitle-"] button[type="button"]')].find((node) => /^\+?\s*添加(?:经历|记录)?$/.test(node.textContent.trim()) && !node.disabled && node.getClientRects().length);
+    const button = structure.add.length === 1 ? structure.add[0] : null;
     if (!button) throw new Error('添加按钮已变化，请重新扫描');
     button.click();
     for (let attempt = 0; attempt < 30; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 50));
       if(signal?.aborted)throw new Error('已取消添加记录');
       if (!granted || documentId!==expectedDocument || !block.isConnected || currentUrl !== location.href) throw new Error('添加时页面结构已变化，请重新扫描');
-      const count = [...block.children].filter((node) => node.matches('[class^="apply-fields-"],[class*=" apply-fields-"]')).length;
+      const latest = recordStructures().find((item) => item.block === block); const count = latest?.records.length;
+      if (!latest || structure.records.some((record) => !latest.records.includes(record))) break;
       if (count === group.records.length + 1) return;
       if (count !== group.records.length) break;
     }

@@ -19,7 +19,7 @@
         }
       }
     }
-    // 只给空白且未绑定槽位分配整条来源；同一批次最多新增20条，每模块最多20条。
+    // 未确认搜索文本也视为占用；只给完全空白且未绑定槽位分配来源，每批/模块最多20条。
     async function prepare(item, db, task) {
       task.check(); await refresh(item, db); task.check(); item.recordBindings ||= {}; item.protectedRecords = new Set();
       let added = 0; let protectedGroups = 0; let remaining = 0;
@@ -30,7 +30,7 @@
         const local = [null, ...db.entries.filter((entry) => entry.profileId === item.profileId && entry.kind === initial.kind).sort((a,b) => a.order-b.order || a.entryId.localeCompare(b.entryId)).map((entry) => entry.entryId)]
           .filter((entryId) => db.fieldValues.some((value) => value.profileId === item.profileId && value.entryId === entryId && belongs(value.fieldId) && M.hasValue(value.value))&&(roles.length!==1||M.sourceRole(db,item.profileId,{entryId},roles[0])));
         if (!local.length) continue;
-        const occupied = (record) => record.scanIds.some((id) => item.rows.find((row) => row.field.scanId === id)?.webFilled);
+        const occupied = (record) => record.scanIds.some((id) => { const row = item.rows.find((row) => row.field.scanId === id); return row?.webOccupied || row?.webFilled; });
         if (initial.records.some((record) => !Object.hasOwn(item.recordBindings,record.recordId) && (occupied(record) || record.scanIds.some((id) => { const row=item.rows.find((row)=>row.field.scanId===id); return row?.source==='memory' && row.memoryMatch!=='semantic' || row?.chosen && row.source==='manual'; })))) {
           protectedGroups++; initial.records.forEach((record)=>record.scanIds.forEach((id)=>item.protectedRecords.add(id))); continue;
         }
