@@ -2,7 +2,7 @@
 (function (global) {
   'use strict';
   if (global.WangshenFloatbar) return;
-  let host; let shadow; let frame; let badge; let enabled = true; let dismissed = false; let collapsed = false; let position = null; let previousFocus;
+  let host; let shadow; let frame; let badge; let enabled = true; let launcher = false; let collapsed = false; let position = null; let previousFocus;
   let badgePosition = null; let badgeDrag = null; let suppressBadgeClick = false; let badgeSummary;
   let jobSuccess = false; let openedUrl = '';
   // 提示与右边留出 32px、底部留出 96px；小视口自动收缩留白，拖动位置只留在当前页面内存。
@@ -85,6 +85,10 @@
       .badge-heading{font-size:14px;font-weight:650;letter-spacing:.2px}.badge-heading::before{content:"";display:inline-block;width:6px;height:6px;margin:0 6px 2px 0;border-radius:50%;background:#25ad89}
       .badge-summary{font-size:11px;color:#6d7e97}.badge-hint{font-size:10px;color:#96a3b7}
       .badge-arrow{display:grid;place-items:center;flex:0 0 26px;height:26px;border-radius:50%;color:#4d76cf;background:#e9f0fd}.badge-arrow svg{width:15px;height:15px}
+      /* 主动收起后复用同一拖动按钮，小球不包含简历内容或已授权会话。 */
+      .detection-badge.is-launcher{justify-content:center;width:56px;height:56px;padding:0;border:1px solid #ffffff80;border-radius:50%;background:linear-gradient(145deg,#397af6,#4261e7);box-shadow:0 6px 22px #365bce40}
+      .is-launcher .badge-copy,.is-launcher .badge-arrow{display:none}.is-launcher .badge-icon{flex:0 0 40px;height:40px;background:none;box-shadow:none}
+      .detection-badge.is-launcher.has-notice{position:relative}.is-launcher.has-notice::after{content:"";position:absolute;top:1px;right:1px;width:10px;height:10px;border:2px solid #fff;border-radius:50%;background:#25ad89}
       @media(prefers-reduced-motion:reduce){.detection-badge{transition:none}}
     `;
     badge = createBadge();
@@ -94,16 +98,25 @@
     badge.addEventListener('click', (event) => { const dragged = suppressBadgeClick && event.detail !== 0; suppressBadgeClick = false; if (dragged) { event.preventDefault(); return; } if (event.isTrusted) chrome.runtime.sendMessage({ type: 'wsa:openPanel' }).catch(() => {}); });
     shadow.append(style, badge); document.documentElement.append(host);
   }
-  // 自动检测后更新卡片数量和无障碍名称；重复检测保留拖动位置，不自动打开私有卡片。
-  function onPresence(result) { ensure(); badge.hidden = !!frame || !enabled || (!jobSuccess && (dismissed || result.kind !== 'application')); badge.querySelector('.badge-heading').textContent = jobSuccess ? '检测到投递成功，是否记录？' : '检测到简历填写页'; badgeSummary.textContent = jobSuccess ? '点击核对岗位 · 确认后才保存申请' : `${result.count} 个控件 · 点击打开填写助手`; badge.setAttribute('aria-label', jobSuccess ? '检测到投递成功，点击核对岗位并确认记录，按住可拖动' : `检测到简历填写页，${result.count} 个控件。点击打开填写助手，按住可拖动`); host.style.setProperty('display', frame || !badge.hidden ? 'block' : 'none', 'important'); layoutBadge(); }
+  // 自动提示与小球共用安全入口；新成功提示保留圆点和无障碍说明，不自动打开或保存申请。
+  function onPresence(result) {
+    ensure(); badge.hidden = !!frame || (!launcher && (!enabled || !jobSuccess && result.kind !== 'application'));
+    badge.classList.toggle('is-launcher', launcher);
+    badge.classList.toggle('has-notice', jobSuccess);
+    badge.querySelector('.badge-heading').textContent = jobSuccess ? '检测到投递成功，是否记录？' : '检测到简历填写页';
+    badgeSummary.textContent = jobSuccess ? '点击核对岗位 · 确认后才保存申请' : `${result.count} 个控件 · 点击打开填写助手`;
+    badge.title = jobSuccess ? '检测到投递成功，点击核对岗位并确认记录' : launcher ? '打开 LocalApply，按住可拖动' : '点击打开填写助手，按住可拖动位置';
+    badge.setAttribute('aria-label', jobSuccess ? '检测到投递成功，点击核对岗位并确认记录，按住可拖动' : launcher ? '打开 LocalApply 填写助手，按住可拖动' : `检测到简历填写页，${result.count} 个控件。点击打开填写助手，按住可拖动`);
+    host.style.setProperty('display', frame || !badge.hidden ? 'block' : 'none', 'important'); layoutBadge();
+  }
   // 只接收后台核验后的布尔建议，不在网页提示中暴露岗位记录或个人资料。
   function onJobFeedback(status, suggested) { jobSuccess = status === 'success' && suggested === true; onDetection(); }
   // 延迟发现 SPA 导航时仅关闭旧 URL 的卡片，保留导航后用户重新授权的卡片。
   function onNavigation() { if (!frame || openedUrl !== location.href) { jobSuccess = false; close(false); } }
-  // 扩展后台确认用户打开后才创建私有 iframe，不向宿主网页发送资料。
-  function open(url) { ensure(); previousFocus = document.activeElement; frame?.remove(); collapsed = false; openedUrl = location.href; frame = document.createElement('iframe'); frame.src = url; frame.title = 'LocalApply AI 填写助手'; frame.referrerPolicy = 'no-referrer'; shadow.append(frame); badge.hidden = true; host.style.setProperty('display', 'block', 'important'); layout(); frame.addEventListener('load', () => frame?.focus()); }
-  // 关闭释放 iframe；换页时重置提示，用户主动关闭则在本页保持收起。
-  function close(dismiss = true) { frame?.remove(); frame = null; openedUrl = ''; dismissed = dismiss; if (host) host.style.setProperty('display', 'none', 'important'); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); }
+  // 后台确认新的文档令牌后从提示/小球创建私有 iframe，不继承已关闭的授权。
+  function open(url) { ensure(); previousFocus = document.activeElement; frame?.remove(); launcher = false; collapsed = false; openedUrl = location.href; frame = document.createElement('iframe'); frame.src = url; frame.title = 'LocalApply AI 填写助手'; frame.referrerPolicy = 'no-referrer'; shadow.append(frame); badge.hidden = true; host.style.setProperty('display', 'block', 'important'); layout(); frame.addEventListener('load', () => frame?.focus()); }
+  // × 仍释放 iframe 和任务，由小球提供重新打开入口；导航关闭则不沿用旧页面的小球状态。
+  function close(showLauncher = true) { frame?.remove(); frame = null; openedUrl = ''; launcher = showLauncher; if (showLauncher) onDetection(); else if (host) host.style.setProperty('display', 'none', 'important'); if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true }); }
   // 保留旧检测回调以兼容旧填写器，只更新非敏感页面提示。
   function onDetection() { onPresence(global.LocalApplyPagePresence?.get() || { kind: 'other', count: 0 }); }
   // 用户关闭自动提示后仍可通过工具栏主动打开卡片。

@@ -2,7 +2,7 @@
 (function (global) {
   'use strict';
   const $ = (id) => document.getElementById(id); const V = global.LocalApplyProfileView;
-  let database; let shown = false; let collapsed = false; let sectionKey = ''; let refreshing = 0; let renderedRevision = -1; let renderedProfileId = null; const expanded = new Map();
+  let database; let shown = false; let collapsed = false; let sectionKey = ''; let refreshing = 0; let renderedRevision = -1; let renderedProfileId = null; const expanded = new Map(); const scrollPositions = new Map();
   // 外部标签和值只进入文本节点，不能形成 HTML 或可执行属性。
   function node(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
   // 仅记录脱敏错误分类，界面保留可读恢复提示。
@@ -58,8 +58,15 @@
   }
   // 分类跳转展开对应经历并高亮；键盘焦点随导航进入目标区。
   function navigate() { sectionKey = $('previewNav').value; const section = [...$('resumeContent').querySelectorAll('.resume-section')].find((item) => item.dataset.sectionKey === sectionKey); if (!section) return; if (section.tagName === 'DETAILS') section.open = true; document.querySelectorAll('.resume-section.is-target').forEach((item) => item.classList.remove('is-target')); section.classList.add('is-target'); section.scrollIntoView({ block: 'start', behavior: 'instant' }); section.focus({ preventScroll: true }); }
-  // 标签切换保留扫描/选择/错误状态，只有预览打开时读取最新个人资料。
-  async function tab(preview) { shown = preview; $('autoView').hidden = preview; $('tab-smart').hidden = preview; $('resumeView').hidden = !preview; for (const [id, active] of [['autoTab', !preview], ['resumeTab', preview]]) { $(id).classList.toggle('active', active); $(id).setAttribute('aria-selected', String(active)); $(id).tabIndex = active ? 0 : -1; } if (preview) await refresh(); }
+  // 固定导航仅切换内容区，保留各页滚动、扫描及草稿；日志页打开即读取已落盘记录。
+  async function tab(view) {
+    const scroll = $('panelScroll'); scrollPositions.set(document.body.dataset.view || 'auto', scroll.scrollTop);
+    document.body.dataset.view = view; shown = view === 'resume';
+    $('autoView').hidden = view !== 'auto'; $('tab-smart').hidden = view !== 'auto'; $('resumeView').hidden = !shown; $('logsView').hidden = view !== 'logs';
+    $('diagnosticsPanel').open = view === 'logs';
+    for (const key of ['auto', 'resume', 'logs']) { const active = key === view; const button = $(key + 'Tab'); button.classList.toggle('active', active); button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; }
+    if (shown) await refresh(); scroll.scrollTop = scrollPositions.get(view) || 0;
+  }
   // 折叠保留整个 iframe 会话及未确认草稿，恢复后不重新发模型请求。
   async function minimize() { const next = !collapsed; const result = await sendMessage('panel:layout', { collapsed: next }); if (!result.ok) throw new Error(result.error); collapsed = next; document.body.classList.toggle('collapsed', collapsed); $('panelMinimize').textContent = collapsed ? '+' : '−'; $('panelMinimize').setAttribute('aria-label', collapsed ? '展开卡片' : '折叠卡片'); $('panelMinimize').setAttribute('aria-expanded', String(!collapsed)); }
   // 标题拖动使用真实指针和屏幕坐标，布局命令经后台校验；串行合并移动避免消息堆积。
@@ -71,8 +78,9 @@
     $('panelDrag').addEventListener('pointermove', (event) => { if (pointer !== event.pointerId || !last) return; pending.dx += event.screenX - last.x; pending.dy += event.screenY - last.y; last = { x: event.screenX, y: event.screenY }; drain(); });
     $('panelDrag').addEventListener('pointerup', () => { pointer = last = null; }); $('panelDrag').addEventListener('lostpointercapture', () => { pointer = last = null; });
   }
-  $('autoTab').addEventListener('click', () => tab(false).catch(report)); $('resumeTab').addEventListener('click', () => tab(true).catch(report));
-  document.querySelector('.panel-tabs').addEventListener('keydown', (event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const preview = event.key === 'End' || (event.key !== 'Home' && !shown); tab(preview).catch(report); $(preview ? 'resumeTab' : 'autoTab').focus(); } });
+  for (const view of ['auto', 'resume', 'logs']) $(view + 'Tab').addEventListener('click', () => tab(view).catch(report));
+  // 三个标签遵循循环方向键与 Home/End 导航，不依赖鼠标或页面滚动位置。
+  document.querySelector('.panel-tabs').addEventListener('keydown', (event) => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const views = ['auto', 'resume', 'logs']; const index = views.indexOf(document.body.dataset.view || 'auto'); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3; tab(views[next]).catch(report); $(views[next] + 'Tab').focus(); } });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') sendMessage('panel:close'); });
   $('previewReveal').addEventListener('change', renderResume); $('previewEmpty').addEventListener('change', renderResume); $('previewSearch').addEventListener('input', renderResume); $('previewNav').addEventListener('change', navigate);
   $('previewRefresh').addEventListener('click', () => refresh().then(() => { $('previewStatus').textContent = '已从本地刷新当前档案。'; }).catch(report));

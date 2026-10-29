@@ -2,9 +2,12 @@
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id); if (!$('diagnosticsPanel')) return;
-  // 从受限后台取得脱敏记录，显示实际存储状态和固定字段 JSON，不渲染 HTML。
+  let refreshTimer; let loadVersion = 0;
+  // 从受限后台读取已持久化记录；仅最新请求可更新视图，迟到响应不覆盖清理结果。
   async function load() {
+    const version = ++loadVersion;
     const result = await sendMessage('diagnostics:read'); if (!result.ok) throw new Error(result.error);
+    if (version !== loadVersion) return result;
     const status = $('logsStorageStatus');
     if (status) { status.textContent = result.storage?.lastWriteFailed ? '最近一次日志写入失败，当前显示的是之前已保存的记录；请检查扩展本地存储后重试。' : '日志自动保存在本浏览器扩展的 chrome.storage.local（localapply.diagnostics），重启后保留；点击“导出日志”另存为 JSON 文件。'; status.className = result.storage?.lastWriteFailed ? 'err' : 'muted'; }
     // 使用官方实际占用统计，只展示字节与固定配额提示，不自动清理个人数据。
@@ -22,6 +25,9 @@
   $('logsClear').addEventListener('click', () => run(async () => { if (!confirm('确认清空本机运行日志？此操作不影响资料和配置。')) return; const result = await sendMessage('diagnostics:clear', { confirmed: true }); if (!result.ok) throw new Error(result.error); await load(); }));
   // 文件页保留诊断模块与原因提示，但不读取扩展日志或展示不可用的操作。
   if (location.protocol === 'file:') { $('fileDiagnosticsNotice').hidden = false; if ($('logsStorageStatus')) $('logsStorageStatus').hidden = true; $('diagnosticsPanel').querySelector('.row').hidden = true; $('logsOutput').hidden = true; return; }
+  // 只在日志可见时合并本地变更通知；关闭卡片不会清除扩展中的历史记录。
+  chrome.storage.onChanged.addListener((changes, area) => { if (area !== 'local' || !changes['localapply.diagnostics'] || !$('diagnosticsPanel').open || !$('diagnosticsPanel').getClientRects().length) return; clearTimeout(refreshTimer); refreshTimer = setTimeout(() => run(load), 150); });
+  window.addEventListener('pagehide', () => clearTimeout(refreshTimer));
   // 设置页运行错误统一交给后台脱敏；卡片已有同类处理，避免重复记录。
   function report(error) { sendMessage('diagnostics:uiError', { error: String(error?.message || error || ''), stack: String(error?.stack || '') }).catch(() => {}); }
   if (location.pathname === '/options/options.html') {

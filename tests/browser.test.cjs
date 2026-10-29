@@ -8,6 +8,68 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 固定导航、小球与诊断通过真实 iframe/存储/指针和整个浏览器重启验收，不读取用户资料。
+test('卡片导航与小球：固定导航、实时日志、收起拖动及重启持久化', { timeout: 90000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(root, 'panel-navigation-')); const api = await serve(); let context; let worker; let extensionId; let options; let page; let frame; let retainedId;
+  const errors = [];
+  // 每次重建使用同一测试 profile，打开仍经生产后台签发新文档令牌。
+  const setup = async () => {
+    context = await launch(profile); context.setDefaultTimeout(10000); ({ worker, extensionId } = await extension(context));
+    options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(api.base + '/test-pages/moka-regression.html');
+    const opened = page.waitForEvent('framenavigated', { predicate: (next) => next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+    await worker.evaluate(async (url) => floatingPanel.open((await chrome.tabs.query({})).find((tab) => tab.url === url).id), page.url());
+    frame = await opened; await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
+  };
+  try {
+    await setup();
+    await t.test('长列表只滚动内容，三个导航固定且切换保留扫描和滚动位置', async () => {
+      await frame.locator('#smartScan').click(); await frame.waitForFunction(() => document.querySelectorAll('.smart-row').length > 5 && document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      const session = await frame.locator('#tab-smart').getAttribute('data-session-id');
+      const before = await frame.locator('.panel-tabs').evaluate((element) => element.getBoundingClientRect().top);
+      const scroll = await frame.locator('#panelScroll').evaluate((element) => { element.scrollTop = element.scrollHeight; return element.scrollTop; }); assert.ok(scroll > 200);
+      assert.equal(await frame.locator('.panel-tabs').evaluate((element) => element.getBoundingClientRect().top), before); assert.equal(await frame.locator('.panel-header').evaluate((element) => element.getBoundingClientRect().top), 0);
+      await frame.locator('#logsTab').click(); assert.equal(await frame.locator('#autoView').isVisible(), false); assert.equal(await frame.locator('#logsView').isVisible(), true);
+      await frame.waitForFunction(() => document.getElementById('logsOutput').textContent.includes('learning.scanPage'));
+      assert.equal(await frame.locator('#panelScroll').evaluate((element) => element.scrollTop), 0);
+      await frame.locator('#autoTab').click(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), session); assert.equal(await frame.locator('#panelScroll').evaluate((element) => element.scrollTop), scroll);
+      await frame.locator('#autoTab').focus(); await page.keyboard.press('End'); assert.equal(await frame.locator('#logsTab').getAttribute('aria-selected'), 'true'); await page.keyboard.press('Home'); assert.equal(await frame.locator('#autoTab').getAttribute('aria-selected'), 'true');
+    });
+    await t.test('日志打开即读取，新增记录自动显示且实际保存在 chrome.storage.local', async () => {
+      await frame.locator('#logsTab').click(); await frame.waitForFunction(() => document.getElementById('logsOutput').textContent.includes('panel.open'));
+      await rpc(options, 'diagnostics:uiError', { error: 'synthetic-private-error-value' });
+      const result = await rpc(options, 'diagnostics:read'); retainedId = result.rows.at(-1).id; assert.equal(result.rows.at(-1).operation, 'ui.error');
+      await frame.waitForFunction((id) => document.getElementById('logsOutput').textContent.includes(id), retainedId);
+      assert.ok(!(await frame.locator('#logsOutput').textContent()).includes('synthetic-private-error-value'));
+      assert.equal(await options.evaluate(async (id) => (await chrome.storage.local.get('localapply.diagnostics'))['localapply.diagnostics'].some((row) => row.id === id), retainedId), true);
+      assert.match(await frame.locator('#logsStorageStatus').textContent(), /chrome.storage.local/);
+      await page.screenshot({ path: path.join(root, 'panel-navigation-logs.png') });
+    });
+    await t.test('× 撤销旧会话并显示可拖动小球，拖动不误展开，点击重新打开后日志保留', async () => {
+      const token = new URL(frame.url()).searchParams.get('token'); await frame.locator('#panelClose').click();
+      await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 56);
+      const host = page.locator('#wsa-floatbar-host'); const before = await host.boundingBox(); assert.equal(before.width, 56); assert.equal(await host.evaluate((element) => element.shadowRoot), null);
+      await page.mouse.move(before.x + 28, before.y + 28); await page.mouse.down(); await page.mouse.move(before.x - 90, before.y - 60, { steps: 8 }); await page.mouse.up();
+      await page.waitForFunction((left) => document.getElementById('wsa-floatbar-host').getBoundingClientRect().left < left - 60, before.x);
+      assert.equal(await worker.evaluate(async (url) => (await chrome.tabs.sendMessage((await chrome.tabs.query({})).find((tab) => tab.url === url).id, { type: 'wsa:floatingProbe' })).open, page.url()), false);
+      await page.setViewportSize({ width: 375, height: 360 }); await page.waitForFunction(() => { const rect = document.getElementById('wsa-floatbar-host').getBoundingClientRect(); return rect.left >= 10 && rect.right <= innerWidth - 10 && rect.top >= 10 && rect.bottom <= innerHeight - 10; });
+      await page.screenshot({ path: path.join(root, 'panel-launcher-narrow.png') }); await page.setViewportSize({ width: 1280, height: 900 });
+      const opened = page.waitForEvent('framenavigated', { predicate: (next) => next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); await host.click(); frame = await opened;
+      await frame.locator('#profileSel option').first().waitFor({ state: 'attached' }); assert.notEqual(new URL(frame.url()).searchParams.get('token'), token);
+      assert.equal((await frame.evaluate((old) => chrome.runtime.sendMessage({ type: 'panel:context', panelToken: old }), token)).ok, false);
+      assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), null);
+      await frame.locator('#logsTab').click(); await frame.waitForFunction((id) => document.getElementById('logsOutput').textContent.includes(id), retainedId);
+    });
+    await t.test('整个 Chromium 重启后日志无需手动恢复，可直接查看和导出', async () => {
+      await context.close(); await setup(); await frame.locator('#logsTab').click(); await frame.waitForFunction((id) => document.getElementById('logsOutput').textContent.includes(id), retainedId);
+      const downloaded = page.waitForEvent('download'); await frame.locator('#logsExport').click(); const download = await downloaded; const artifact = path.join(root, 'panel-navigation-diagnostics.json'); await download.saveAs(artifact);
+      const report = JSON.parse(await fs.readFile(artifact, 'utf8')); assert.ok(report.rows.some((row) => row.id === retainedId)); assert.equal(report.storage.key, 'localapply.diagnostics');
+      assert.ok(!JSON.stringify(report).includes('synthetic-private-error-value')); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 第十步从实际卡片/旧侧栏点击开始，连接断开必须终止正在等待的候选，不以后台桩替代。
 test('分层第十步：双入口批次停止、连接关闭及页面生命周期', {timeout:120000}, async(t)=>{
   const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'session-'));const api=await serve();let context;let worker;let extensionId;let page;let frame;let options;let tabId;const errors=[];
@@ -839,7 +901,7 @@ test('阶段五岗位：识别、直填、提交结果确认、去重和重启',
     context = await launch(profile); context.setDefaultTimeout(10000); ({ worker, extensionId } = await extension(context)); context.on('page', (item) => item.on('pageerror', (error) => errors.push(error.message)));
     options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true'); page = await context.newPage(); await page.goto(api.base + '/test-pages/phase5-job.html'); await open(); try { await frame.locator('#jobForm').waitFor({ state: 'visible' }); } catch { throw new Error('岗位识别卡片未就绪：' + await frame.locator('#jobStatus').textContent() + '；界面错误：' + errors.join(' / ')); }
     await t.test('JSON-LD 只选当前岗位，不选推荐，无 Key、不上传、不自动建记录', async () => {
-      assert.equal(await frame.locator('#jobCompany').inputValue(), '合成科技有限公司'); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成 AI 开发工程师'); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成甲城'); assert.equal((await read()).applications.length, 0); assert.equal(await page.evaluate(() => __stage5Submissions), 0); assert.equal(api.calls.length, 0); assert.equal(await frame.locator('.panel-tabs button').count(), 2);
+      assert.equal(await frame.locator('#jobCompany').inputValue(), '合成科技有限公司'); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成 AI 开发工程师'); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成甲城'); assert.equal((await read()).applications.length, 0); assert.equal(await page.evaluate(() => __stage5Submissions), 0); assert.equal(api.calls.length, 0); assert.equal(await frame.locator('.panel-tabs button').count(), 3);
     });
     await t.test('取消不保存，确认收藏后重复操作不会创建第二条申请', async () => {
       page.once('dialog', (dialog) => dialog.dismiss()); await frame.locator('#jobSave').click(); assert.equal((await read()).applications.length, 0);
@@ -920,10 +982,10 @@ test('岗位页面修复：Moka结构、自动识别及只显示未填写字段'
       const logs = await rpc(options, 'diagnostics:read'); assert.ok(logs.rows.some((row) => row.operation === 'learning.fill' && row.level === 'WARNING')); for (const secret of ['合成应聘人','moka@example.test','13800000000','合成拒绝值', api.base]) assert.ok(!JSON.stringify(logs).includes(secret)); assert.deepEqual(errors, []); assert.ok(reject.result);
     });
     await t.test('延迟挂载的岗位自动补全，用户手动输入不会被后台刷新覆盖', async () => {
-      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').style.display === 'none'); await page.evaluate(() => { document.querySelector('.job-info-synthetic .title-synthetic').textContent = ''; document.querySelector('.company-name-synthetic').textContent = ''; });
+      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 56); await page.evaluate(() => { document.querySelector('.job-info-synthetic .title-synthetic').textContent = ''; document.querySelector('.company-name-synthetic').textContent = ''; });
       let opened = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); await worker.evaluate((id) => floatingPanel.open(id), tabId); let next = await opened; await next.locator('#jobForm').waitFor({ state: 'visible' });
       await page.evaluate(() => { document.querySelector('.job-info-synthetic .title-synthetic').textContent = '合成异步岗位'; document.querySelector('.company-name-synthetic').textContent = '合成异步企业'; }); await next.waitForFunction(() => document.getElementById('jobTitle').value === '合成异步岗位');
-      await next.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').style.display === 'none'); await page.evaluate(() => { document.querySelector('.job-info-synthetic .title-synthetic').textContent = ''; }); opened = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); await worker.evaluate((id) => floatingPanel.open(id), tabId); next = await opened; await next.locator('#jobForm').waitFor({ state: 'visible' }); await next.locator('#jobTitle').fill('合成手动岗位'); await page.evaluate(() => { document.querySelector('.job-info-synthetic .title-synthetic').textContent = '不应覆盖手填'; }); await next.waitForTimeout(1700); assert.equal(await next.locator('#jobTitle').inputValue(), '合成手动岗位');
+      await next.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 56); await page.evaluate(() => { document.querySelector('.job-info-synthetic .title-synthetic').textContent = ''; }); opened = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); await worker.evaluate((id) => floatingPanel.open(id), tabId); next = await opened; await next.locator('#jobForm').waitFor({ state: 'visible' }); await next.locator('#jobTitle').fill('合成手动岗位'); await page.evaluate(() => { document.querySelector('.job-info-synthetic .title-synthetic').textContent = '不应覆盖手填'; }); await next.waitForTimeout(1700); assert.equal(await next.locator('#jobTitle').inputValue(), '合成手动岗位');
     });
   } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
 });
@@ -1410,10 +1472,13 @@ test('阶段五岗位边界：DOM回退、标题、缺失信息及异步成功',
       await frame.locator('#jobScan').click(); await frame.locator('#jobSuccess').waitFor({ state: 'visible' }); page.once('dialog', (dialog) => dialog.dismiss()); await frame.locator('#jobConfirmApplied').click(); assert.equal((await rpc(options, 'localapply:read')).database.applications[0].status, 'saved'); assert.equal(await page.evaluate(() => __stage5Submissions), 1); assert.equal(api.calls.length, 0);
     });
     await t.test('卡片关闭后新成功显示右下角提示，点击才核对，不自动写入', async () => {
-      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').style.display === 'none'); await page.locator('#applicationResult').evaluate((element) => { element.textContent = ''; });
+      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 56); await page.locator('#applicationResult').evaluate((element) => { element.textContent = ''; });
       await options.waitForFunction(async () => (await chrome.storage.session.get('localapply.jobSessions'))['localapply.jobSessions']?.[0]?.feedback === 'unknown');
       await page.locator('#testOutcome').selectOption('success'); await page.locator('#jobSubmit').click(); await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
-      const cdp = await context.newCDPSession(page); const tree = await cdp.send('Accessibility.getFullAXTree'); assert.ok(tree.nodes.some((node) => node.name?.value?.includes('检测到投递成功，点击核对岗位'))); await cdp.detach();
+      // 小球在成功通知到达前已经可见，须等待实际无障碍提示更新，不能以可见性替代事件完成。
+      const cdp = await context.newCDPSession(page); let notified = false;
+      for (let attempt = 0; attempt < 40 && !notified; attempt++) { const tree = await cdp.send('Accessibility.getFullAXTree'); notified = tree.nodes.some((node) => node.name?.value?.includes('检测到投递成功，点击核对岗位')); if (!notified) await page.waitForTimeout(50); }
+      assert.ok(notified); await cdp.detach();
       assert.equal((await rpc(options, 'localapply:read')).database.applications[0].status, 'saved'); await page.screenshot({ path: path.join(testRoot, 'stage5-job-notice.png'), fullPage: true });
       const opened = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) }); const box = await page.locator('#wsa-floatbar-host').boundingBox(); await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2); frame = await opened; await frame.locator('#jobSuccess').waitFor({ state: 'visible' }); assert.equal((await rpc(options, 'localapply:read')).database.applications[0].status, 'saved');
     });
@@ -2714,7 +2779,7 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
     const frame = await panelLoaded;
     assert.ok(frame, '悬浮扩展 iframe 应已加载'); await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
     await t.test('点击即扫描并批量填写，单项填写也无需授权或核对', async () => {
-      assert.equal(await frame.locator('.panel-tabs button').count(), 2);
+      assert.equal(await frame.locator('.panel-tabs button').count(), 3);
       assert.equal(await frame.locator('#smartPageConsent,#smartFillConsent,#smartFillReview').count(), 0);
       assert.equal(await page.locator('#applicant-name').inputValue(), '');
       await frame.getByRole('button', { name: '自动填写此页面', exact: true }).click();
@@ -2751,7 +2816,7 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
     await t.test('运行与报错日志可查看导出，且不泄漏凭据、个人值或 URL', async () => {
       const failed = await frame.evaluate(() => sendMessage('wsa:aiChat', { payload: { messages: [{ role: 'user', content: '合成隐私内容' }] } })); assert.equal(failed.ok, false);
       await frame.evaluate(() => dispatchEvent(new ErrorEvent('error', { error: new Error('sk-synthetic-log-private 合成隐私内容') })));
-      await frame.locator('#diagnosticsPanel summary').click(); await frame.locator('#logsRefresh').click();
+      await frame.locator('#logsTab').click(); await frame.locator('#logsRefresh').click();
       await frame.waitForFunction(() => document.getElementById('logsOutput').textContent.includes('wsa.aiChat'));
       const logs = await rpc(options, 'diagnostics:read'); assert.ok(logs.rows.some((row) => row.level === 'ERROR'));
       for (const privateText of ['13800000000','合成卡片姓名','sk-synthetic-log-private','合成隐私内容','?private=']) assert.ok(!JSON.stringify(logs).includes(privateText));
@@ -2793,7 +2858,7 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
       assert.equal(await page.locator('#applicant-name').inputValue(), '合成卡片姓名'); await sidebar.close();
     });
     await t.test('关闭与导航撤销卡片令牌，登录页不显示网申提示', async () => {
-      const token = new URL(frame.url()).searchParams.get('token'); await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').style.display === 'none');
+      const token = new URL(frame.url()).searchParams.get('token'); await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 56);
       const reloaded = page.waitForEvent('framenavigated', { predicate: (item) => item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
       await worker.evaluate((tabId) => floatingPanel.open(tabId), tabId);
       const reopened = await reloaded; assert.ok(reopened); await reopened.locator('#profileSel option').first().waitFor({ state: 'attached' });
@@ -2824,7 +2889,7 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
 });
 
 // 阶段四验收通过真实按钮与后台存储检查界面行为，不将元素存在视为完成。
-test('阶段四：双标签、预览三操作、工作台和窄窗交互', { timeout: 180000 }, async (t) => {
+test('阶段四：标签导航、预览三操作、工作台和窄窗交互', { timeout: 180000 }, async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true }); const profile = await fs.mkdtemp(path.join(testRoot, 'phase4-')); const api = await serve(); let context; let worker; let extensionId; let options; let page; let frame; let profileId; let schoolId; let fieldId;
   const errors = [];
   // 使用后台同一入口模拟工具栏调用；iframe 的按钮和指针操作均为真实 UI 事件。
@@ -2875,7 +2940,7 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
     });
     await t.test('两个主标签切换保留扫描会话和字段选择，筛选不改变数据', async () => {
       await frame.locator('#autoTab').click(); await frame.locator('#smartScan').click(); await frame.locator('.smart-row').first().waitFor(); const session = await frame.locator('#tab-smart').getAttribute('data-session-id'); const count = await frame.locator('.smart-row').count();
-      await frame.locator('#smartOnlyUnknown').check(); assert.equal(await frame.locator('#smartMatched').isHidden(), true); await frame.locator('#resumeTab').click(); await frame.locator('#autoTab').click(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), session); assert.equal(await frame.locator('.smart-row').count(), count); assert.equal(await frame.locator('#smartOnlyUnknown').isChecked(), true); await frame.locator('#smartOnlyUnknown').uncheck(); assert.equal(await frame.locator('.panel-tabs [role=tab]').count(), 2);
+      await frame.locator('#smartOnlyUnknown').check(); assert.equal(await frame.locator('#smartMatched').isHidden(), true); await frame.locator('#resumeTab').click(); await frame.locator('#autoTab').click(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), session); assert.equal(await frame.locator('.smart-row').count(), count); assert.equal(await frame.locator('#smartOnlyUnknown').isChecked(), true); await frame.locator('#smartOnlyUnknown').uncheck(); assert.equal(await frame.locator('.panel-tabs [role=tab]').count(), 3);
       // 预览隐藏期间资料变化后，再打开必须刷新；相同版本的迟到通知又不能重建折叠节点。
       await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.name', value: '合成预览隐藏更新' } } }); await frame.locator('#resumeTab').click(); await frame.waitForFunction(() => document.getElementById('resumeContent').textContent.includes('合成预览隐藏更新'));
       await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.name', value: '合成阶段四刷新姓名' } } }); await frame.waitForFunction(() => document.getElementById('resumeContent').textContent.includes('合成阶段四刷新姓名')); await frame.locator('#autoTab').click();
@@ -2886,7 +2951,7 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
       await page.setViewportSize({ width: 375, height: 720 }); await page.waitForFunction(() => { const rect = document.getElementById('wsa-floatbar-host').getBoundingClientRect(); return rect.x >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight; }); assert.equal(await frame.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true); await page.screenshot({ path: path.join(testRoot, 'stage4-narrow.png'), fullPage: false }); await page.setViewportSize({ width: 1280, height: 900 });
     });
     await t.test('键盘标签切换与 Escape 关闭可用，再次打开不残留失效会话', async () => {
-      await frame.locator('#autoTab').focus(); await page.keyboard.press('ArrowRight'); assert.equal(await frame.locator('#resumeTab').getAttribute('aria-selected'), 'true'); await page.keyboard.press('Escape'); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 0); await open(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), null);
+      await frame.locator('#autoTab').focus(); await page.keyboard.press('ArrowRight'); assert.equal(await frame.locator('#resumeTab').getAttribute('aria-selected'), 'true'); await page.keyboard.press('Escape'); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 56); await open(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), null);
     });
     await t.test('工作台字段修改和删除有确认，未保存编辑不能被简历管理覆盖', async () => {
       await workspacePage(options, 'fieldLibrary');
@@ -2920,13 +2985,13 @@ test('阶段四：双标签、预览三操作、工作台和窄窗交互', { tim
       await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId: second, fieldId: 'builtin.name', value: '合成另一档案姓名' } } });
       await frame.waitForFunction((id) => [...document.getElementById('profileSel').options].some((item) => item.value === id), second); await frame.locator('#profileSel').selectOption(profileId); await frame.waitForFunction((id) => document.getElementById('profileSel').value === id, profileId);
       await frame.locator('#profileSel').selectOption(second); await frame.locator('#resumeTab').click(); await frame.waitForFunction(() => document.getElementById('resumeContent').textContent.includes('合成另一档案姓名')); assert.ok(!(await frame.locator('#resumeContent').textContent()).includes('合成阶段四刷新姓名'));
-      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 0); await open(); assert.equal(await frame.locator('#profileSel').inputValue(), second); assert.equal(api.calls.length, 0);
+      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 56); await open(); assert.equal(await frame.locator('#profileSel').inputValue(), second); assert.equal(api.calls.length, 0);
     });
     await t.test('React、Moka 和日期复合夹具中浮层独立显示，导航关闭恢复可用', async () => {
       for (const fixture of ['phase3-application.html','moka-mock.html','phase3-composites.html']) {
         await page.goto(api.base + '/test-pages/' + fixture); await open(); await frame.locator('#resumeTab').click(); await frame.locator('#resumeContent h1').waitFor();
         const rect = await page.locator('#wsa-floatbar-host').boundingBox(); const viewport = page.viewportSize(); assert.ok(rect.x >= 0 && rect.x + rect.width <= viewport.width && rect.y + rect.height <= viewport.height);
-        assert.equal(await frame.locator('.panel-tabs button').count(), 2); await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 0);
+        assert.equal(await frame.locator('.panel-tabs button').count(), 3); await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().height === 56);
       }
       await page.goto(api.base + '/test-pages/login-mock.html'); await page.waitForFunction(() => !document.getElementById('wsa-floatbar-host') || getComputedStyle(document.getElementById('wsa-floatbar-host')).display === 'none'); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
     });
