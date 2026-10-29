@@ -56,7 +56,15 @@
         // 只有紧随本次已知写入的目标可更新观察值，不能掩盖其他子项的外部修改。
         const lifecycle = {
           check() { guard(context, state); if (snapshot(context.item).some((row) => observed.get(row.node) !== row.value)) throw new Error('日期或电话内容已变化，已停止填写'); },
-          changed(node) { guard(context, state); const row = snapshot(context.item).find((row) => row.node === node); if (row) observed.set(node, row.value); }
+          changed(node) { guard(context, state); const row = snapshot(context.item).find((row) => row.node === node); if (row) observed.set(node, row.value); },
+          // 日历最终点选后只接纳同一原节点、来源和精度一致的延迟回写，日期读法兼容限定的年龄说明。
+          settled(node, expected) {
+            guard(context, state);
+            const length = { year: 4, month: 7, day: 10 }[expected?.precision]; const source = A.dateValue(context.intent.value);
+            if (id !== 'date' || context.item.compound || node !== context.item.el || !node.readOnly || !length || source?.iso.slice(0, length) !== expected.iso) throw new Error('日历回写来源或控件已变化');
+            const row = snapshot(context.item).find((row) => row.node === node); const actual = A.dateReadback(context.item);
+            if (actual && !actual.time && actual.iso === expected.iso && actual.precision === expected.precision) observed.set(node, row.value);
+          }
         };
         try {
           lifecycle.check(); const result = plan.operation === 'verify-existing' ? { ok: true } : await A.fill(context.item, context.intent.value, lifecycle);

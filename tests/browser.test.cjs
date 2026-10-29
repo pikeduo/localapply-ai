@@ -969,6 +969,49 @@ test('Moka真实控件：年月日精度、默认和搜索菜单、失焦重绘�
         await page.locator('#rerender').click(); assert.equal(await page.locator('#birth').inputValue(), expected); assert.equal(await page.evaluate(() => acceptedControls.birth), expected); assert.equal(await page.evaluate(() => rejectedClicks), 0); await page.close();
       });
     }
+    // 同时覆盖纯年月和 Moka 的“年月 (年龄)”回写格式，不能把正常回写误判为外部修改。
+    for (const age of [false, true]) await t.test(`出生年月${age ? '附带年龄' : ''}在点击后异步回写时通过实际状态验证，卡片移除成功项`, async (t) => {
+      const expected = age ? '2000-06 (26岁)' : '2000-06';
+      await set('birthDate', '2000-06'); const { page } = await prepare(age ? 'calendar-async-age' : 'calendar-async');
+      // 失败断言也释放浮层轮询和页面会话，避免影响其他独立控件用例。
+      t.after(async () => { if (!page.isClosed()) await page.close(); });
+      const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((row) => row.url === url).id, page.url());
+      await page.bringToFront(); const opened = page.waitForEvent('framenavigated', { predicate: (next) => next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+      await worker.evaluate((id) => floatingPanel.open(id), tabId); const frame = await opened;
+      await frame.locator('#profileSel option').first().waitFor({ state: 'attached' }); await frame.locator('#smartScan').click();
+      await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false' && !!document.getElementById('tab-smart').dataset.sessionId);
+      const card = frame.locator('.smart-row').filter({ has: frame.getByRole('heading', { name: '出生日期 (年龄) · 已匹配', exact: true }) });
+      await card.getByRole('button', { name: '单项填写', exact: true }).click();
+      await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      assert.equal(await page.locator('#birth').inputValue(), expected);
+      assert.match(await frame.locator('#smartStatus').textContent(), /成功填入 1 个字段/);
+      assert.equal(await frame.locator('.smart-row h4').filter({ hasText: '出生日期 (年龄)' }).count(), 0);
+      const sessionId = await frame.locator('#tab-smart').getAttribute('data-session-id');
+      const result = await rpc(options, 'learning:session', { sessionId }); const row = result.rows.find((row) => row.field.label === '出生日期 (年龄)');
+      assert.equal(row.status, 'success'); assert.equal(row.diagnostic.reasonCode, 'verified'); assert.equal(row.webFilled, true);
+      await page.locator('#rerender').click(); assert.equal(await page.locator('#birth').inputValue(), expected);
+      assert.equal(await page.evaluate(() => submissions), 0); assert.equal(api.calls.length, 0);
+      await page.screenshot({ path: path.join(testRoot, age ? 'moka-birth-age-verified.png' : 'moka-birth-async-verified.png'), fullPage: true });
+      await frame.locator('#panelClose').click(); await page.close();
+    });
+    // 已有相同年月加年龄应只回读；已有不同年月保持原值，不因去掉年龄说明而放开覆盖。
+    await t.test('出生年月带年龄的已有值只验证相同日期，不覆盖不同日期', async () => {
+      await set('birthDate', '2000-06');
+      for (const [value, status] of [['2000-06', 'success'], ['1999-09', 'needs_confirmation']]) {
+        const { page, fill } = await prepare('calendar-async-age');
+        await page.evaluate((next) => { acceptedControls.birth = next; document.getElementById('rerender').click(); }, value);
+        const result = await fill('出生日期 (年龄)'); assert.equal(result.status, status, result.reason);
+        assert.equal(await page.locator('#birth').inputValue(), value + ' (26岁)');
+        assert.equal(await page.evaluate(() => calendarCommits), 0); assert.equal(await page.evaluate(() => submissions), 0); await page.close();
+      }
+    });
+    for (const [mode, reason] of [['calendar-async-wrong', 'stale_context'], ['calendar-async-replaced', 'stale_context'], ['calendar-async-revert', 'controlled_reverted'], ['calendar-async-age-wrong', 'stale_context'], ['calendar-async-age-revert', 'controlled_reverted']]) {
+      await t.test(`${mode} 不得因异步回写兼容而误记成功`, async () => {
+        await set('birthDate', '2000-06'); const { page, fill } = await prepare(mode); const result = await fill('出生日期 (年龄)');
+        assert.equal(result.status, 'failed'); assert.equal(result.diagnostic.reasonCode, reason);
+        assert.equal(await page.evaluate(() => submissions), 0); await page.close();
+      });
+    }
     await t.test('日历确实要求日而来源只有年月时不补日、不假报成功', async () => {
       await set('birthDate', '2000-06'); const { page, fill } = await prepare('day-missing'); assert.equal((await fill('出生日期 (年龄)')).status, 'needs_confirmation');
       assert.equal(await page.locator('#birth').inputValue(), ''); assert.equal(await page.evaluate(() => acceptedControls.birth), undefined); await page.close();

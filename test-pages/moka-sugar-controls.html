@@ -4,7 +4,7 @@
 <body><h1>合成岗位申请</h1><form id="application"></form><button type="button" id="rerender">重新渲染已确认状态</button>
 <script>
   const params = new URLSearchParams(location.search); const mode = params.get('mode') || 'month';
-  window.acceptedControls = {}; window.optionClicks = 0; window.submissions = 0; window.rejectedClicks = 0;
+  window.acceptedControls = {}; window.optionClicks = 0; window.submissions = 0; window.rejectedClicks = 0; window.calendarCommits = 0;
   const renderers = []; let activePopup;
   // 夹具只重现公开组件的类名和事件，不加载岗位页脚本或真实个人信息。
   function block(title) { const node = document.createElement('section'); node.className = 'apply-block-synthetic'; node.innerHTML = '<div class="blockTitle-synthetic"><span class="text-synthetic"></span></div>'; node.querySelector('span').textContent = title; application.append(node); return node; }
@@ -58,10 +58,20 @@
     host.insertAdjacentHTML('beforeend', '<div class="sd-Dropdown-container-synthetic"><label class="sd-Input-container-synthetic day_info"><input id="birth" readonly placeholder="出生日期 (年龄)"></label></div>');
     const input = host.querySelector('input'); const popup = document.createElement('div'); popup.className = 'sd-Dropdown-dropdown-synthetic'; popup.hidden = true; document.body.append(popup);
     const precision = mode === 'day' || mode === 'day-missing' ? 'day' : mode === 'year' ? 'year' : 'month'; let view = precision; let year = 2026; let month = 10; let decade = 2020;
-    // 用实际确认状态重绘，测试 blur、晚到渲染及日精度不足时绝不补日。
-    const refresh = () => { input.value = acceptedControls.birth || ''; }; renderers.push(refresh);
-    // 月精度真实值只保存 YYYY-MM，内部日期对象的默认 1 日不属于资料事实。
-    const commit = (value) => { if (mode !== 'calendar-rejected') acceptedControls.birth = value; refresh(); popup.hidden = true; setTimeout(refresh, 180); };
+    // 用实际确认状态重绘；出生日期可附带年龄说明，年龄不得用来推算或补齐日期。
+    const refresh = () => { const value = acceptedControls.birth || ''; input.value = value && mode.includes('-age') ? value + ' (26岁)' : value; }; renderers.push(refresh);
+    // 月精度真实值只保存 YYYY-MM；模拟框架在点击事件返回后才回写，以及回退/换节点的拒绝边界。
+    const commit = (value) => {
+      window.calendarCommits++;
+      // 异步场景仍由组件状态驱动显示，测试不得直接替插件写值或伪造验证结果。
+      const apply = () => {
+        if (mode !== 'calendar-rejected') acceptedControls.birth = ['calendar-async-wrong', 'calendar-async-age-wrong'].includes(mode) ? '1999-09' : value;
+        refresh(); popup.hidden = true; setTimeout(refresh, 180);
+        if (mode === 'calendar-async-replaced') input.replaceWith(input.cloneNode(true));
+        if (['calendar-async-revert', 'calendar-async-age-revert'].includes(mode)) setTimeout(() => { delete acceptedControls.birth; refresh(); }, 180);
+      };
+      if (mode.startsWith('calendar-async')) setTimeout(apply, 20); else apply();
+    };
     // 头部翻页有界且与共享组件一致，只有已知日历区域中的控件可操作。
     const render = () => {
       if (!popup.firstChild) popup.innerHTML = '<div class="sd-panal-menu-wrapper-synthetic"></div>';

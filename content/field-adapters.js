@@ -237,6 +237,14 @@
     return { year, month, day, time: h ? h + ':' + minute : null, precision: day ? 'day' : month ? 'month' : 'year', iso: y + (month ? '-' + pad(month) : '') + (day ? '-' + pad(day) : '') };
   }
 
+  // 只读 Moka 出生日期可带末尾年龄说明；仅解析明确日期前缀，不按年龄推算，其他控件/来源仍用严格解析。
+  function dateReadback(item) {
+    const { el } = item; const plain = dateValue(el.value); if (plain) return plain;
+    if (!el.readOnly || !el.closest?.('[class*="day_info-"]') || !/^出生(?:日期|年月)(?:\s*[(（]年龄[)）])?$|^生日$/.test(item.field?.label || '')) return null;
+    const match = /^(.*?)\s*(?:\(\s*\d{1,3}\s*岁\s*\)|（\s*\d{1,3}\s*岁\s*）)$/.exec(String(el.value).trim());
+    const date = dateValue(match?.[1]); return date && !date.time ? date : null;
+  }
+
   // 精确选项比较同时允许数字标签（02 / 2月），不使用子串匹配任意候选。
   function optionFor(el, value, unit = '') {
     const desired = String(value);
@@ -319,14 +327,14 @@
     return item.compound.kind === 'date' ? [values.year, values.month?.padStart(2, '0'), ...(parts.day ? [values.day?.padStart(2, '0')] : [])].join('-') : Object.values(values).join(' / ');
   }
 
-  // 复读全部成员和实际日期精度；年月下拉须有独立选中显示，不能把子项查询词视为日期内容。
+  // 复读全部成员和实际日期精度；出生日期允许控件限定的年龄说明，下拉仍须有独立选中显示。
   function accepted(item, value) {
     if (item.compound?.kind === 'address' && global.LocalApplyAddressControls) return global.LocalApplyAddressControls.accepted(item, value);
     const next = plan(item, value); if (next.error) return false;
     if (!item.compound) {
       if (item.el.value === next.value) return true;
       if (!item.el.readOnly) return false;
-      const actual = dateValue(item.el.value); const expected = dateValue(next.value); const selected = selections.get(item.el);
+      const actual = dateReadback(item); const expected = dateValue(next.value); const selected = selections.get(item.el);
       return !!actual && (actual.iso === expected?.iso && actual.time === expected.time || selected?.kind === 'calendar' && selected.expected === next.value && actual.iso === selected.iso && actual.precision === selected.precision);
     }
     return Object.entries(item.compound.parts).every(([key, el]) => el.isConnected && el.getAttribute('aria-invalid') !== 'true' && el.validity?.valid !== false && (el.tagName === 'SELECT' ? optionFor(el, next.parts[key], { year: '年', month: '月', day: '日' }[key])?.value === el.value : dropdown(el) ? dropdownAccepted(el, next.parts[key]) || dropdownSelectionText(el) === next.parts[key] : el.value === next.parts[key]));
@@ -372,6 +380,13 @@
     nodes[0].click(); lifecycle?.changed(el); await sleep(60); lifecycle?.check(); return true;
   }
 
+  // 仅在唯一日期格已实际点选并等待回写后记录目标精度；授权、原节点及其他子项保护仍由生命周期复核。
+  function calendarSettled(el, next, precision, lifecycle) {
+    const iso = next.date.iso.slice(0, { year: 4, month: 7, day: 10 }[precision]);
+    selections.set(el, { kind: 'calendar', expected: next.value, precision, iso });
+    lifecycle?.settled?.(el, { precision, iso });
+  }
+
   // Sugar 年/月/日面板分别提交；初始面板决定精度，导航到月格不能冒充支持年月。
   async function sugarCalendar(el, panel, next, lifecycle) {
     lifecycle?.check();
@@ -386,7 +401,7 @@
     for (let attempt = 0; attempt < 32; attempt++) {
       lifecycle?.check();
       const cells = calendarCells(panel).filter((node) => /^\d{4}$/.test(node.textContent.trim())); const target = cells.filter((node) => Number(node.textContent.trim()) === date.year);
-      if (target.length === 1) { target[0].click(); lifecycle?.changed(el); await sleep(60); lifecycle?.check(); chosen = true; break; }
+      if (target.length === 1) { target[0].click(); lifecycle?.changed(el); await sleep(60); if (precision === 'year') calendarSettled(el, next, precision, lifecycle); lifecycle?.check(); chosen = true; break; }
       const years = cells.map((node) => Number(node.textContent.trim())); const signature = years.join(',');
       if (!years.length || target.length > 1 || visited.has(signature)) break;
       visited.add(signature); const direction = date.year < Math.min(...years) ? 'prev' : date.year > Math.max(...years) ? 'next' : '';
@@ -400,17 +415,15 @@
       if (precision === 'day' && !await calendarClick(panel, '[class*="sd-basic-selector-month-"]', lifecycle, el)) return { ok: false, status: 'unsupported', reason: '日历月份入口不唯一，请在网页选择' };
       const months = calendarCells(panel).filter((node) => monthNumber(node.textContent) === date.month);
       if (months.length !== 1) return { ok: false, status: 'unsupported', reason: '日历中没有唯一可选的目标月份，请在网页选择' };
-      months[0].click(); lifecycle?.changed(el); await sleep(60); lifecycle?.check();
+      months[0].click(); lifecycle?.changed(el); await sleep(60); if (precision === 'month') calendarSettled(el, next, precision, lifecycle); lifecycle?.check();
     }
     if (precision === 'day') {
       // 先复核头部年月，避免日期导航回退后误点另一个月份的同一天。
       const year = panel.querySelector(yearSelector)?.textContent.trim(); const month = panel.querySelector('[class*="sd-basic-selector-month-"]')?.textContent;
       const days = [...panel.querySelectorAll('td[class*="sd-basic-item-wrapper-"]')].filter((node) => calendarTarget(node) && !node.matches('[class*="sd-basic-fade-"]') && Number(node.querySelector('[class*="sd-basic-date-item-"]')?.textContent.trim()) === date.day);
       if (!/^\d{4}年?$/.test(year || '') || Number(year.replace('年','')) !== date.year || monthNumber(month || '') !== date.month || days.length !== 1) return { ok: false, status: 'unsupported', reason: '日历当前年月或日期候选不明确，请在网页选择' };
-      lifecycle?.check(); days[0].click(); lifecycle?.changed(el); await sleep(60); lifecycle?.check();
+      lifecycle?.check(); days[0].click(); lifecycle?.changed(el); await sleep(60); calendarSettled(el, next, precision, lifecycle); lifecycle?.check();
     }
-    const length = { year: 4, month: 7, day: 10 }[precision];
-    selections.set(el, { kind: 'calendar', expected: next.value, precision, iso: date.iso.slice(0, length) });
     lifecycle?.check(); el.blur(); return { ok: true };
   }
 
@@ -453,7 +466,7 @@
     }
     return { ok: true };
   }
-  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, optionEqual, fillDropdown, dropdownAccepted, diagnostic };
+  global.LocalApplyFieldAdapters = { slot, country, exclusion, groups, dateValue, dateReadback, handles, plan, read, accepted, fill, hasConflict, dropdown, dropdownText, dropdownOptions, optionEqual, fillDropdown, dropdownAccepted, diagnostic };
   // 只向打包的下拉桥接模块提供成熟局部探测及脱敏轨迹入口，不开放网页消息接口。
   global.LocalApplyDropdownDOM = Object.freeze({ openControl, popupFor, popupRoots, optionLabel, usable, selectedText: dropdownSelectionText,
     trace(el, detail) { traces.set(el, detail); }

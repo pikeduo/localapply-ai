@@ -107,6 +107,23 @@ test('日期回读保留时间与精度，不把相同日期的其他时间判�
   assert.equal(A.accepted({ el: calendar }, '2000-06-01'), false);
 });
 
+// 年龄只作为 Moka 只读出生日期的末尾显示说明；来源解析仍严格，不推算日期或跨精度比较。
+test('Moka 出生日期回读识别年龄说明，其他字段及本地来源不放宽', () => {
+  // 仅模拟真实出生日期容器，不让普通文本框或其他日历借用此例外。
+  const item = (value, readOnly = true, birth = true, label = '出生日期 (年龄)') => ({ field: { label }, el: { ...input('text'), value, readOnly, closest: () => birth ? {} : null } });
+  for (const [display, source] of [['2000-06 (26岁)', '2000-06'], ['2000年6月（26岁）', '2000-06'], ['2000/06/15 (26岁)', '2000-06-15'], ['2000 (26岁)', '2000']]) {
+    assert.equal(A.accepted(item(display), source), true, display);
+    assert.equal(A.dateValue(display), null, '年龄格式不得进入来源解析');
+  }
+  for (const display of ['26岁', '2000-13 (26岁)', '2000-02-30 (26岁)', '出生于2000-06 (26岁)', '2000-06 (26岁左右)', '2000-06 (26岁)<script>', '2000-06 (26岁) (26岁)']) assert.equal(A.accepted(item(display), '2000-06'), false, display);
+  assert.equal(A.accepted(item('2000-06 (26岁)'), '2000-06-15'), false);
+  assert.equal(A.accepted(item('2000-06 (26岁)'), '2000-07'), false);
+  assert.equal(A.accepted(item('2000-06 (26岁)', false), '2000-06'), false);
+  assert.equal(A.accepted(item('2000-06 (26岁)', true, false), '2000-06'), false);
+  assert.equal(A.accepted(item('2000-06 (26岁)', true, true, '毕业日期'), '2000-06'), false);
+  assert.ok(A.plan(item(''), '2000-06 (26岁)').error);
+});
+
 test('日期范围与拆分控件不会把缺失日自动改成一日', () => {
   assert.equal(A.plan({ el: { ...input('date'), min: '2028-03-01' } }, '2028-02-29').error.status, 'failed');
   const item = { el: input(), compound: { kind: 'date', parts: { year: {}, month: {}, day: {} } } };

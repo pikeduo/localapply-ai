@@ -1,6 +1,6 @@
 # localapply-ai｜开发进度与阶段验收记录
 
-> **文档版本：** v2.44
+> **文档版本：** v2.46
 > **更新日期：** 2026-10-29
 > **对应计划：** [`DEVELOPMENT_PLAN.md`](./DEVELOPMENT_PLAN.md) **v2.0**（2026-10-25 起采用新版任务和阶段编号）
 > **项目：** `localapply-ai`（基于 [`xiaoxiaobaijiangjun/wangshen-autofill`](https://github.com/xiaoxiaobaijiangjun/wangshen-autofill) Fork）  
@@ -8,6 +8,14 @@
 > **证据范围：** 本轮真实结果见 [阶段五验收](./阶段5岗位识别与申请追踪验收.md)。保留 [阶段四验收](./阶段4界面与工作台验收.md)、[新版阶段三验收](./阶段3-v2控件分类与写入验收.md) 和 [旧版阶段三验收](./阶段3字段学习与验收.md) 及全部历史失败记录；真实模型、招聘站点、Edge 和浏览器缩放组合未抽检。
 
 > **整页填写报错增补：** 用户确认点击“自动填写此页面”出现扫描范围错误。本次修正未知命令误入单字段校验，以及旧后台拒绝批次命令时的恢复提示；定向数据层 **56/56**、浏览器 **27/27**，均0失败/取消/跳过。未重跑完整套件，未据截图断言用户浏览器的具体触发原因。
+
+> **出生日期误报增补（2026-10-29）：** 最新导出日志中字段 #6 在日期适配器写入阶段返回 `stale_context`。本地合成 Sugar 日历复现：点击返回后异步回写正确年月，却被旧观察值误判为外部修改。修复仅在最终日期格点选后接纳原节点与来源投影、目标精度一致的回写，再走统一多次验证；错误日期、节点替换和后续回退仍失败。卡片成功计数及移除成功项已覆盖。定向单元 **35/35**、浏览器 **21/21**，均0失败/取消/跳过；未重跑完整套件，真实 Moka/Edge 仍待用户复验。
+>
+> 实际命令：`node --test --test-reporter=tap --test-timeout=20000 tests/date-phone-registry.test.cjs tests/fill-verification.test.cjs tests/field-adapters.test.cjs`；`node --test --test-reporter=tap --test-timeout=120000 --test-name-pattern='Moka真实控件' tests/browser.test.cjs`。产物：`.browser-tests/moka-birth-date-unit.log`、`moka-birth-async-fixed.log`、`moka-birth-async-verified.png`。首轮复现日志 `moka-birth-async-reproduction.log` 保留18通过/3失败（含父项），不与最终通过数累加。无 Schema、个人数据、依赖或其他控件功能变更。
+
+> **出生日期年龄说明补修（2026-10-29）：** 用户补充日志的 `03:26:09Z` 对应北京时间11:26:09，字段 #6 仍在写入阶段报 `stale_context`，随后重试保留已有网页内容。用户确认显示格式为“年月 (年龄)”；上一轮纯日期异步夹具未覆盖该格式。本次新增仅限只读 Moka 出生日期的 `dateReadback`，忽略完整末尾年龄说明后严格解析日期，统一供异步回写和多次回读使用；本地来源解析、日期精度、节点/授权检查及非空保护保持不变。已有相同日期仅验证、不再次点选；不同日期保留，错误日期及后续回退仍失败。
+>
+> 沿用上述定向命令：单元 **36/36**、Playwright **25/25**，均0失败/取消/跳过，未重跑完整套件。日志 `.browser-tests/moka-birth-age-unit.log`、`moka-birth-age-fixed.log`；截图 `moka-birth-age-verified.png` 已检查，带年龄年月显示与卡片成功计数一致。修复前 `moka-birth-age-reproduction.log` 保留21通过/4失败（含父项），与最终结果不累加。仅使用合成资料及隔离 Chromium，真实 Moka/Edge 待用户复验，无 Schema 或依赖变更。
 
 > **分层步骤历史：** 2026-10-28 按继续授权完成分层第 03 步 AdapterRegistry 与文本路径；基础 **214/214**、相关浏览器回归 **86/86**，均零失败/跳过。文本专项 **6/6** 与相关回归重叠，不累加。选择和复杂控件保留旧执行路径，当时未运行本版本完整浏览器套件；完成后停止，下一步须另行授权。
 
