@@ -28,25 +28,45 @@
     if (matching.length === 1) return matching[0];
     return rows.length === 1 && !rows[0].url ? rows[0] : null;
   }
+  // 飞书ATSX只读取明确职位详情根；官网品牌仅去掉确定的招聘官网后缀，不从域名或口号猜公司。
+  function feishuPosting() {
+    const path = location.pathname.match(/^\/(?:[a-z\d_-]+\/)?(?:m\/)?position\/(\d{1,30})\/detail\/?$/i);
+    if (!/(?:^|\.)jobs\.feishu\.cn$/i.test(location.hostname) || !path) return null;
+    const roots = [...document.querySelectorAll('.jobDetail')].filter(visible); if (roots.length !== 1) return null;
+    const root = roots[0]; const titles = [...root.querySelectorAll('.job-header .job-title')].filter(visible);
+    if (titles.length !== 1) return null;
+    const brands = [...document.querySelectorAll('.topbar-site-title')].filter(visible);
+    const brand = brands.length === 1 ? brands[0].textContent.trim().match(/^(.{2,100}?)(?:校园招聘官网|社会招聘官网|校招官网|招聘官网)$/) : null;
+    const company = brand && !/^(欢迎|加入|我们|人才|招聘|诚聘)/.test(brand[1]) ? brand[1].trim() : '';
+    const info = [...root.querySelectorAll('.job-info > span[class^="infoText__"]')].filter(visible).map((node) => node.textContent.trim().slice(0, 100));
+    const types = info.filter((text) => /^(全职|兼职|实习|正式|劳务|合同制)$/.test(text));
+    const locations = info.filter((text) => text && !types.includes(text));
+    const descriptions = [...root.querySelectorAll(':scope > .block-title')].filter((node) => visible(node) && /^(职位描述|岗位职责)$/.test(node.textContent.trim()));
+    const content = descriptions.length === 1 ? descriptions[0].nextElementSibling : null;
+    return { title: titles[0].textContent.trim().slice(0, 500), company, id: path[1],
+      location: locations.length === 1 ? locations[0] : '', employmentType: types.length === 1 ? types[0] : '',
+      summary: content?.classList.contains('block-content') && visible(content) ? content.textContent.trim().slice(0, 6000) : '' };
+  }
   // 优先读取 JobPosting，再使用职位详情的显式节点，缺失内容留给用户编辑。
   function inspect() {
     const structured = currentPosting(); const organization = structured?.hiringOrganization;
+    const feishu = feishuPosting();
     const address = [structured?.jobLocation].flat().find((item) => item && typeof item === 'object')?.address;
     const scalar = (value, limit = 500) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
     // 页面标题只在明确岗位路径上作为末级候选，不从普通页面标题猜测公司。
     const titleFallback = /\/(?:jobs?|positions?|requisitions?)\/[a-z\d_-]+\/?$/i.test(location.pathname) ? document.title.split(/\s+[|｜·–—]\s+/)[0].trim().slice(0, 500) : '';
     // Moka 申请页没有 main/h1，岗位信息明确位于 job-form__title，不能从简历表单标题猜测。
     const moka = document.querySelector('.job-form__title');
-    const title = scalar(structured?.title) || pick('main [data-job-title],main [itemprop="title"],main .job-title,article .job-title,main h1,article h1,[data-job-title],.job-form__title [class^="job-info-"] > [class^="title-"]') || titleFallback;
-    const company = scalar(typeof organization === 'string' ? organization : organization?.name) || pick('main [data-company],main [itemprop="hiringOrganization"],main .company-name,article .company-name,[data-company],.job-form__title [class^="company-name-"]');
+    const title = scalar(structured?.title) || feishu?.title || pick('main [data-job-title],main [itemprop="title"],main .job-title,article .job-title,main h1,article h1,[data-job-title],.job-form__title [class^="job-info-"] > [class^="title-"]') || titleFallback;
+    const company = scalar(typeof organization === 'string' ? organization : organization?.name) || feishu?.company || pick('main [data-company],main [itemprop="hiringOrganization"],main .company-name,article .company-name,[data-company],.job-form__title [class^="company-name-"]');
     const mokaInfo = [...(moka?.querySelectorAll('[class^="job-info-"] [class^="info-"] > span') || [])].filter(visible).map((node) => scalar(node.textContent));
     const params = new URL(location.href).searchParams;
-    const id = scalar(typeof structured?.identifier === 'string' ? structured.identifier : structured?.identifier?.value) || ['jobId', 'job_id', 'positionId', 'position_id', 'id'].map((key) => params.get(key)).find(Boolean) || location.pathname.match(/\/(?:jobs?|positions?|requisitions?)\/([a-z\d_-]+)\/?$/i)?.[1] || '';
-    const locationText = scalar(address?.addressLocality) || scalar(address?.addressRegion) || scalar(typeof structured?.jobLocation === 'string' ? structured.jobLocation : '') || pick('main [data-job-location],main [itemprop="jobLocation"],main .job-location,article .job-location') || mokaInfo.find((text) => /^[^·|]{1,25}·[^·|]{1,25}$/.test(text)) || '';
+    const id = scalar(typeof structured?.identifier === 'string' ? structured.identifier : structured?.identifier?.value) || feishu?.id || ['jobId', 'job_id', 'positionId', 'position_id', 'id'].map((key) => params.get(key)).find(Boolean) || location.pathname.match(/\/(?:jobs?|positions?|requisitions?)\/([a-z\d_-]+)\/?$/i)?.[1] || '';
+    const locationText = scalar(address?.addressLocality) || scalar(address?.addressRegion) || scalar(typeof structured?.jobLocation === 'string' ? structured.jobLocation : '') || feishu?.location || pick('main [data-job-location],main [itemprop="jobLocation"],main .job-location,article .job-location') || mokaInfo.find((text) => /^[^·|]{1,25}·[^·|]{1,25}$/.test(text)) || '';
     const source = /moka/i.test(location.hostname) || moka ? 'Moka' : /beisen|italent/i.test(location.hostname) ? '北森' : /feishu|lark/i.test(location.hostname) ? '飞书招聘' : location.hostname;
     const candidate = A.candidate({ companyName: company, jobTitle: title, jobUrl: location.href, jobId: scalar(id), jobSource: source, location: locationText,
-      employmentType: scalar([structured?.employmentType].flat().filter((item) => typeof item === 'string').join(' / ')) || pick('main [data-job-type],main [itemprop="employmentType"],main .job-type') || mokaInfo.find((text) => /^(全职|兼职|实习|劳务|合同制)$/.test(text)) || '',
-      summary: pick('main [data-job-description],main [itemprop="description"],main .job-description,article .job-description', 6000) });
+      employmentType: scalar([structured?.employmentType].flat().filter((item) => typeof item === 'string').join(' / ')) || feishu?.employmentType || pick('main [data-job-type],main [itemprop="employmentType"],main .job-type') || mokaInfo.find((text) => /^(全职|兼职|实习|劳务|合同制)$/.test(text)) || '',
+      summary: feishu?.summary || pick('main [data-job-description],main [itemprop="description"],main .job-description,article .job-description', 6000) });
     return { candidate, documentId: global.LocalApplyPageScanner?.documentId || '', feedback: feedback(), recognized: !!(title && (company || structured)) };
   }
   // 仅显式状态区中的成功提示可提出确认建议；失败提示优先，不搜索整页文字。

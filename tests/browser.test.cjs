@@ -8,6 +8,58 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 飞书公开DOM的自主合成夹具；虚拟域名由本地route直接返回，测试不请求真实招聘服务器。
+test('飞书ATSX：公开岗位识别、来源边界及资料保护', { timeout: 60000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'feishu-job-')); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const html = await fs.readFile(path.join(ROOT, 'test-pages/feishu-job.html'), 'utf8');
+    await context.route(/^https:\/\/(?:synthetic\.jobs\.feishu\.cn|synthetic\.feishu\.cn)\//, (route) => route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html }));
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const before = (await rpc(options, 'localapply:read')).database; let page;
+    // 每个场景使用新文档；密码getter一旦被读取则立即抛错。
+    async function open(pathname = '/index/position/1234567890123456789/detail', host = 'synthetic.jobs.feishu.cn') {
+      if (page) await page.close(); page = await context.newPage(); await page.goto('https://' + host + pathname);
+      await page.evaluate(() => { window.__secretReads = 0; Object.defineProperty(document.getElementById('sensitive'), 'value', { get() { window.__secretReads++; throw Error('禁止读取认证值'); } }); });
+      const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+      // 走生产只读内容消息；jobs:scan仍要求真实卡片会话，不放宽后台权限来方便测试。
+      return async () => { const result = await worker.evaluate((id) => chrome.tabs.sendMessage(id, { type: 'jobs:inspect' }, { frameId: 0 }), tabId); assert.equal(result.ok, true); return result; };
+    }
+    await t.test('无JSON-LD且不在main的详情根仍识别公司、岗位ID、地点和职责', async () => {
+      const scan = await open(); const result = await scan(); assert.equal(result.recognized, true); const job = result.candidate;
+      assert.equal(job.companyName, '合成飞书企业'); assert.equal(job.jobTitle, '合成研发岗位'); assert.equal(job.jobId, '1234567890123456789');
+      assert.equal(job.location, '合成甲城'); assert.equal(job.employmentType, '全职'); assert.match(job.summary, /合成职责/); assert.equal(job.jobSource, '飞书招聘');
+      assert.equal(await page.evaluate(() => __secretReads), 0); assert.deepEqual((await rpc(options, 'localapply:read')).database, before);
+      await page.screenshot({ path: path.join(root, 'feishu-job-recognition.png') });
+    });
+    await t.test('真实悬浮卡片自动显示识别结果，确认保存前不建立申请记录', async () => {
+      await open(); const ready = page.waitForEvent('framenavigated', { predicate: (frame) => frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+      const tabId = await worker.evaluate(async (url) => { const tab = (await chrome.tabs.query({})).find((item) => item.url === url); await floatingPanel.open(tab.id); return tab.id; }, page.url()); const frame = await ready;
+      if (await frame.locator('#welcomeSkipAI').isVisible()) await frame.locator('#welcomeSkipAI').click();
+      await frame.locator('#jobForm').waitFor({ state: 'visible' });
+      assert.equal(await frame.locator('#jobCompany').inputValue(), '合成飞书企业'); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成研发岗位'); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成甲城');
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); await worker.evaluate((id) => floatingPanel.close(id), tabId);
+    });
+    await t.test('校招移动路径及明确JSON-LD优先级保留，来源参数继续脱敏', async () => {
+      const scan = await open('/campus/m/position/2345678901234567890/detail?utm_source=synthetic&userId=synthetic'); let result = await scan(); assert.equal(result.recognized, true); assert.equal(result.candidate.jobId, '2345678901234567890'); assert.ok(!result.candidate.jobUrl.includes('?'));
+      await page.evaluate(() => { const node = document.createElement('script'); node.type = 'application/ld+json'; node.textContent = JSON.stringify({ '@type': 'JobPosting', title: '结构化合成岗位', hiringOrganization: { name: '结构化合成组织' }, url: location.href }); document.head.append(node); });
+      result = await scan(); assert.equal(result.candidate.jobTitle, '结构化合成岗位'); assert.equal(result.candidate.companyName, '结构化合成组织');
+    });
+    await t.test('不把分享表单、列表、重复详情根或宣传口号猜成招聘公司', async () => {
+      let scan = await open('/share/base/form/synthetic', 'synthetic.feishu.cn'); assert.equal((await scan()).recognized, false);
+      scan = await open('/index/position/list'); assert.equal((await scan()).recognized, false);
+      scan = await open(); await page.evaluate(() => document.body.append(document.querySelector('.jobDetail').cloneNode(true))); assert.equal((await scan()).recognized, false);
+      scan = await open(); await page.locator('.topbar-site-title').evaluate((node) => { node.textContent = '欢迎加入我们'; }); assert.equal((await scan()).recognized, false);
+    });
+    await t.test('多个地点元数据不按顺序猜选，网页资料零读取且档案/申请不自动写入', async () => {
+      const scan = await open(); await page.evaluate(() => { const node = document.createElement('span'); node.className = 'infoText__fixture'; node.textContent = '其他不明确元数据'; document.querySelector('.job-info').append(node); });
+      const result = await scan(); assert.equal(result.recognized, true); assert.equal(result.candidate.location, ''); assert.equal(await page.evaluate(() => __secretReads), 0);
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before);
+      const logs = await rpc(options, 'diagnostics:read'); assert.ok(!JSON.stringify(logs).includes('合成研发岗位'));
+    });
+  } finally { if (context) await context.close(); assert.ok(path.resolve(profile).startsWith(path.resolve(root) + path.sep)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 两个loopback来源模拟不同网站；验证历史建议不自动执行，UI选择后才走新控件回读。
 test('跨网站建议：历史来源按钮、明确选择与新控件独立验证', { timeout: 60000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'cross-site-'));
