@@ -18,11 +18,13 @@
     return el.isConnected && !el.disabled && el.getAttribute('aria-disabled') !== 'true'
       && !['hidden', 'password', 'file', 'submit', 'reset', 'image', 'search'].includes(type) && (type !== 'button' || el.getAttribute('role') === 'combobox')
       && !/password|captcha|one-time-code|验证码|密码|验证口令|csrf|token/i.test(hint)
-      && !el.closest('[id^="wsa-"],[data-localapply-ui],[hidden],[inert],[aria-hidden="true"],fieldset[disabled]') && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+      && !el.closest('[id^="wsa-"],[data-localapply-ui],[hidden],[inert],[aria-hidden="true"],fieldset[disabled],.atsx-select-disabled,.atsx-date-picker-disabled') && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
   }
 
   // DOM/无障碍标签优先；不回退到整个容器的正文或 HTML。
   function label(el) {
+    const atsx = global.LocalApplyATSX?.label(el);
+    if (atsx) return M.redact(atsx).replace(/\s*[*＊]+\s*$/, '');
     const root = el.getRootNode();
     const labelled = (el.getAttribute('aria-labelledby') || '').split(/\s+/).map((id) => root.getElementById?.(id)?.textContent || '').join(' ');
     const explicit = el.id ? root.querySelector('label[for="' + CSS.escape(el.id) + '"]')?.textContent : '';
@@ -33,6 +35,8 @@
 
   // 只读取分组标题，不读取经历内容；识别学历、经历种类及重复区块序号。
   function context(el) {
+    const atsx = global.LocalApplyATSX?.context(el);
+    if (atsx) return { ...atsx, group: M.redact(atsx.group) };
     // Moka 的模块标题和记录容器使用哈希类名，只取模块标题，不读取记录正文。
     const block = el.closest('[class^="apply-block-"],[class*=" apply-block-"]');
     if (block) {
@@ -64,7 +68,7 @@
   // 收集当前根控件；明确指向同一列表的嵌套 combobox 只保留内部输入，避免生成两个字段。
   function controls(root = document, depth = 0) {
     if (depth > 8) return [];
-    const out = [...root.querySelectorAll('input,textarea,select,[role="combobox"],[contenteditable="true"]')];
+    const out = [...root.querySelectorAll('input,textarea,select,[role="combobox"],[contenteditable="true"]'), ...(global.LocalApplyATSX?.controls(root) || [])];
     for (const node of root.querySelectorAll('*')) if (node.shadowRoot) out.push(...controls(node.shadowRoot, depth + 1));
     return [...new Set(out)].filter((el) => {
       if (el.getAttribute('role') !== 'combobox' || el.matches('input,select,textarea,button')) return true;
@@ -103,7 +107,8 @@
       if (used.has(el)) continue;
       const compound = compounds.get(el);
       if (compound && compound.anchor !== el) continue;
-      if (compound) Object.values(compound.parts).forEach((part) => { used.add(part); if (part !== el) excluded.push({ category: 'compound_part', label: A.slot(part) || '国家区号', reason: '已归入“' + compound.label + '”复合字段' }); });
+      // ATSX 对侧端点仅用于保护，仍需独立扫描成自己的起止日期字段。
+      if (compound) Object.values(compound.parts).filter((part) => !compound.atsx || part === el).forEach((part) => { used.add(part); if (part !== el) excluded.push({ category: 'compound_part', label: A.slot(part) || '国家区号', reason: '已归入“' + compound.label + '”复合字段' }); });
       else if (A.country(el) || A.slot(el)) { excluded.push({ category: 'compound_part', label: A.slot(el) || '国家区号', reason: '未找到明确主字段，请在网页手动操作；不创建独立简历字段' }); continue; }
       const rawType = (el.getAttribute('type') || 'text').toLowerCase();
       const members = ['radio', 'checkbox'].includes(rawType) && el.name ? found.filter((node) => node.name === el.name && node.getAttribute('type') === rawType && node.closest('form,fieldset,[role="group"]') === el.closest('form,fieldset,[role="group"]')) : [el];
@@ -141,6 +146,7 @@
   function readValue(item) {
     const control = item.control || M.controlDescriptor(item.field);
     if (item.compound) return A.read(item);
+    if (global.LocalApplyATSX?.select(item.el)) return global.LocalApplyATSX.selectValue(item.el);
     if (A.dropdown(item.el)) return A.dropdownText(item.el);
     if (control.type === 'radio') return item.members.find((el) => el.checked)?.value || '';
     if (control.type === 'checkbox') return item.members.length === 1 ? item.el.checked : item.members.filter((el) => el.checked).map((el) => el.value);
@@ -167,9 +173,11 @@
 
   // 模块节点仅驻留本页；Moka 沿用原结构，语义分组只接受直接记录子项和明确的添加按钮。
   function recordStructures() {
-    const blocks = [...document.querySelectorAll('[class^="apply-block-"],[class*=" apply-block-"],fieldset,[role="group"]')];
+    const blocks = [...document.querySelectorAll('[class^="apply-block-"],[class*=" apply-block-"],fieldset,[role="group"],.createFormSection-container > div')];
     return blocks.flatMap((block) => {
       if (!block.isConnected || !block.getClientRects().length || block.closest('[hidden],[inert],[aria-hidden="true"],fieldset[disabled],[id^="wsa-"]')) return [];
+      const atsx = global.LocalApplyATSX?.records(block);
+      if (atsx) return atsx.records.some((node) => !node.getClientRects().length || node.closest('[hidden],[inert],[aria-hidden="true"]') || getComputedStyle(node).visibility === 'hidden' || node.querySelector('.resumeEditForm-item')) ? [] : [atsx];
       const moka = block.matches('[class^="apply-block-"],[class*=" apply-block-"]');
       const heading = block.querySelector(moka ? ':scope > [class^="blockTitle-"]' : ':scope > legend,:scope > h2,:scope > h3,:scope > [role="heading"]');
       const title = (moka ? heading?.querySelector('[class^="text-"]')?.textContent : heading?.textContent || block.getAttribute('aria-label'))?.trim();

@@ -148,7 +148,13 @@
     if (exact.length === 1) return { definition: exact[0], reason: '标准字段或别名精确匹配' };
     if (exact.length > 1) return null;
     // 只映射页面中含义明确的同义标题；薪资周期、最近公司等含义不明项不猜。
-    const aliases = { education: { '学校名称': 'school', '专业名称': 'major' }, employment: { '工作职责': 'employmentResponsibilities' }, internship: { '工作职责': 'internshipDescription' }, project: { '职责': 'projectRole', '项目描述': 'projectDescription' } };
+    // 泛化标题只在明确模块中解释；起止日期及描述不跨经历类型借用来源。
+    const aliases = {
+      education: { '学校名称': 'school', '专业名称': 'major', '开始日期': 'educationStartDate', '结束日期': 'graduationDate' },
+      employment: { '工作职责': 'employmentResponsibilities', '描述': 'employmentDescription', '职位名称': 'employmentPosition', '开始日期': 'employmentStartDate', '结束日期': 'employmentEndDate' },
+      internship: { '工作职责': 'internshipDescription', '描述': 'internshipDescription', '职位名称': 'internshipPosition', '开始日期': 'internshipStartDate', '结束日期': 'internshipEndDate' },
+      project: { '职责': 'projectRole', '项目描述': 'projectDescription', '描述': 'projectDescription', '开始日期': 'projectStartDate', '结束日期': 'projectEndDate' }
+    };
     const language = /英语能力|语言能力/.test(field.group) ? ({ '掌握程度': 'englishProficiency', '听说': 'englishListening', '读写': 'englishReading' })[norm] : '';
     const publicAlias = Object.entries(global.WangshenTemplates.FIELD_ALIASES).find(([, labels]) => labels.some((label) => normalize(label) === norm))?.[0];
     const alias = aliases[field.kind]?.[field.label] || language || publicAlias || ({ '出生日期年龄': 'birthDate', '自我描述': 'selfIntroduction', '所在地': 'currentCity', '现居住地址': 'currentCity' })[norm];

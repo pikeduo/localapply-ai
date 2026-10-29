@@ -59,6 +59,7 @@
         "data/fill-contract.js",
         "data/fill-result.js",
         "data/applications.js",
+        "content/atsx-controls.js",
         "content/field-adapters.js",
         "content/field-scanner.js",
         "content/fill-session.js",

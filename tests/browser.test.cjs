@@ -8,6 +8,90 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// ATSX 只借鉴已观察的 DOM 结构，真实 React 合成表单不连接招聘服务器或使用个人简历。
+test('飞书ATSX填写：搜索下拉、年月范围、空模块及多条经历', { timeout: 240000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'feishu-atsx-')); const api = await serve(); let context; let page; let frame;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    // 来源仅使用测试合成值，通过后台的现有规范命令保存。
+    const set = async (key, value, entryId = null) => rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.' + key, value, entryId } } });
+    for (const [key, value] of [['school','合成本科大学'],['degree','本科'],['major','合成计算机专业'],['educationStartDate','2020-09-15'],['graduationDate','2024-06'],['employmentCompany','合成工作公司'],['employmentPosition','合成工作岗位'],['employmentStartDate','2024-07'],['employmentEndDate','2025-01'],['employmentDescription','合成工作内容'],['internshipCompany','合成实习公司'],['internshipPosition','合成实习岗位'],['internshipStartDate','2023-07'],['internshipEndDate','2023-09'],['internshipDescription','合成实习内容'],['projectName','合成项目名称'],['projectRole','合成项目角色'],['projectStartDate','2022-01'],['projectEndDate','2022-08'],['projectDescription','合成项目内容']]) await set(key, value);
+    for (const [school, degree, start, end] of [['合成硕士大学','硕士','2024-09','2026-06'],['合成博士大学','博士','2026-09','2029-06']]) {
+      const entryId = (await rpc(options, 'localapply:command', { request: { action: 'createEntry', payload: { profileId, kind: 'education', title: '合成教育条目' } } })).result;
+      for (const [key, value] of [['school',school],['degree',degree],['major','合成' + degree + '专业'],['educationStartDate',start],['graduationDate',end]]) await set(key, value, entryId);
+    }
+    let saved = (await rpc(options, 'localapply:read')).database;
+    // 每种故障创建新页面和独立授权；通过真实卡片入口执行计划。
+    const open = async (mode = '') => {
+      if (page && !page.isClosed()) await page.close(); page = await context.newPage(); await page.goto(api.base + '/test-pages/feishu-atsx-controls.html?mode=' + mode); await page.locator('.resumeEditForm-item').waitFor();
+      const loaded = page.waitForEvent('framenavigated', { predicate: (next) => next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+      await worker.evaluate(async (url) => floatingPanel.open((await chrome.tabs.query({})).find((tab) => tab.url === url).id), page.url()); frame = await loaded; await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
+    };
+    // 等业务结束再读取后台结果，不能以候选出现或 DOM 有文字替代填写成功。
+    const fill = async () => { await frame.locator('#smartFillAll').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', null, { timeout: 90000 }); return rpc(options, 'learning:session', { sessionId: await frame.locator('#tab-smart').getAttribute('data-session-id') }); };
+    await t.test('学校/学历只生成一个 combobox，年月和模块角色完整，辅助输入与声明不成为未知字段', async () => {
+      await open(); await frame.locator('#smartScan').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      const view = await rpc(options, 'learning:session', { sessionId: await frame.locator('#tab-smart').getAttribute('data-session-id') });
+      assert.deepEqual(view.rows.map((row) => [row.field.label, row.field.type, row.field.kind]), [['学校名称','combobox','education'],['学历','combobox','education'],['专业','text','education'],['开始日期','month','education'],['结束日期','month','education']]);
+      assert.ok(view.rows.every((row) => !row.field.label.includes('合成说明'))); assert.equal(await page.evaluate(() => __atsx.choices + __atsx.dates + __atsx.adds), 0);
+    });
+    await t.test('新增两条教育及三个空经历模块，三十项均实际进入 React 状态且不串条', async () => {
+      const view = await fill(); assert.equal(view.rows.length, 30); assert.ok(view.rows.every((row) => row.status === 'success'), JSON.stringify(view.rows.filter((row) => row.status !== 'success').map((row) => ({ label: row.field.label, kind: row.field.kind, status: row.status, reason: row.reason, diagnostic: row.diagnostic }))));
+      const state = await page.evaluate(() => __atsx); assert.equal(state.adds, 5);
+      for (const [index, school, degree, start, end] of [[0,'合成本科大学','本科','2020-09','2024-06'],[1,'合成硕士大学','硕士','2024-09','2026-06'],[2,'合成博士大学','博士','2026-09','2029-06']]) {
+        assert.equal(state[`education[${index}].school`], school); assert.equal(state[`education[${index}].degree`], degree); assert.deepEqual(state[`education[${index}].period`], [start, end]);
+      }
+      assert.equal(state['career[0].company'], '合成工作公司'); assert.equal(state['career[0].desc'], '合成工作内容'); assert.deepEqual(state['career[0].period'], ['2024-07','2025-01']);
+      assert.equal(state['internship[0].desc'], '合成实习内容'); assert.equal(state['project[0].desc'], '合成项目内容'); assert.deepEqual(state['project[0].period'], ['2022-01','2022-08']);
+      await page.screenshot({ path: path.join(root, 'feishu-atsx-filled.png'), fullPage: false });
+      await fill(); assert.equal(await page.evaluate(() => __atsx.adds), 5); assert.equal(await page.locator('.resumeEditForm-item').count(), 6);
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, saved); assert.equal(state.saves, 0); assert.equal(state.submits, 0); assert.equal(api.calls.length, 0);
+    });
+    await t.test('网页已声明没有工作经历时不读工作值、不撤销声明或新增工作记录', async () => {
+      await page.locator('.noExperience-container input').check();
+      // getter 只装在合成页面，证明被保护模块不会在完成状态读取阶段访问个人值。
+      await page.locator('input[id="career[0].company"]').evaluate((node) => Object.defineProperty(node, 'value', { configurable: true, get() { throw new Error('不应读取已保护模块'); } }));
+      const view = await fill(); assert.ok(!view.rows.some((row) => row.field.kind === 'employment')); assert.equal(await page.locator('.noExperience-container input').isChecked(), true); assert.equal(await page.evaluate(() => __atsx.adds), 5);
+    });
+    // 后续故障只保留第一条教育来源，减少无关控件操作；清理仍走现有确认和恢复点机制。
+    await rpc(options, 'localapply:command', { request: { action: 'clearProfileValues', expectedRevision: saved.revision, payload: { profileId, confirmed: true } } });
+    for (const [key, value] of [['school','合成本科大学'],['degree','本科'],['major','合成计算机专业'],['educationStartDate','2020-09'],['graduationDate','2024-06']]) await set(key, value);
+    saved = (await rpc(options, 'localapply:read')).database;
+    for (const mode of ['duplicate','slow','reject']) await t.test(mode + ' 搜索候选不确定或被拒绝时不报成功，迟到列表不点选', async () => {
+      await open(mode); const view = await fill(); const row = view.rows.find((item) => item.field.label === '学校名称'); assert.notEqual(row.status, 'success');
+      await page.waitForTimeout(mode === 'slow' ? 700 : 30); const state = await page.evaluate(() => __atsx); assert.equal(state['education[0].school'], ''); if (mode !== 'reject') assert.equal(state.choices, 0); assert.equal(state.saves, 0); assert.equal(state.submits, 0);
+    });
+    for (const mode of ['prefilled','partial-date']) await t.test(mode + ' 已有内容或半填日期保留，不自动补经历或覆盖', async () => {
+      await open(mode); await fill(); assert.equal(await page.evaluate(() => __atsx.adds), 0); if (mode === 'prefilled') assert.equal(await page.locator('input[id="education[0].schoolText"]').inputValue(), '网页合成学校');
+      else assert.equal(await page.locator('.atsx-date-picker-period-month-label-year').first().textContent(), '2019');
+    });
+    await t.test('只有搜索文字尚未点候选时不当作已选，保留整条网页记录', async () => {
+      await open('query-only'); await page.locator('input[id="education[0].school"]').click(); await page.locator('input[id="education[0].school"]').fill('合成本科大学');
+      const view = await fill(); const school = view.rows.find((row) => row.field.label === '学校名称'); assert.notEqual(school.status, 'success'); assert.equal(school.webFilled, false);
+      assert.equal(await page.evaluate(() => __atsx['education[0].school']), ''); assert.equal(await page.evaluate(() => __atsx.adds), 0);
+    });
+    await t.test('年月控件收到只有年份的来源时要求补资料，不猜测月份', async () => {
+      await set('educationStartDate','2020'); await open(); const view = await fill(); const start = view.rows.find((row) => row.field.label === '开始日期'); assert.notEqual(start.status, 'success');
+      assert.equal(await page.locator('.atsx-date-picker-period-month-label-year').first().textContent(), 'YYYY'); await set('educationStartDate','2020-09'); saved = (await rpc(options, 'localapply:read')).database;
+    });
+    await t.test('查询期间关闭卡片会取消本批，迟到学校候选不再点击', async () => {
+      await open('slow'); await frame.locator('#smartFillAll').click(); await page.waitForFunction(() => document.querySelector('input[id="education[0].school"]').value === '合成本科大学');
+      await frame.locator('#panelClose').click(); await page.waitForTimeout(2600); assert.equal(await page.evaluate(() => __atsx.choices + __atsx.dates + __atsx.saves + __atsx.submits), 0);
+    });
+    for (const mode of ['duplicate-date','date-reject','mutate-peer','invalid-date']) await t.test(mode + ' 年月歧义、回退、对侧修改或校验错误不能假报成功', async () => {
+      await open(mode); const view = await fill(); const start = view.rows.find((row) => row.field.label === '开始日期'); assert.notEqual(start.status, 'success'); if (mode === 'mutate-peer') assert.equal(await page.locator('.atsx-date-picker-period-month-label-year').nth(1).textContent(), '1999');
+      if (mode === 'invalid-date') assert.equal(start.diagnostic.reasonCode, 'validation_failed');
+      assert.equal(await page.evaluate(() => __atsx.saves + __atsx.submits), 0);
+    });
+    await t.test('日志不含字段值、候选或 URL，个人库及 Schema v5 保持不变', async () => {
+      const logs = JSON.stringify(await rpc(options, 'diagnostics:read')); for (const text of ['合成本科大学','合成工作公司','合成项目内容',api.base,'2020-09']) assert.ok(!logs.includes(text));
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, saved); assert.equal(saved.schemaVersion, 5); assert.equal(api.calls.length, 0);
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 飞书公开DOM的自主合成夹具；虚拟域名由本地route直接返回，测试不请求真实招聘服务器。
 test('飞书ATSX：公开岗位识别、来源边界及资料保护', { timeout: 60000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'feishu-job-')); let context;
@@ -2023,7 +2107,7 @@ async function serve() {
       if (modelApi.chatHold) { modelApi.releaseChat = respond; modelApi.onChat?.(); } else respond();
       return;
     }
-    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js', '/test-pages/address-frameworks.js', '/test-pages/verification-frameworks.js', '/test-pages/phase6-frameworks.js'].includes(pathname)) {
+    if (['/test-pages/phase3-frameworks.js', '/test-pages/native-frameworks.js', '/test-pages/date-phone-frameworks.js', '/test-pages/dropdown-frameworks.js', '/test-pages/address-frameworks.js', '/test-pages/verification-frameworks.js', '/test-pages/phase6-frameworks.js', '/test-pages/feishu-atsx-frameworks.js'].includes(pathname)) {
       if (!frameworkBundles.has(pathname)) frameworkBundles.set(pathname, require('esbuild').build({ entryPoints: [path.join(ROOT, pathname)], bundle: true, write: false, platform: 'browser', format: 'iife', define: { 'process.env.NODE_ENV': '"production"', '__VUE_OPTIONS_API__': 'true', '__VUE_PROD_DEVTOOLS__': 'false', '__VUE_PROD_HYDRATION_MISMATCH_DETAILS__': 'false' } }));
       const output = await frameworkBundles.get(pathname); res.setHeader('Content-Type', 'application/javascript'); res.end(output.outputFiles[0].contents); return;
     }

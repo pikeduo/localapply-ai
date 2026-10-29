@@ -38,7 +38,7 @@
 
   // 只检查当前已授权控件的标准校验标记，不读取可能包含个人值的 validationMessage。
   function invalid(item) {
-    return [item.el, ...(item.members || []), ...Object.values(item.compound?.parts || {})]
+    return global.LocalApplyATSX?.invalid(item.el) || [item.el, ...(item.members || []), ...Object.values(item.compound?.parts || {})]
       .some((node) => node.validity?.valid === false || node.getAttribute('aria-invalid') === 'true');
   }
 

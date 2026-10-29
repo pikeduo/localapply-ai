@@ -41,6 +41,21 @@ async function fixture() {
     holdFill: () => { let release; fillGate = new Promise((resolve) => { release = resolve; }); return release; } };
 }
 
+// ATSX 的泛化描述和起止标题只能依赖明确模块，不得跨条或跨类型选择资料来源。
+test('飞书字段语义：起止年月和描述按模块匹配，已知字段不调用 AI', async () => {
+  const env = await fixture(); const definitions = {
+    education: [['开始日期','educationStartDate'],['结束日期','graduationDate']],
+    employment: [['描述','employmentDescription'],['职位名称','employmentPosition'],['开始日期','employmentStartDate'],['结束日期','employmentEndDate']],
+    internship: [['描述','internshipDescription'],['开始日期','internshipStartDate'],['结束日期','internshipEndDate']],
+    project: [['描述','projectDescription'],['职责','projectRole'],['开始日期','projectStartDate'],['结束日期','projectEndDate']]
+  };
+  const db = await env.repo.read(); const M = env.context.FieldMatchingEngine;
+  for (const [kind, pairs] of Object.entries(definitions)) for (const [label, key] of pairs) assert.equal(M.definitionFor(db, env.field(label, { kind, group: env.context.WangshenTemplates.RECORD_GROUPS[kind] }))?.definition.fieldId, 'builtin.' + key);
+  assert.equal(M.definitionFor(db, env.field('描述')), null); assert.equal(M.definitionFor(db, env.field('开始日期')), null);
+  await env.setValue('builtin.school','合成飞书学校'); const view = await env.scan(env.field('学校名称', { group: '教育经历', kind: 'education', type: 'combobox' }));
+  assert.equal(view.rows[0].status, 'matched'); assert.equal(view.rows[0].target.fieldId, 'builtin.school'); assert.equal(env.aiCalls.length, 0);
+});
+
 // 历史建议没有执行权限；新的选择、填写和记忆分别走原确认链路。
 test('跨网站历史建议必须手选后填写，新验证成功并确认才创建当前网站规则', async () => {
   const env = await fixture(); await env.setValue('builtin.gender', '男'); const field = env.field('合成跨站代号', { group: '个人信息' });

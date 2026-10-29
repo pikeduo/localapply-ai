@@ -17,3 +17,4 @@ node_modules/
 playwright-report/
 test-results/
 执行文档.md
+docs/

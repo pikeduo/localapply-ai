@@ -65,7 +65,7 @@
   }
 
   // 只允许可见、未禁用的候选；组件把禁用标记放在父包装时同样拒绝点击。
-  function usable(node) { return node.isConnected && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden' && !node.closest('[disabled],[aria-disabled="true"],[class*="sd-Menu-disabled-"],[class*="sd-Select-disabled-"],[class*="sd-basic-disabled-"]'); }
+  function usable(node) { return node.isConnected && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden' && !node.closest('[disabled],[aria-disabled="true"],.atsx-select-disabled,.atsx-select-dropdown-menu-item-disabled,.atsx-date-picker-disabled,[class*="sd-Menu-disabled-"],[class*="sd-Select-disabled-"],[class*="sd-basic-disabled-"]'); }
 
   // 候选必须属于该输入的显式弹层或同一个下拉容器，禁止到全页任意点击相似文字。
   function dropdownOptions(el) {
@@ -165,6 +165,7 @@
     const autocomplete = el.getAttribute('autocomplete');
     const hint = [el.getAttribute('type'), autocomplete === 'new_password' ? '' : autocomplete, el.getAttribute('name'), el.getAttribute('id'), label].join(' ');
     if (/password|captcha|one-time-code|验证码|密码|csrf|token|cc-number|cc-csc|信用卡|支付卡|登录账号|登录帐号/i.test(hint)) return { category: 'security_control', reason: '安全或登录控件，禁止采集和填写' };
+    const atsx = global.LocalApplyATSX?.exclusion(el); if (atsx) return atsx;
     const popup = el.closest('[role="dialog"],.calendar,.ant-picker-panel,.el-picker-panel');
     const owner = popup?.id ? el.getRootNode().querySelector('[aria-controls="' + CSS.escape(popup.id) + '"][aria-haspopup="dialog"]') : null;
     if (owner && (owner.readOnly || ['date','month'].includes(owner.type))) return { category: 'compound_part', reason: '绑定弹层的内部候选控件，不单独创建资料字段' };
@@ -177,7 +178,7 @@
 
   // 只在局部同一语义容器中合并；不跨整个表单或多段经历拼接日期/电话。
   function groups(nodes, labelOf) {
-    const result = new Map(); const handled = new Set();
+    const result = global.LocalApplyATSX?.groups(nodes) || new Map(); const handled = new Set(result.keys());
     // 已知年月范围按页面明确的“年/月、年/月”顺序拆为两项，绝不混合不同记录。
     const ranges = new Set(nodes.map((el) => el.closest('.month-range-select')).filter(Boolean));
     for (const container of ranges) {
@@ -277,6 +278,12 @@
     if (compound?.kind === 'address') { const parts = typeof value === 'string' ? value.split(/[/／>]/).map((part) => part.trim()) : []; return parts.length === 3 && parts.every(Boolean) ? { parts: Object.fromEntries(['province','city','district'].map((key, index) => [key, parts[index]])) } : error('分级地址需要明确的“省 / 市 / 区”，不能从自由文本猜测'); }
     const date = dateValue(value);
     if (!date) return error('日期无效或格式不明确，请核对年月日');
+    if (compound?.atsx) {
+      if (!date.month) return error('年月精度不足，不能自动补充月份');
+      const info = global.LocalApplyATSX.range(el); const peer = info && dateValue(global.LocalApplyATSX.dateText(info.ends[1 - info.index])); const desired = date.iso.slice(0, 7);
+      if (peer?.month && (info.index === 0 ? desired > peer.iso.slice(0, 7) : desired < peer.iso.slice(0, 7))) return error('日期范围开始晚于结束，未进行写入', 'failed');
+      return { value: desired, date };
+    }
     if (compound?.kind === 'date') {
       if (!date.month || (compound.parts.day && !date.day)) return error('日期精度不足，不能无依据补充月或日');
       return { parts: { year: String(date.year), month: String(date.month), ...(compound.parts.day ? { day: String(date.day) } : {}) } };
@@ -301,6 +308,7 @@
 
   // 比较复合控件中已填写的每个子项；只补空白，已有不同年月/号码必须走单项差异确认。
   function hasConflict(item, value) {
+    if (item.compound?.atsx) { const current = global.LocalApplyATSX.dateText(item.el); const next = plan(item, value); return !!current && (next.error || current !== next.value); }
     if (item.compound?.kind === 'address' && global.LocalApplyAddressControls) return global.LocalApplyAddressControls.hasConflict(item, value);
     const next = plan(item, value); if (next.error || !item.compound) return false;
     // 电话只有默认国码且号码为空时仍是空字段；保留原有国际号码填写能力。
@@ -316,6 +324,7 @@
 
   // 读取复合字段时仅访问当前授权项的成员，不把默认国码单独当成用户填写内容。
   function read(item) {
+    if (item.compound?.atsx) return global.LocalApplyATSX.dateText(item.el);
     if (item.compound?.kind === 'address' && global.LocalApplyAddressControls) return global.LocalApplyAddressControls.read(item);
     if (!item.compound) return item.el.isContentEditable ? item.el.textContent : item.el.value;
     const parts = item.compound.parts; const values = Object.fromEntries(Object.entries(parts).map(([key, el]) => {
@@ -330,6 +339,7 @@
 
   // 复读全部成员和实际日期精度；出生日期允许控件限定的年龄说明，下拉仍须有独立选中显示。
   function accepted(item, value) {
+    if (item.compound?.atsx) { const next = plan(item, value); return !next.error && global.LocalApplyATSX.dateText(item.el) === next.value; }
     if (item.compound?.kind === 'address' && global.LocalApplyAddressControls) return global.LocalApplyAddressControls.accepted(item, value);
     const next = plan(item, value); if (next.error) return false;
     if (!item.compound) {
@@ -453,6 +463,7 @@
   async function fill(item, value, lifecycle) {
     lifecycle?.check();
     const next = plan(item, value); if (next.error) return next.error;
+    if (item.compound?.atsx) return global.LocalApplyATSX.fillDate(item, next, lifecycle);
     if (!item.compound) {
       if (item.el.readOnly) return calendar(item, next, lifecycle);
       if (!lifecycle) return global.WangshenFiller.fillElement(item.el, next.value, { inputType: item.el.type });

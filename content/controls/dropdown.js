@@ -3,6 +3,7 @@
   'use strict';
   const A = global.LocalApplyFieldAdapters; const D = global.LocalApplyDropdownDOM;
   const active = new WeakMap(); const receipts = new WeakMap(); const choices = new WeakMap();
+  const trackedInputs = new WeakSet();
   const executed = new WeakSet();
 
   // 固定状态仅带白名单原因码；不把标签、编码、搜索词或原始异常带入诊断。
@@ -18,15 +19,17 @@
     const key = linkId(el); if (!key) return null; const root = el.getRootNode();
     if (root.querySelectorAll && root.querySelectorAll('#' + CSS.escape(key)).length !== 1) return null;
     const menu = root.getElementById?.(key);
-    return menu?.matches('[role="listbox"]') && menu.getAttribute('aria-multiselectable') !== 'true' ? menu : null;
+    // ATSX 的关系 ID 在菜单外包装上，仅接受其内部唯一的单选列表。
+    const lists = global.LocalApplyATSX?.select(el) && menu && !menu.matches('[role="listbox"]') ? [...menu.querySelectorAll('[role="listbox"]')] : [menu];
+    return lists.length === 1 && lists[0]?.matches('[role="listbox"]') && lists[0].getAttribute('aria-multiselectable') !== 'true' ? lists[0] : null;
   }
 
   // 输入与显示值分别观察；查询文字不会独立构成选中证据。
-  function display(el) { return A.dropdown(el) ? A.dropdownText(el) : 'value' in el ? el.value : el.textContent.trim(); }
+  function display(el) { return global.LocalApplyATSX?.select(el) ? global.LocalApplyATSX.selectValue(el) : A.dropdown(el) ? A.dropdownText(el) : 'value' in el ? el.value : el.textContent.trim(); }
   // 安全属性不随菜单开合变化；关系由 ARIA 或本次打开的唯一 portal 另行核对。
   function shape(el) { return JSON.stringify(['type', 'name', 'role', 'readonly', 'aria-disabled', 'aria-label', 'aria-autocomplete'].map((key) => el.getAttribute(key))); }
   // 仅对当前控件读取查询值及确认显示，其他个人字段不在观察范围内。
-  function observed(el) { return JSON.stringify([el.value ?? null, display(el)]); }
+  function observed(el) { return JSON.stringify([el.value ?? null, display(el), global.LocalApplyATSX?.select(el)?.input?.value ?? null]); }
   // 只允许正式候选本身及安全后代，提交/链接/输入和协议操作永不点击。
   function safe(node) {
     return D.usable(node) && !node.matches('button,input,a,[role="button"]') && !node.closest('button,a') && !node.querySelector('button,input,a,[role="button"]')
@@ -53,6 +56,14 @@
   // 同一已点选候选的确认标记及显示值都须保持；单有搜索文本/折叠状态不能冒充成功。
   function accepted(el, value, fieldId = '') {
     const expected = String(value); const saved = receipts.get(el); const actual = A.dropdown(el) ? D.selectedText(el) : display(el);
+    const atsx = global.LocalApplyATSX?.select(el);
+    if (atsx) {
+      const independent = global.LocalApplyATSX.selected(el);
+      // 自动补全没有独立显示节点：必须实际点选本次唯一候选、菜单关闭且失焦后结果持续保持。
+      if (saved && [saved.value, saved.label, saved.code].includes(expected) && [saved.label, saved.code].includes(actual)
+        && (independent || atsx.combo && el.getAttribute('aria-expanded') === 'false' && (!linked(el) || !D.usable(linked(el))))) return true;
+      return !!independent && (global.LocalApplyValueResolver?.equivalent(fieldId, independent, expected) || A.optionEqual(independent, expected));
+    }
     if (A.dropdown(el) && (actual === null || actual === '')) return false;
     if (saved && [saved.value, saved.label, saved.code].includes(expected) && [saved.label, saved.code, saved.value].includes(actual)) {
       if (A.dropdown(el)) return true;
@@ -66,6 +77,11 @@
 
   // 按下事件可直接提交 Sugar 单选；以独立显示结果证明接受，不能靠尚未登记回执或搜索文字。
   function selectedByEvent(state, saved) {
+    if (state.atsx) {
+      const text = global.LocalApplyATSX.selected(state.el);
+      return !!text && [saved.label, saved.code].includes(text) || state.atsx.combo && state.el.getAttribute('aria-expanded') === 'false'
+        && (!linked(state.el) || !D.usable(linked(state.el))) && [saved.label, saved.code].includes(display(state.el));
+    }
     if (!state.moka) return accepted(state.el, state.value, state.fieldId);
     const text = D.selectedText(state.el);
     return typeof text === 'string' && text !== '' && [saved.label, saved.code].includes(text);
@@ -88,6 +104,7 @@
     if (state.el.closest('a') || button && (button !== state.el || button.type !== 'button')) throw failure('下拉触发器包含提交或链接操作，未自动打开');
     if (!state.el.isConnected || state.el.disabled || state.el.getAttribute('aria-disabled') === 'true' || shape(state.el) !== state.shape
       || A.exclusion(state.el, state.fieldLabel)?.category === 'security_control' || observed(state.el) !== state.observed) throw failure('下拉控件或内容已变化，已停止填写', 'write_rejected', 'failed');
+    if (state.atsx && (global.LocalApplyATSX.select(state.el)?.input !== state.input || state.owner.classList.contains('atsx-select-disabled') || state.input && (shape(state.input) !== state.inputShape || state.input.disabled))) throw failure('下拉搜索入口已变化，已停止填写', 'write_rejected', 'failed');
     if (!state.moka) {
       const current = linked(state.el); const id = linkId(state.el);
       if (id !== state.linkId && !(state.committed && !id) || state.choice && current !== state.menu && !(state.committed && !current)) throw failure('下拉关联菜单已变化，请重新扫描', 'popup_not_found', 'failed');
@@ -100,18 +117,23 @@
 
   // 第一阶段仅打开并查询；fieldId 来自后台意图，不接受网页或 AI 传入策略。
   async function query(el, value, options = {}) {
-    const owner = A.dropdown(el); const state = { el, value: String(value), fieldId: options.fieldId || '', fieldLabel: options.fieldLabel || '', unit: options.unit || '', signal: options.signal,
-      lifecycle: options.lifecycle, owner, moka: !!owner, linkId: linkId(el), menu: owner ? null : linked(el), shape: shape(el), observed: observed(el), started: Date.now(), closed: false };
-    state.trace = { adapter: owner ? 'moka-dropdown' : 'aria-combobox', phase: 'open', candidateCount: 0, matchCount: 0, searchable: el.tagName === 'INPUT' && !el.readOnly && (!owner || !owner.classList.contains('select')) };
+    const moka = A.dropdown(el); const atsx = global.LocalApplyATSX?.select(el); const owner = moka || atsx?.owner; const input = atsx?.input || (el.tagName === 'INPUT' ? el : null);
+    // 后续手动查询使旧点选回执失效；监听只清标记，不读取或保存网页输入内容。
+    if (atsx && input && !trackedInputs.has(input)) { input.addEventListener('input', () => receipts.delete(el)); trackedInputs.add(input); }
+    const state = { el, value: String(value), fieldId: options.fieldId || '', fieldLabel: options.fieldLabel || '', unit: options.unit || '', signal: options.signal,
+      lifecycle: options.lifecycle, owner, atsx, input, inputShape: input ? shape(input) : '', moka: !!moka, linkId: linkId(el), menu: moka ? null : linked(el), shape: shape(el), observed: observed(el), started: Date.now(), closed: false };
+    state.trace = { adapter: moka ? 'moka-dropdown' : 'aria-combobox', phase: 'open', candidateCount: 0, matchCount: 0, searchable: !!input && !input.readOnly && (!moka || !moka.classList.contains('select')) };
     active.set(el, state); receipts.delete(el);
     try {
-      check(state, false); if (!owner && !state.linkId) throw failure('没有明确关联的 ARIA 列表，请在网页选择', 'popup_not_found');
-      el.focus(); check(state);
+      check(state, false); if (!moka && !state.linkId) throw failure('没有明确关联的 ARIA 列表，请在网页选择', 'popup_not_found');
+      (atsx && input && D.usable(input) ? input : el).focus(); check(state);
       const lifecycle = { check: () => check(state), changed: () => changed(state) };
       state.before = await D.openControl(el, false, lifecycle); check(state);
+      if (atsx) state.trace.searchable = !!input && !input.readOnly && D.usable(input);
       if (state.trace.searchable) {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, state.value);
-        el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); changed(state);
+        input.focus(); check(state);
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, state.value);
+        input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); changed(state);
       }
       return state;
     } catch (error) { state.trace.reasonCode = error?.diagnostic?.reasonCode || 'write_rejected'; if (active.get(el) === state) D.trace(el, state.trace); close(state); throw error; }
@@ -152,7 +174,12 @@
       if(!selectedByEvent(state,saved)){check(state);checkCandidate(state,saved);saved.node.click();changed(state);}
       state.committed = true;
       receipts.set(state.el, { value: state.value, label: saved.label, code: saved.code, node: saved.node });
-      await delay(60, state.signal); check(state, false); state.el.blur(); changed(state);
+      await delay(60, state.signal);
+      // ATSX 在事件结束后的 React 微任务发布显示值；只接纳本次已点候选的明确结果，不接纳任意修改。
+      if (state.atsx && accepted(state.el, state.value, state.fieldId) && (!state.input || ['', state.value, saved.label].includes(state.input.value))) {
+        state.lifecycle?.check(); state.observed = observed(state.el);
+      }
+      check(state, false); (state.atsx ? state.input || state.el : state.el).blur(); changed(state);
       state.trace.phase = 'select'; state.trace.reasonCode = 'option_selected';
       return { ok: true };
     } catch (error) { close(state); throw error; }

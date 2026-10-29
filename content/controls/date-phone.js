@@ -9,7 +9,7 @@
   function snapshot(item) {
     return Object.entries(item.compound?.parts || { value: item.el }).map(([key, node]) => ({ key, node,
       shape: JSON.stringify({ tag: node.tagName, attrs: ['type', 'name', 'min', 'max', 'readonly', 'placeholder', 'aria-label', 'aria-controls', 'aria-owns', 'aria-disabled', 'aria-readonly'].map((key) => node.getAttribute(key)), disabled: !!node.disabled }),
-      value: A.dropdown(node) ? A.dropdownText(node) : node.value,
+      value: global.LocalApplyATSX?.range(node) ? global.LocalApplyATSX.dateText(node) : A.dropdown(node) ? A.dropdownText(node) : node.value,
       options: [...(node.options || [])].map((option) => ({ node: option, value: option.value, label: option.textContent, disabled: !!option.disabled || option.getAttribute('aria-disabled') === 'true' || !!option.closest('optgroup[disabled]') })) }));
   }
 
@@ -49,7 +49,8 @@
           || (/DD/i.test(hint) ? 'day' : /YYYY[-/.]MM/i.test(hint) ? 'month' : 'unknown');
         return { operation: context.accepted(intent.value) ? 'verify-existing' : id === 'date' ? 'fill-date' : 'fill-phone', adapterState: state,
           ...(id === 'date' ? { targetPrecision } : {}),
-          targetParts: state.map(({ key }) => ({ key, handle: 'part.' + crypto.randomUUID() })) };
+          // 对侧和焦点入口仅是私有保护快照，计划仍只暴露既有 value 角色句柄。
+          targetParts: state.filter(({ key }) => !compound?.atsx || key === 'value').map(({ key }) => ({ key, handle: 'part.' + crypto.randomUUID() })) };
       },
       // 消费私有计划后复用既有事件/日历逻辑，每次动作前复核，失败不走第二路径。
       async execute(plan, context) {
@@ -64,6 +65,12 @@
           settled(node, expected) {
             guard(context, state);
             const length = { year: 4, month: 7, day: 10 }[expected?.precision]; const source = A.dateValue(context.intent.value);
+            // ATSX 只允许当前已点端点的明确年/年月投影；对侧及焦点节点继续使用原观察值。
+            if (id === 'date' && context.item.compound?.atsx && node === context.item.el && source?.month && expected?.precision === 'month'
+              && (expected.iso === source.iso.slice(0, 7) || expected.partial === true && expected.iso === String(source.year) + '-')) {
+              const row = snapshot(context.item).find((row) => row.node === node); if (row.value === expected.iso) observed.set(node, row.value);
+              return;
+            }
             if (id !== 'date' || context.item.compound || node !== context.item.el || !node.readOnly || !length || source?.iso.slice(0, length) !== expected.iso) throw F.failure('stale_context', 'failed', { guardCheck: 'date_projection' });
             const row = snapshot(context.item).find((row) => row.node === node); const actual = A.dateReadback(context.item);
             if (actual && !actual.time && actual.iso === expected.iso && actual.precision === expected.precision) observed.set(node, row.value);
