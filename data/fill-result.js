@@ -14,7 +14,8 @@
   const enums = Object.freeze({ adapter: ['moka-dropdown','native-select','aria-combobox','date','phone','address','radio','checkbox','text'],
     phase: ['plan','protect','open','options','select','write','verify'], status: ['success','failed','unsupported','needs_confirmation'],
     part: ['year','month','day','country','number','province','city','district'], controlType: ['text','textarea','email','tel','number','url','date','month','datetime-local','select','radio','checkbox','combobox','contenteditable'],
-    fieldKind: ['education','employment','internship','project','award','family','certificate','paper'], popupRelation: ['aria','portal','local','none'] });
+    fieldKind: ['education','employment','internship','project','award','family','certificate','paper'], popupRelation: ['aria','portal','local','none'],
+    guardCheck: ['context','members','attributes','safety','value','date_projection'] }); // 固定保护检查名称，不记录变化前后内容。
 
   // 只投影固定枚举/数字/布尔；网页文字、错误正文、来源与计划一律丢弃。
   function trace(detail) {

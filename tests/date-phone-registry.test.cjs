@@ -91,11 +91,15 @@ test('静态禁用/重复选项和只读子项在写入前拒绝，不产生半�
   }
 });
 
+// 失败检查必须可区分，同时保留停止后续写入和已完成值不回滚的行为。
 test('取消、授权撤销或其他子项变化后不再写下一项，不清理已完成网页值', async () => {
-  for (const mode of ['cancel', 'revoke', 'change']) {
+  for (const mode of ['cancel', 'revoke', 'change', 'attributes']) {
     const env = fixture('split'); const controller = new AbortController(); const { year, month } = env.item.compound.parts;
-    year.onChange = () => { if (mode === 'cancel') controller.abort(); if (mode === 'revoke') env.revoke(); if (mode === 'change') month.value = '网页手填'; };
-    assert.equal((await env.fill({ signal: controller.signal })).status, 'failed'); assert.equal(env.writes(), 1); assert.equal(year.value, 'year2028'); assert.equal(month.value, mode === 'change' ? '网页手填' : ''); assert.equal(env.marks(), 0);
+    year.onChange = () => { if (mode === 'cancel') controller.abort(); if (mode === 'revoke') env.revoke(); if (mode === 'change') month.value = '网页手填'; if (mode === 'attributes') month.attrs.placeholder = 'synthetic-private'; };
+    const result = await env.fill({ signal: controller.signal }); assert.equal(result.status, 'failed');
+    if (mode !== 'cancel') assert.equal(result.diagnostic.guardCheck, { revoke: 'context', change: 'value', attributes: 'attributes' }[mode]);
+    assert.ok(!JSON.stringify(result).includes('synthetic-private'));
+    assert.equal(env.writes(), 1); assert.equal(year.value, 'year2028'); assert.equal(month.value, mode === 'change' ? '网页手填' : ''); assert.equal(env.marks(), 0);
   }
 });
 

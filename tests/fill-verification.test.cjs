@@ -93,6 +93,8 @@ test('全部十种固定适配器拒绝未执行计划的验证，不因节点�
 test('新旧原因码均通过原诊断管线落盘，重建后可读，原值/计划/异常不进入日志', async () => {
   const env=fixture(); const disk={}; const storage={get:async(key)=>({[key]:structuredClone(disk[key])}),set:async(value)=>Object.assign(disk,structuredClone(value))}; const D=env.scope.LocalApplyDiagnostics;
   env.scope.crypto=require('node:crypto').webcrypto; const log=D.create(storage);
-  for(const reasonCode of Object.keys(env.F.REASONS)) await log.append('learning.fill',{fill:{reasonCode,status:'failed',value:'synthetic-secret',intent:'intent.secret',reason:'external-secret'}});
+  for(const reasonCode of Object.keys(env.F.REASONS)) await log.append('learning.fill',{fill:{reasonCode,status:'failed',guardCheck:'attributes',value:'synthetic-secret',intent:'intent.secret',reason:'external-secret'}});
   const {rows}=await D.create(storage).read(); assert.equal(rows.length,Object.keys(env.F.REASONS).length); assert.ok(rows.some((row)=>row.fill.reasonCode==='validation_failed')); assert.ok(!JSON.stringify(rows).includes('secret'));
+  assert.ok(rows.every((row) => row.fill.guardCheck === 'attributes'));
+  assert.equal(env.F.trace({ guardCheck: 'synthetic-private-value' }).guardCheck, undefined);
 });

@@ -4,6 +4,8 @@
   const $ = (id) => document.getElementById(id);
   const directFill = document.body.dataset.fillMode === 'direct';
   const labels = { matched: '已匹配', needs_confirmation: '需要确认', missing_value: '缺少资料', filling: '正在填写', success: '填写成功', failed: '填写失败', unsupported: '控件暂不支持' };
+  // 仅展示固定保护检查说明，绝不拼入属性、日期或原始异常。
+  const guardLabels = Object.freeze({ context: '页面、授权或扫描绑定已变化', members: '日期或电话的子控件已变化', attributes: '控件属性已变化', safety: '控件已断开、禁用或受到保护', value: '交互期间输入框内容发生变化', date_projection: '日期来源或目标精度不一致' });
   let current = null; let aiPreview = null; let fillIds = []; let busy = false; let rulesView = null; let selectionInitialized = false;
   let generation = 0; let polling = false; let activity = 0; let pageActive = true;
   let activeFill = null;
@@ -154,7 +156,7 @@
     $('smartFillPayload').textContent = JSON.stringify(current.rows.filter((row) => fillIds.includes(row.field.scanId)).map((row) => ({ 网页字段: row.field.label, 分组: row.field.group, 来源: current.sources.find((source) => source.fieldId === row.target.fieldId && source.entryId === row.target.entryId)?.label, 实际值: row.value })), null, 2);
     $('smartFillConsent').checked = false; $('smartRememberAfter').checked = false; $('smartFillReview').hidden = false;
   }
-  // 渲染每个状态及确认入口，任何模型建议都不会直接生成点击网页的行为。
+  // 渲染状态、固定保护诊断及确认入口，模型建议不直接生成网页点击。
   function render() {
     $('smartMatched').replaceChildren(); $('smartUnknown').replaceChildren();
     let excluded = $('smartExcluded');
@@ -180,7 +182,12 @@
       const title = node('h4', row.field.label + ' · ' + (directFill && row.status === 'needs_confirmation' ? '待处理' : labels[row.status])); const check = node('input'); check.type = 'checkbox'; check.className = 'smart-check'; check.setAttribute('aria-label', '选择填写' + row.field.label); check.checked = selected.has(row.field.scanId); check.disabled = !row.target || ['unsupported','missing_value'].includes(row.status);
       check.addEventListener('change', () => check.checked ? selected.add(row.field.scanId) : selected.delete(row.field.scanId)); const heading = node('div', '', 'smart-row-heading'); heading.append(check, title); card.append(heading, node('p', [row.field.group, row.field.type, directFill ? row.reason.replace('填写前仍需确认', '可直接填写') : row.reason].filter(Boolean).join(' · '), 'muted'));
       // 固定原因和扫描序号可与导出日志对照，不显示候选内容或网页实际值。
-      if (row.diagnostic?.message && row.status !== 'success') card.append(node('p', `诊断 #${row.diagnostic.fieldNumber}：${row.diagnostic.message}`, 'muted'));
+      if (row.diagnostic?.message && row.status !== 'success') {
+        card.append(node('p', `诊断 #${row.diagnostic.fieldNumber}：${row.diagnostic.message}`, 'muted'));
+        const check = row.diagnostic.guardCheck;
+        if (Object.hasOwn(guardLabels, check)) card.append(node('p', `保护检查：${guardLabels[check]}（${check}）`, 'muted smart-guard'));
+        else if (row.diagnostic.reasonCode === 'stale_context') card.append(node('p', '未收到具体保护检查；请重新加载扩展并刷新招聘页后重试，在“运行日志与错误诊断”中查看本次记录。', 'muted smart-guard'));
+      }
       card.append(sourceSelect(row, async (source) => { selected.add(row.field.scanId); update(await request('select', { scanId: row.field.scanId, fieldId: source.fieldId, entryId: source.entryId })); }));
       if (!row.target && row.status !== 'unsupported') {
         const aiLabel = node('label'); const aiCheck = node('input'); aiCheck.type = 'checkbox'; aiCheck.className = 'smart-ai-check'; aiCheck.checked = aiSelected.has(row.field.scanId);
