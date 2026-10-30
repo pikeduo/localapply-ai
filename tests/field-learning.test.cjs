@@ -107,13 +107,13 @@ test('AI辅助填写：缺少内容或资料变化拒绝采用，不创建新字
   assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
 });
 
-// 同名字段可共享定义，模型sourceRef不能代替本会话的整条经历绑定。
-test('AI辅助填写：多段项目拒绝模型自行配对，明确记录绑定后才可采用', async () => {
+// 同名字段共享语义，模型总选首条时也只能使用本会话已绑定的各条经历。
+test('AI辅助填写：多段项目拒绝模型自行配对，绑定后分别预览并填写各条角色', async () => {
   const env = await fixture(); await env.setValue('builtin.projectRole','合成首条项目角色');
   const entryId = (await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'project',title:'合成第二条项目'}})).result;
   await env.setValue('builtin.projectRole','合成第二条项目角色',entryId);
   const fields = [0,1].map((index)=>env.field('合成项目定位',{kind:'project',group:'项目经历',index}));
-  env.recordBlocks([{blockId:'scan.projects',kind:'project',canAdd:false,records:fields.map((field,index)=>({recordId:'scan.project'+index,scanIds:[field.scanId]}))}]);
+  const blocks=[{blockId:'scan.projects',kind:'project',canAdd:false,records:fields.map((field,index)=>({recordId:'scan.project'+index,scanIds:[field.scanId]}))}]; env.recordBlocks(blocks);
   let view = await env.scan(...fields);
   env.response((request)=>JSON.stringify(suggestion(JSON.parse(request.messages[1].content),'builtin.projectRole')));
   let ai = await env.send(view,'prepareAI',{scanIds:[fields[0].scanId]}); view=await env.send(view,'recognize',{token:ai.token,confirmed:true});
@@ -121,6 +121,41 @@ test('AI辅助填写：多段项目拒绝模型自行配对，明确记录绑定
   view=await env.send(view,'prepareRecords',{confirmed:true});
   const preview=await env.send(view,'previewSuggestion',{scanId:fields[0].scanId}); assert.equal(preview.value,'合成首条项目角色');
   view=await env.send(view,'acceptSuggestion',{scanId:fields[0].scanId,token:preview.token,confirmed:true}); assert.equal(view.rows[0].target.entryId,null);
+  view=await env.send(view,'fill',{scanId:fields[0].scanId,confirmed:true}); assert.equal(env.calls.at(-1).value,'合成首条项目角色');
+  ai=await env.send(view,'prepareAI',{scanIds:[fields[1].scanId]}); view=await env.send(view,'recognize',{token:ai.token,confirmed:true});
+  assert.equal(view.rows[1].suggestion.sourceRef,view.sources.find((source)=>source.fieldId==='builtin.projectRole'&&source.entryId===null).ref);
+  let second=await env.send(view,'previewSuggestion',{scanId:fields[1].scanId}); assert.equal(second.value,'合成第二条项目角色');
+  env.recordBlocks([{...blocks[0],records:blocks[0].records.map((record,index)=>({...record,scanIds:[fields[1-index].scanId]}))}]);
+  await assert.rejects(env.send(view,'acceptSuggestion',{scanId:fields[1].scanId,token:second.token,confirmed:true}),/建议或资料已变化/);
+  env.recordBlocks(blocks); second=await env.send(view,'previewSuggestion',{scanId:fields[1].scanId});
+  view=await env.send(view,'acceptSuggestion',{scanId:fields[1].scanId,token:second.token,confirmed:true}); assert.equal(view.rows[1].target.entryId,entryId);
+  view=await env.send(view,'fill',{scanId:fields[1].scanId,confirmed:true}); assert.equal(view.rows[1].status,'success'); assert.equal(env.calls.at(-1).value,'合成第二条项目角色');
+});
+
+// 唯一有值的附加经历可供确认；空首条模板不应被当成第二个可靠来源。
+test('AI辅助填写：唯一附加项目不被空首条模板阻止', async () => {
+  const env=await fixture(); const entryId=(await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'project',title:'合成唯一项目'}})).result;
+  await env.setValue('builtin.projectRole','合成唯一项目角色',entryId); const field=env.field('合成项目定位',{kind:'project',group:'项目经历'});
+  env.recordBlocks([{blockId:'scan.projects',kind:'project',canAdd:false,records:[{recordId:'scan.project',scanIds:[field.scanId]}]}]);
+  let view=await env.scan(field); env.response((request)=>JSON.stringify(suggestion(JSON.parse(request.messages[1].content),'builtin.projectRole')));
+  const ai=await env.send(view,'prepareAI'); view=await env.send(view,'recognize',{token:ai.token,confirmed:true});
+  const preview=await env.send(view,'previewSuggestion',{scanId:field.scanId}); assert.equal(preview.value,'合成唯一项目角色');
+  view=await env.send(view,'acceptSuggestion',{scanId:field.scanId,token:preview.token,confirmed:true}); assert.equal(view.rows[0].target.entryId,entryId);
+  view=await env.send(view,'fill',{scanId:field.scanId,confirmed:true}); assert.equal(view.rows[0].status,'success'); assert.equal(env.calls.at(-1).value,'合成唯一项目角色');
+});
+
+// 当前绑定没有角色内容时，不能借用AI引用的另一条项目角色补空。
+test('AI辅助填写：绑定记录缺值时不借用其他项目内容', async () => {
+  const env=await fixture(); await env.setValue('builtin.projectRole','合成首条角色');
+  const entryId=(await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'project',title:'合成缺值项目'}})).result;
+  await env.setValue('builtin.projectName','合成第二条名称',entryId);
+  const fields=[0,1].map((index)=>env.field('合成项目定位',{kind:'project',group:'项目经历',index}));
+  env.recordBlocks([{blockId:'scan.projects',kind:'project',canAdd:false,records:fields.map((field,index)=>({recordId:'scan.project'+index,scanIds:[field.scanId]}))}]);
+  let view=await env.scan(...fields); view=await env.send(view,'prepareRecords',{confirmed:true});
+  env.response((request)=>JSON.stringify(suggestion(JSON.parse(request.messages[1].content),'builtin.projectRole')));
+  const ai=await env.send(view,'prepareAI',{scanIds:[fields[1].scanId]}); view=await env.send(view,'recognize',{token:ai.token,confirmed:true});
+  await assert.rejects(env.send(view,'previewSuggestion',{scanId:fields[1].scanId}),/来源不唯一|没有.*内容/);
+  assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
 });
 
 // 唯一来源仍须满足明确学历角色，不能把硕士学校填进本科或第一学历位置。

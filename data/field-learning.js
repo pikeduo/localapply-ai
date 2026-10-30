@@ -167,7 +167,7 @@
       const found = item.sources.find((source) => source.fieldId === fieldId && source.entryId === (entryId || null));
       check(found, '请选择当前档案已有的字段来源'); return { fieldId, entryId: entryId || null };
     }
-    // AI只推荐语义；实际值和经历归属由本地重新核对，不按模型给出的序号跨条选取。
+    // AI只推荐字段语义；已绑定经历决定实际来源，模型引用不能改配或阻止正确的本地配对。
     function suggestedSource(item, db, row) {
       const suggestion = row.suggestion;
       check(!row.ignored && !row.target && suggestion?.existingFieldId && !suggestion.definition && !['skip_non_resume_control', 'needs_user_choice'].includes(suggestion.action), '此建议没有可填写的已有字段，请在网页手动填写');
@@ -177,15 +177,19 @@
       let choices = item.sources.filter((source) => source.fieldId === suggestion.existingFieldId);
       const block = (item.recordBlocks || []).find((block) => block.records.some((record) => record.scanIds.includes(row.field.scanId)));
       const record = block?.records.find((record) => record.scanIds.includes(row.field.scanId));
-      if (kind && record && Object.hasOwn(item.recordBindings || {}, record.recordId)) choices = choices.filter((source) => source.entryId === item.recordBindings[record.recordId]);
+      const bound = !!(kind && record && Object.hasOwn(item.recordBindings || {}, record.recordId));
+      if (bound) choices = choices.filter((source) => source.entryId === item.recordBindings[record.recordId]);
       else if (kind) {
         const localEntries = [null, ...db.entries.filter((entry) => entry.profileId === item.profileId && entry.kind === kind).map((entry) => entry.entryId)]
           .filter((entryId) => db.fieldValues.some((value) => value.profileId === item.profileId && value.entryId === entryId && M.hasValue(value.value) && global.WangshenTemplates.recordKind(db.fieldDefinitions.find((def) => def.fieldId === value.fieldId)?.group || '') === kind));
         check(localEntries.length <= 1 && (!block || block.records.length === 1) && !record?.scanIds.some((id) => item.rows.find((row) => row.field.scanId === id)?.webOccupied), '多段或已填写经历尚未绑定，AI不能代替选择对应记录，请在网页手动填写');
+        // 唯一经历仍须预览确认，空首条模板不能制造重复来源，也不能替缺值记录借用内容。
+        if (localEntries.length === 1) choices = choices.filter((source) => source.entryId === localEntries[0]);
       }
       // 即使模型只返回一个sourceRef，也不能将未绑定的多段来源冒充唯一来源。
       check(choices.length === 1, 'AI建议的资料来源不唯一，请在网页手动填写');
-      const source = choices[0]; check(!suggestion.sourceRef || source.ref === suggestion.sourceRef, 'AI建议与当前经历绑定不一致，请重新识别');
+      // sourceRef已校验为同字段引用；有独立记录绑定时只取该条，未绑定时仍须一致且唯一。
+      const source = choices[0]; check(bound || !suggestion.sourceRef || source.ref === suggestion.sourceRef, 'AI建议与当前资料来源不一致，请重新识别');
       check(M.sourceRole(db, item.profileId, source, row.field.degree || ''), 'AI建议的学历来源与网页要求不符，请在网页手动填写');
       check(source.hasValue, '本地没有该字段的内容，请在网页手动填写；AI不会编造个人资料');
       const rule = db.mappingRules.find((rule) => rule.profileId === item.profileId && rule.origin === item.origin && rule.semanticId === row.field.semanticId && rule.features && JSON.stringify(M.features(rule.features)) === JSON.stringify(M.features(row.field)));

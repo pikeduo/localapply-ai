@@ -53,6 +53,61 @@ test('悬浮AI辅助填写：就近识别、建议确认、控件填写及缺值
   } finally {if(context)await context.close();await new Promise((resolve)=>api.server.close(resolve));await fs.rm(profile,{recursive:true,force:true,maxRetries:3});}
 });
 
+// 真实React重复项目复现AI总引用首条的情况，实际填写必须遵从本地整条绑定。
+test('飞书AI建议填写：多段项目角色按当前记录落地且不覆盖', { timeout: 90000 }, async (t) => {
+  const root=path.join(ROOT,'.browser-tests'); await fs.mkdir(root,{recursive:true}); const profile=await fs.mkdtemp(path.join(root,'ai-project-role-')); const api=await serve(); let context;
+  try {
+    context=await launch(profile); context.setDefaultTimeout(10000); const {worker,extensionId}=await extension(context);
+    const options=await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+    const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
+    const roles=['合成第一条项目角色','合成第二条项目角色','合成第三条项目角色'];
+    for (let index=0;index<roles.length;index++) {
+      const entryId=index ? (await rpc(options,'localapply:command',{request:{action:'createEntry',payload:{profileId,kind:'project',title:'合成项目'+index}}})).result : null;
+      for (const [fieldId,value] of [['builtin.projectName','合成项目名称'+index],['builtin.projectDescription','合成项目描述'+index],['builtin.projectRole',roles[index]]]) await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId,entryId,value}}});
+    }
+    await workspacePage(options,'aiSettings'); await options.locator('#provider').fill(api.base+'/v1'); await options.locator('#provider').press('Enter'); await options.evaluate(()=>flushSaves());
+    await options.locator('#apiKey').fill('synthetic-project-role-key'); await options.locator('#saveKey').click(); await options.evaluate(()=>flushCredentials());
+    await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-project-role'); await options.locator('#model').press('Tab'); await options.evaluate(()=>flushSaves());
+    const before=(await rpc(options,'localapply:read')).database;
+    // 模型只能理解字段语义，故意为三项返回同一首条引用，不能决定它们的记录归属。
+    api.modelApi.fieldReply=(payload)=>JSON.stringify({suggestions:payload.fields.map((field)=>({scanId:field.scanId,existingFieldId:'builtin.projectRole',definition:null,sourceRef:payload.sources.find((source)=>source.fieldId==='builtin.projectRole'&&source.hasValue).ref,confidence:0.99}))});
+    const page=await context.newPage(); await page.goto(api.base+'/test-pages/feishu-atsx-controls.html?mode=ai-roles'); await page.locator('.resumeEditForm-item').waitFor();
+    const loaded=page.waitForEvent('framenavigated',{predicate:(frame)=>frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});
+    await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url()); const frame=await loaded; await frame.locator('#profileSel option').first().waitFor({state:'attached'});
+    // 通过产品入口取业务屏障及结果，不直接指定页面来源或跳过建议确认。
+    const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+    const view=()=>frame.evaluate(()=>sendMessage('learning:session',{sessionId:document.getElementById('tab-smart').dataset.sessionId}));
+    const card=(scanId)=>frame.locator(`.smart-row[data-scan-id="${scanId}"]`);
+    await frame.locator('#smartFillAll').click(); await idle();
+    const pending=(await view()).rows.filter((row)=>row.field.label==='项目角色');
+    await t.test('本地填写自动补三条项目，未知角色不填且不调用AI',async()=>{
+      assert.equal(pending.length,3); assert.ok(pending.every((row)=>!row.target)); assert.equal(api.calls.filter((call)=>call.fieldAI).length,0);
+      const state=await page.evaluate(()=>__atsx); assert.equal(state.adds,3);
+      for (let index=0;index<3;index++) { assert.equal(state[`project[${index}].name`],'合成项目名称'+index); assert.equal(state[`project[${index}].role`],''); }
+    });
+    await t.test('AI建议不直接写入，确认后分别填写三条项目的React状态',async()=>{
+      for (const row of pending) await card(row.field.scanId).locator('.smart-ai-check').check();
+      await frame.locator('#smartAI').click(); await idle(); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await idle();
+      const suggested=(await view()).rows.filter((row)=>row.field.label==='项目角色'); assert.equal(new Set(suggested.map((row)=>row.suggestion?.sourceRef)).size,1); assert.ok(suggested.every((row)=>row.suggestion));
+      page.once('dialog',(dialog)=>dialog.dismiss()); await card(pending[0].field.scanId).locator('.smart-apply-suggestion').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'');
+      await page.screenshot({path:path.join(root,'ai-project-role-suggestions.png')});
+      for (let index=0;index<3;index++) {
+        let message=''; page.once('dialog',(dialog)=>{message=dialog.message(); return dialog.accept();});
+        await card(pending[index].field.scanId).locator('.smart-apply-suggestion').click(); await idle();
+        assert.ok(message.includes(roles[index]),message); assert.equal(await page.evaluate((index)=>__atsx[`project[${index}].role`],index),roles[index],await frame.locator('#smartStatus').textContent());
+        assert.equal((await view()).rows.find((row)=>row.field.scanId===pending[index].field.scanId).status,'success');
+      }
+      await page.locator('input[id="project[1].role"]').scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(root,'ai-project-role-filled.png')});
+    });
+    await t.test('再次自动填保留网页已有内容，资料零修改且不提交不泄漏',async()=>{
+      await page.locator('input[id="project[1].role"]').fill('网页已改角色'); await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['project[1].role']),'网页已改角色');
+      assert.deepEqual((await rpc(options,'localapply:read')).database,before); assert.equal(await page.evaluate(()=>__atsx.saves+__atsx.submits),0); assert.equal(api.calls.filter((call)=>call.fieldAI).length,1);
+      const logs=JSON.stringify(await rpc(options,'diagnostics:read')); const sent=JSON.stringify(api.calls.filter((call)=>call.fieldAI));
+      for (const secret of [...roles,'synthetic-project-role-key']) { assert.ok(!logs.includes(secret)); if (secret!=='synthetic-project-role-key') assert.ok(!sent.includes(secret)); }
+    });
+  } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
+});
+
 // 使用隔离资料和真实标签激活，验证返回原页及过期卡片的按钮恢复，不访问招聘服务器。
 test('卡片切页恢复：重复填写、编辑、折叠关闭与过期续期', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'panel-return-')); const api = await serve(); let context;

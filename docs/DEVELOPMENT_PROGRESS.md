@@ -1,7 +1,14 @@
 # localapply-ai｜开发进度与阶段验收记录
 
-> **文档版本：** v2.58
+> **文档版本：** v2.59
 > **更新日期：** 2026-10-30
+
+> **AI建议能够识别但无法填写（2026-10-30）：** 复现多段项目中模型推荐正确字段、却引用首条来源时，旧 `suggestedSource` 会把模型引用与当前经历绑定不一致当成错误，阻止第二/第三条填写。改为语义采用已校验字段建议、实际值按本会话独立校验的整条记录绑定解析；模型不能重新分配记录。另复现唯一附加项目有值、空首条模板造成虚假来源重复，现只在唯一实际经历及空白单槽的原保护条件下排除占位。没有绑定的多段、当前条缺值、明确学历冲突、预览后成员换条仍拒绝，不借用其他经历内容，不放宽确认令牌或网页非空保护。
+>
+> **验证：** 定向基础 **102/102**、相关Playwright **31/31**，均0失败/取消/跳过。新增真实React三条项目夹具，自动增补后由Mock AI对三项故意返回同一首条引用；取消采用不写，逐项核对内容并确认后三条分别进入正确React状态且回读成功，再次自动填保留网页手改内容。验证资料库零写入、保存/提交计数零、模型元数据及诊断无个人值；保留飞书搜索/日期/多记录及集中学习重启回归。最后只调整截图定位，新增场景再验 **4/4**，为上述31项子集，不累加。未运行完整历史套件、未请求真实模型或操作真实登录页，线上效果需重载扩展并刷新后用户复验。
+>
+> **命令与产物：** `node --test --test-reporter=tap tests/field-learning.test.cjs tests/field-catalog-budget.test.cjs tests/fill-contract.test.cjs tests/mapping-compat.test.cjs`；`node --test --test-reporter=tap --test-timeout=240000 --test-name-pattern='飞书AI建议填写|悬浮AI辅助填写|飞书ATSX填写|待处理字段集中学习' tests/browser.test.cjs`。日志 `.browser-tests/ai-project-role-unit.log`、`ai-project-role-regression.log`、`ai-project-role-final.log`；截图 `.browser-tests/ai-project-role-suggestions.png`、`ai-project-role-filled.png`。Schema v5、原有确认/本地学习流程不变，本轮不推进后续阶段。
+>
 
 > **AI建议辅助填写闭环（2026-10-30）：** 原悬浮处理区勾选仅加入AI清单，且直填分支没有采用已有字段建议的入口。新增字段旁“AI识别此字段”、批量已选数量、发送预览自动定位，以及“查看建议并填写”。勾选不联网；用户先确认接收方/脱敏元数据，再核对本地拟填内容，确认后走原FillIntent/FillPlan及控件回读，不提交申请、不修改资料或自动保存映射。缺值、新字段和不确定建议仍提示网页手填，左上角统一学习流程不变，不恢复本地来源选择或资料编辑器。
 >
