@@ -8,6 +8,51 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// AI只返回合成字段引用；通过真实卡片验证发送确认和建议采用均不可跳过。
+test('悬浮AI辅助填写：就近识别、建议确认、控件填写及缺值保护', { timeout: 90000 }, async (t) => {
+  const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'ai-assist-'));const api=await serve();let context;
+  try {
+    context=await launch(profile);context.setDefaultTimeout(10000);const {worker,extensionId}=await extension(context);
+    const options=await context.newPage();await options.goto(`chrome-extension://${extensionId}/options/options.html`);await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+    const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
+    for(const [fieldId,value] of [['builtin.phone','13800000000'],['builtin.gender','男']]) await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId,value}}});
+    await workspacePage(options,'aiSettings');await options.locator('#provider').fill(api.base+'/v1');await options.locator('#provider').press('Enter');await options.evaluate(()=>flushSaves());
+    await options.locator('#apiKey').fill('synthetic-ai-assist-key');await options.locator('#saveKey').click();await options.evaluate(()=>flushCredentials());
+    await options.locator('#manualModel').check();await options.locator('#model').fill('synthetic-ai-assist');await options.locator('#model').press('Tab');await options.evaluate(()=>flushSaves());
+    const page=await context.newPage();await page.goto(api.base+'/test-pages/phase5-job.html');
+    await page.evaluate(()=>{const block=document.createElement('section');block.innerHTML='<label>便捷联系号码<input id="assist-phone"></label><div><label for="assist-select">合成选项偏好</label><select id="assist-select"><option value="">请选择</option><option value="M">男</option><option value="F">女</option></select></div><label>合成缺资料代号<input id="assist-missing"></label><label>合成新字段代号<input id="assist-new"></label>';document.getElementById('jobApplication').prepend(block);});
+    api.modelApi.fieldReply=(payload)=>JSON.stringify({suggestions:payload.fields.map((field)=>{const fieldId=field.label==='便捷联系号码'?'builtin.phone':field.label==='合成选项偏好'?'builtin.gender':field.label==='合成缺资料代号'?'builtin.birthplace':null;return {scanId:field.scanId,existingFieldId:fieldId,definition:fieldId?null:{label:'合成新增定义',type:'text',group:'其他',aliases:[],options:[]},sourceRef:payload.sources.find((source)=>source.fieldId===fieldId&&source.hasValue)?.ref||null,confidence:0.99};})});
+    const loaded=page.waitForEvent('framenavigated',{predicate:(frame)=>frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});
+    await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url());const frame=await loaded;await frame.locator('#profileSel option').first().waitFor({state:'attached'});
+    const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+    const card=(label)=>frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:label})});
+    // 每次发送仍通过接收方/元数据确认，不让测试直接设置采用目标或调用付费模型。
+    async function identify(label){await card(label).locator('.smart-ai-start').click();await idle();await frame.locator('#smartAIConsent').check();await frame.locator('#smartAISend').click();await idle();assert.match(await frame.locator('#smartStatus').textContent(),/^AI 返回 [0-9]+ 条/,await card(label).textContent());}
+    await frame.locator('#smartScan').click();await idle();const before=(await rpc(options,'localapply:read')).database;
+    await t.test('勾选仅建立清单，就近入口展开预览，取消不调用模型',async()=>{
+      await card('便捷联系号码').locator('.smart-ai-check').check();assert.match(await frame.locator('#smartAI').textContent(),/（1）/);assert.equal(api.calls.filter((call)=>call.fieldAI).length,0);
+      await card('便捷联系号码').locator('.smart-ai-start').click();await idle();assert.equal(await frame.locator('#smartAIReview').isVisible(),true);
+      assert.ok(!(await frame.locator('#smartAIPayload').textContent()).includes('13800000000'));await frame.locator('#smartAICancel').click();await idle();assert.equal(api.calls.filter((call)=>call.fieldAI).length,0);
+    });
+    await t.test('AI返回后仍不填写，取消采用无变化，确认后真实填写并验证',async()=>{
+      await identify('便捷联系号码');assert.equal(await page.locator('#assist-phone').inputValue(),'');assert.ok((await card('便捷联系号码').textContent()).includes('AI 建议：'));
+      page.once('dialog',(dialog)=>dialog.dismiss());await card('便捷联系号码').locator('.smart-apply-suggestion').click();await idle();assert.equal(await page.locator('#assist-phone').inputValue(),'');assert.deepEqual((await rpc(options,'localapply:read')).database,before);
+      await page.screenshot({path:path.join(root,'ai-assist-suggestion.png')});
+      page.once('dialog',(dialog)=>dialog.accept());await card('便捷联系号码').locator('.smart-apply-suggestion').click();await idle();assert.equal(await page.locator('#assist-phone').inputValue(),'13800000000');
+      const view=await frame.evaluate(()=>sendMessage('learning:session',{sessionId:document.getElementById('tab-smart').dataset.sessionId}));assert.equal(view.rows.find((row)=>row.field.label==='便捷联系号码').status,'success');
+    });
+    await t.test('已有资料建议复用原生下拉，缺值及新字段只提示手填',async()=>{
+      await identify('合成选项偏好');assert.equal(await card('合成选项偏好').locator('.smart-apply-suggestion').count(),1,await card('合成选项偏好').textContent());page.once('dialog',(dialog)=>dialog.accept());await card('合成选项偏好').locator('.smart-apply-suggestion').click();await idle();assert.equal(await page.locator('#assist-select').inputValue(),'M');
+      await identify('合成缺资料代号');assert.ok((await card('合成缺资料代号').textContent()).includes('本地没有该字段的内容'));assert.equal(await card('合成缺资料代号').locator('.smart-apply-suggestion').count(),0);
+      await identify('合成新字段代号');assert.equal(await card('合成新字段代号').locator('.smart-apply-suggestion').count(),0);assert.equal(await page.locator('#assist-missing').inputValue(),'');assert.equal(await page.locator('#assist-new').inputValue(),'');
+      assert.equal(await frame.locator('.smart-source,.smart-editor').count(),0);assert.deepEqual((await rpc(options,'localapply:read')).database,before);
+      assert.equal(await page.evaluate(()=>__stage5Submissions),0);const logs=JSON.stringify(await rpc(options,'diagnostics:read'));for(const secret of ['13800000000','synthetic-ai-assist-key'])assert.ok(!logs.includes(secret));
+      for(const request of api.calls.filter((call)=>call.fieldAI))assert.ok(!JSON.stringify(request).includes('13800000000'));
+      await page.screenshot({path:path.join(root,'ai-assist-filled.png')});
+    });
+  } finally {if(context)await context.close();await new Promise((resolve)=>api.server.close(resolve));await fs.rm(profile,{recursive:true,force:true,maxRetries:3});}
+});
+
 // 使用隔离资料和真实标签激活，验证返回原页及过期卡片的按钮恢复，不访问招聘服务器。
 test('卡片切页恢复：重复填写、编辑、折叠关闭与过期续期', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'panel-return-')); const api = await serve(); let context;

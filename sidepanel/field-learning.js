@@ -22,7 +22,29 @@
     const labelOf = (item) => { const options = row.field.options.filter((option) => option.value === String(item)); return options.length === 1 ? options[0].text : item; };
     return display(Array.isArray(value) ? value.map(labelOf) : labelOf(value));
   }
-  // 悬浮处理区只提供真实控件定位、单项读取和忽略，保留网页本来的下拉及日历交互。
+  // 勾选只建立本次AI清单；明确展示下一步入口，不将勾选本身当成付费调用授权。
+  function syncAISelection() {
+    if (!directFill) return;
+    const count = current?.rows.filter((row) => !row.target && !row.ignored && aiSelected.has(row.field.scanId)).length || 0;
+    $('smartAI').textContent = count ? `AI 识别已勾选字段（${count}）` : 'AI 识别未知字段（可选）';
+  }
+  // 模型仅推荐已存资料的语义关联；本地预览、用户确认后才进入原填写及回读管线。
+  function pendingSuggestion(card, row) {
+    const suggestion = row.suggestion; if (!suggestion) return;
+    if (suggestion.action === 'needs_user_choice') { card.append(node('p', 'AI 无法确定，请在网页手动填写。', 'muted')); return; }
+    if (suggestion.action === 'skip_non_resume_control') { card.append(node('p', 'AI 建议忽略此字段，请自行确认是否忽略。', 'muted')); return; }
+    const def = current.definitions.find((def) => def.fieldId === suggestion.existingFieldId);
+    card.append(node('p', 'AI 建议：' + (def?.label || suggestion.definition?.label || '尚无法匹配'), 'muted'));
+    if (!suggestion.existingFieldId) { card.append(node('p', 'AI 建议新增字段，不能据此生成个人内容。请在网页填写，需要记住时勾选后统一更新。', 'muted')); return; }
+    if (!current.sources.some((source) => source.fieldId === suggestion.existingFieldId && source.hasValue)) { card.append(node('p', '本地没有该字段的内容，请在网页手动填写；AI 不会编造个人资料。', 'muted')); return; }
+    card.append(button('查看建议并填写', async () => {
+      const preview = await request('previewSuggestion', { scanId: row.field.scanId });
+      if (!confirm(`确认采用AI建议填写此项？\n网页字段：${preview.fieldLabel}\n资料字段：${preview.sourceLabel}\n拟填内容：${display(preview.value)}\n保留网页已有内容，不提交申请，也不修改个人资料。`)) return;
+      cancelLearningPreview(); update(await request('acceptSuggestion', { scanId: row.field.scanId, token: preview.token, confirmed: true }));
+      aiSelected.delete(row.field.scanId); await fillSelected([row.field.scanId], false);
+    }, 'btn smart-apply-suggestion'));
+  }
+  // 悬浮处理区保留原控件手填，并为AI提供就近入口；不重新引入本地来源选择或资料编辑器。
   function pendingActions(card, row) {
     const scanId = row.field.scanId;
     card.append(node('p', webValues.has(scanId) ? '网页内容：' + webDisplay(row, webValues.get(scanId)) : '网页内容：尚未读取', 'smart-web-value'));
@@ -31,9 +53,10 @@
       button('忽略此字段', async () => { learningSelected.delete(scanId); manualFields.delete(scanId); webValues.delete(scanId); aiSelected.delete(scanId); cancelLearningPreview(); update(await request('ignore', { scanId, ignored: true })); }, 'btn ghost smart-ignore'));
     if (!row.target && row.status !== 'unsupported') {
       const label = node('label'); const input = node('input'); input.type = 'checkbox'; input.className = 'smart-ai-check'; input.checked = aiSelected.has(scanId);
-      input.addEventListener('change', () => input.checked ? aiSelected.add(scanId) : aiSelected.delete(scanId)); label.append(input, document.createTextNode(' 使用 AI 识别（可选）')); card.append(label);
+      input.addEventListener('change', () => { input.checked ? aiSelected.add(scanId) : aiSelected.delete(scanId); syncAISelection(); }); label.append(input, document.createTextNode(' 加入 AI 识别清单（勾选不会自动发送）')); card.append(label);
+      card.append(button('AI 识别此字段', async () => { aiSelected.add(scanId); input.checked = true; syncAISelection(); await prepareAI([scanId]); }, 'btn ghost smart-ai-start'));
     }
-    if (row.suggestion) card.append(node('p', row.suggestion.action === 'needs_user_choice' ? 'AI 无法确定，请在网页手动填写。' : row.suggestion.action === 'skip_non_resume_control' ? 'AI 建议忽略此字段，请自行确认是否忽略。' : row.suggestion.definition ? 'AI 建议：' + row.suggestion.definition.label + '；请在网页填写后勾选保存。' : 'AI 建议已生成；仍需确认网页实际内容后保存。', 'muted'));
+    pendingSuggestion(card, row);
   }
   // DOM 元素只通过 textContent 显示不可信标签和模型内容。
   function node(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
@@ -53,7 +76,7 @@
     $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = true; });
     if (directFill) $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = true; });
     try { return await operation(); }
-    catch (error) { if (started === generation) { $('smartStatus').textContent = error.message; $('smartStatus').className = 'err'; } }
+    catch (error) { if (started === generation) { $('smartStatus').textContent = error.message; $('smartStatus').className = 'err'; if (directFill) $('smartStatus').scrollIntoView({ block: 'center' }); } }
     finally { busy = false; $('tab-smart').setAttribute('aria-busy', 'false'); $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = button.id === 'smartUndo' ? !rulesView?.canUndo : false; }); if (directFill) $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = false; }); }
   }
   // 所有业务仍经后台校验；区分旧后台误分派和单项扫描失效，恢复不转移旧字段许可。
@@ -186,6 +209,7 @@
   }
   // 渲染状态、固定保护诊断及确认入口，模型建议不直接生成网页点击。
   function render() {
+    syncAISelection();
     $('smartMatched').replaceChildren(); $('smartUnknown').replaceChildren();
     let excluded = $('smartExcluded');
     if (!excluded) { excluded = node('details', '', 'card'); excluded.id = 'smartExcluded'; $('smartUnknown').after(excluded); }
@@ -312,10 +336,20 @@
   $('smartOnlyUnknown')?.addEventListener('change', render);
   $('smartRefresh').addEventListener('click', () => task(async () => { if (directFill && !current) await scanPage(); else update(await request('session')); }));
   $('smartRevoke').addEventListener('click', async () => {const sessionId=current?.sessionId;await stopFill();if(sessionId)await sendMessage('learning:revoke',{sessionId}).catch(()=>{});clear();$('smartStatus').textContent=directFill?'已清除扫描结果，点击即可重新填写':'已撤销本页授权';});
-  $('smartAI').addEventListener('click', () => task(async () => { if (directFill) await ensureCurrent(); aiPreview = await request('prepareAI', { scanIds: current.rows.filter((row) => !row.target && !row.ignored && aiSelected.has(row.field.scanId)).map((row) => row.field.scanId) }); $('smartRecipient').textContent = `${aiPreview.recipient.name} · ${aiPreview.recipient.baseUrl} · ${aiPreview.recipient.model} · ${aiPreview.recipient.protocol}`; $('smartAICoverage').textContent = aiPreview.coverage ? `本次目录包含 ${aiPreview.coverage.included}/${aiPreview.coverage.available} 个字段；按分类与标签分配预算。${aiPreview.coverage.omitted ? '部分字段未发送，未见不代表不存在；可取消后手动匹配。' : '已有资料实际值不会发送。'}` : '请核对候选目录，不确定时可取消并手动匹配。'; $('smartAIPayload').textContent = JSON.stringify(aiPreview.payload, null, 2); $('smartAIConsent').checked = false; $('smartAIReview').dataset.token = aiPreview.token; $('smartAIReview').hidden = false; }));
+  // 就近入口和批量入口共享发送预览；只展示脱敏元数据，用户确认前不调用模型。
+  async function prepareAI(scanIds) {
+    if (directFill) await ensureCurrent();
+    aiPreview = await request('prepareAI', { scanIds: scanIds || current.rows.filter((row) => !row.target && !row.ignored && aiSelected.has(row.field.scanId)).map((row) => row.field.scanId) });
+    $('smartRecipient').textContent = `${aiPreview.recipient.name} · ${aiPreview.recipient.baseUrl} · ${aiPreview.recipient.model} · ${aiPreview.recipient.protocol}`;
+    $('smartAICoverage').textContent = aiPreview.coverage ? `本次目录包含 ${aiPreview.coverage.included}/${aiPreview.coverage.available} 个字段；按分类与标签分配预算。${aiPreview.coverage.omitted ? '部分字段未发送，未见不代表不存在；可取消后手动匹配。' : '已有资料实际值不会发送。'}` : '请核对候选目录，不确定时可取消并手动匹配。';
+    $('smartAIPayload').textContent = JSON.stringify(aiPreview.payload, null, 2); $('smartAIConsent').checked = false; $('smartAIReview').dataset.token = aiPreview.token; $('smartAIReview').hidden = false;
+    if (directFill) { $('smartAIReview').scrollIntoView({ block: 'start' }); $('smartAIConsent').focus({ preventScroll: true }); }
+  }
+  $('smartAI').addEventListener('click', () => task(() => prepareAI()));
   // 取消按钮不进入忙碌屏障，能够中止正在等待的模型请求并丢弃晚到建议。
   $('smartAICancel').addEventListener('click', async () => { aiPreview = null; $('smartAIReview').hidden = true; if (current) { try { await request('cancelAI'); } catch { /* 失效会话无需继续等待取消。 */ } } });
-  $('smartAISend').addEventListener('click', () => task(async () => { if (!$('smartAIConsent').checked || !aiPreview) throw new Error('请先核对模型接收方及发送内容并勾选确认'); const preview = aiPreview; aiPreview = null; $('smartAICancel').disabled = false; const result = await request('recognize', { token: preview.token, confirmed: true }); update(result); $('smartAIReview').hidden = true; $('smartStatus').textContent = `AI 返回 ${result.suggestionCount} 条待确认建议；没有修改个人资料`; }));
+  // 返回建议不会自动写网页；明确引导到逐项确认入口，缺值或新字段仍由用户手填。
+  $('smartAISend').addEventListener('click', () => task(async () => { if (!$('smartAIConsent').checked || !aiPreview) throw new Error('请先核对模型接收方及发送内容并勾选确认'); const preview = aiPreview; aiPreview = null; $('smartAICancel').disabled = false; const result = await request('recognize', { token: preview.token, confirmed: true }); update(result); $('smartAIReview').hidden = true; $('smartStatus').textContent = `AI 返回 ${result.suggestionCount} 条待确认建议；${directFill ? '可在字段卡片点击“查看建议并填写”；' : ''}没有修改个人资料`; if (directFill) document.querySelector('.smart-apply-suggestion')?.scrollIntoView({ block: 'center' }); }));
   $('smartFillAll').addEventListener('click', () => task(async () => {
     if (directFill) { await ensureCurrent(); await fillSelected(current.rows.filter((row) => row.target && !row.ignored && (row.status === 'matched' || row.chosen && ['failed', 'unsupported'].includes(row.status))).map((row) => row.field.scanId),$('smartRememberAfter').checked,true);return; }
     else if (!current) throw new Error('请先扫描页面');

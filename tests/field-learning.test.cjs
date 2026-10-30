@@ -79,6 +79,59 @@ function suggestion(payload, fieldId = null, definition = null) {
 // 创建定义不包含个人值，值只放入 confirmField 的独立字段。
 function definition(label = '附加说明') { return { label, type: 'text', group: '其他', aliases: [], options: [] }; }
 
+// AI建议采用前后仍走本地来源校验，预览/采用本身不得写资料库或执行网页填写。
+test('AI辅助填写：建议预览和独立确认后可填，取消/伪造令牌不生效', async () => {
+  const env = await fixture(); await env.setValue('builtin.phone', '13800000000'); const field = env.field('便捷联系号码');
+  let view = await env.scan(field); env.response((request) => JSON.stringify(suggestion(JSON.parse(request.messages[1].content), 'builtin.phone')));
+  const ai = await env.send(view, 'prepareAI'); view = await env.send(view, 'recognize', { token: ai.token, confirmed: true }); const before = await env.repo.read();
+  assert.equal(view.rows[0].target, null); assert.equal(env.calls.filter((call) => call.type === 'learning:fill').length, 0);
+  let preview = await env.send(view, 'previewSuggestion', { scanId: field.scanId }); assert.equal(preview.value, '13800000000'); assert.deepEqual(await env.repo.read(), before);
+  await assert.rejects(env.send(view, 'acceptSuggestion', { scanId: field.scanId, token: 'forged', confirmed: true }), /预览|确认/);
+  preview = await env.send(view, 'previewSuggestion', { scanId: field.scanId }); await assert.rejects(env.send(view, 'acceptSuggestion', { scanId: field.scanId, token: preview.token }), /确认/);
+  preview = await env.send(view, 'previewSuggestion', { scanId: field.scanId }); view = await env.send(view, 'acceptSuggestion', { scanId: field.scanId, token: preview.token, confirmed: true });
+  assert.equal(view.rows[0].target.fieldId, 'builtin.phone'); assert.equal(view.rows[0].status, 'matched'); assert.deepEqual(await env.repo.read(), before);
+  view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true }); assert.equal(view.rows[0].status, 'success'); assert.deepEqual(await env.repo.read(), before);
+  await assert.rejects(env.send(view, 'acceptSuggestion', { scanId: field.scanId, token: preview.token, confirmed: true }));
+  assert.ok(!JSON.stringify(env.aiCalls).includes('13800000000'));
+});
+
+// 缺值、建议变化和资料版本变化都不能以模型置信度替代个人资料或旧确认。
+test('AI辅助填写：缺少内容或资料变化拒绝采用，不创建新字段或编造值', async () => {
+  const env = await fixture(); const field = env.field('合成未知代号'); let view = await env.scan(field);
+  env.response((request) => JSON.stringify(suggestion(JSON.parse(request.messages[1].content), 'builtin.phone')));
+  let ai = await env.send(view, 'prepareAI'); view = await env.send(view, 'recognize', { token: ai.token, confirmed: true });
+  await assert.rejects(env.send(view, 'previewSuggestion', { scanId: field.scanId }), /没有.*内容/);
+  await env.setValue('builtin.phone','13800000000'); view = await env.scan(field); ai = await env.send(view,'prepareAI'); view = await env.send(view,'recognize',{token:ai.token,confirmed:true});
+  const preview = await env.send(view,'previewSuggestion',{scanId:field.scanId}); await env.setValue('builtin.phone','13900000000');
+  await assert.rejects(env.send(view,'acceptSuggestion',{scanId:field.scanId,token:preview.token,confirmed:true}),/资料已变化/);
+  assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
+});
+
+// 同名字段可共享定义，模型sourceRef不能代替本会话的整条经历绑定。
+test('AI辅助填写：多段项目拒绝模型自行配对，明确记录绑定后才可采用', async () => {
+  const env = await fixture(); await env.setValue('builtin.projectRole','合成首条项目角色');
+  const entryId = (await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'project',title:'合成第二条项目'}})).result;
+  await env.setValue('builtin.projectRole','合成第二条项目角色',entryId);
+  const fields = [0,1].map((index)=>env.field('合成项目定位',{kind:'project',group:'项目经历',index}));
+  env.recordBlocks([{blockId:'scan.projects',kind:'project',canAdd:false,records:fields.map((field,index)=>({recordId:'scan.project'+index,scanIds:[field.scanId]}))}]);
+  let view = await env.scan(...fields);
+  env.response((request)=>JSON.stringify(suggestion(JSON.parse(request.messages[1].content),'builtin.projectRole')));
+  let ai = await env.send(view,'prepareAI',{scanIds:[fields[0].scanId]}); view=await env.send(view,'recognize',{token:ai.token,confirmed:true});
+  await assert.rejects(env.send(view,'previewSuggestion',{scanId:fields[0].scanId}),/尚未绑定/);
+  view=await env.send(view,'prepareRecords',{confirmed:true});
+  const preview=await env.send(view,'previewSuggestion',{scanId:fields[0].scanId}); assert.equal(preview.value,'合成首条项目角色');
+  view=await env.send(view,'acceptSuggestion',{scanId:fields[0].scanId,token:preview.token,confirmed:true}); assert.equal(view.rows[0].target.entryId,null);
+});
+
+// 唯一来源仍须满足明确学历角色，不能把硕士学校填进本科或第一学历位置。
+test('AI辅助填写：唯一教育来源也不能绕过网页明确的学历要求', async () => {
+  const env=await fixture();await env.setValue('builtin.school','合成硕士大学');await env.setValue('builtin.degree','硕士');
+  const field=env.field('合成就读机构代号',{kind:'education',group:'教育经历',degree:'undergrad'});let view=await env.scan(field);
+  env.response((request)=>JSON.stringify(suggestion(JSON.parse(request.messages[1].content),'builtin.school')));
+  const ai=await env.send(view,'prepareAI');view=await env.send(view,'recognize',{token:ai.token,confirmed:true});
+  await assert.rejects(env.send(view,'previewSuggestion',{scanId:field.scanId}),/学历来源/);assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
+});
+
 // 集中学习只使用合成网页值，预览不能写库，确认后定义/个人值/规则同批持久化。
 test('集中学习：未确认零写入，确认后复用本站记忆且不调用 AI', async () => {
   const env = await fixture(); const field = env.field('合成集中备注'); const view = await env.scan(field); env.actual('合成网页内容');
