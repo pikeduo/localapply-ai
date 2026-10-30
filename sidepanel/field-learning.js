@@ -10,12 +10,39 @@
   let generation = 0; let polling = false; let activity = 0; let pageActive = true;
   let activeFill = null;
   const drafts = new Map(); const selected = new Set(); const aiSelected = new Set();
+  // 点选或聚焦使已在途的轮询结果失效，避免重绘替换正在操作的复选框、吞掉用户点击。
+  function markInteraction() { activity++; }
+  $('tab-smart').addEventListener('pointerdown', markInteraction);
+  $('tab-smart').addEventListener('focusin', markInteraction);
+  const learningSelected = new Set(); const manualFields = new Set(); const webValues = new Map(); let learningPreview = null;
+  // 勾选变化即废弃差异确认；不因为勾选或取消而读取网页内容、写入数据库。
+  function cancelLearningPreview() { learningPreview = null; if ($('smartLearnReview')) $('smartLearnReview').hidden = true; }
+  // 按当前扫描候选显示已读的选项标签，不把内部编码当成用户看到的内容。
+  function webDisplay(row, value) {
+    const labelOf = (item) => { const options = row.field.options.filter((option) => option.value === String(item)); return options.length === 1 ? options[0].text : item; };
+    return display(Array.isArray(value) ? value.map(labelOf) : labelOf(value));
+  }
+  // 悬浮处理区只提供真实控件定位、单项读取和忽略，保留网页本来的下拉及日历交互。
+  function pendingActions(card, row) {
+    const scanId = row.field.scanId;
+    card.append(node('p', webValues.has(scanId) ? '网页内容：' + webDisplay(row, webValues.get(scanId)) : '网页内容：尚未读取', 'smart-web-value'));
+    card.append(button('手动填写（网页原控件）', async () => { manualFields.add(scanId); cancelLearningPreview(); await request('focusField', { scanId }); $('smartStatus').textContent = '已定位网页原控件，请在网页填写；完成后勾选并统一更新。'; }, 'btn smart-manual'),
+      button('查看网页内容', async () => { const result = await request('readField', { scanId }); webValues.set(scanId, result.value); manualFields.add(scanId); cancelLearningPreview(); render(); }, 'btn ghost smart-read-web'),
+      button('忽略此字段', async () => { learningSelected.delete(scanId); manualFields.delete(scanId); webValues.delete(scanId); aiSelected.delete(scanId); cancelLearningPreview(); update(await request('ignore', { scanId, ignored: true })); }, 'btn ghost smart-ignore'));
+    if (!row.target && row.status !== 'unsupported') {
+      const label = node('label'); const input = node('input'); input.type = 'checkbox'; input.className = 'smart-ai-check'; input.checked = aiSelected.has(scanId);
+      input.addEventListener('change', () => input.checked ? aiSelected.add(scanId) : aiSelected.delete(scanId)); label.append(input, document.createTextNode(' 使用 AI 识别（可选）')); card.append(label);
+    }
+    if (row.suggestion) card.append(node('p', row.suggestion.action === 'needs_user_choice' ? 'AI 无法确定，请在网页手动填写。' : row.suggestion.action === 'skip_non_resume_control' ? 'AI 建议忽略此字段，请自行确认是否忽略。' : row.suggestion.definition ? 'AI 建议：' + row.suggestion.definition.label + '；请在网页填写后勾选保存。' : 'AI 建议已生成；仍需确认网页实际内容后保存。', 'muted'));
+  }
   // DOM 元素只通过 textContent 显示不可信标签和模型内容。
   function node(tag, text = '', className = '') { const element = document.createElement(tag); element.textContent = text; element.className = className; return element; }
   // 个人值只在用户核对/编辑时展开，默认预览保持遮挡。
   function display(value) { return value === null || value === undefined ? '（空）' : typeof value === 'string' ? value : JSON.stringify(value); }
   // 卡片只保留未完成项；未知但已手填的内容也不反复要求处理，冲突/失败仍可见。
   function unfinished(row) { return !row.ignored && row.status !== 'success' && (!row.webFilled || row.conflict || ['failed', 'unsupported'].includes(row.status)); }
+  // 用户正在手填或勾选待学习的行即使网页已填也保留，避免失去确认入口。
+  function pendingVisible(row) { return !row.ignored && (unfinished(row) || learningSelected.has(row.field.scanId) || manualFields.has(row.field.scanId)); }
   // 统一错误恢复，不输出 Key、响应原文或网页内容到日志。
   async function task(operation) {
     if (busy) return;
@@ -24,9 +51,10 @@
     busy = true;
     $('tab-smart').setAttribute('aria-busy', 'true');
     $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = true; });
+    if (directFill) $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = true; });
     try { return await operation(); }
     catch (error) { if (started === generation) { $('smartStatus').textContent = error.message; $('smartStatus').className = 'err'; } }
-    finally { busy = false; $('tab-smart').setAttribute('aria-busy', 'false'); $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = button.id === 'smartUndo' ? !rulesView?.canUndo : false; }); }
+    finally { busy = false; $('tab-smart').setAttribute('aria-busy', 'false'); $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = button.id === 'smartUndo' ? !rulesView?.canUndo : false; }); if (directFill) $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = false; }); }
   }
   // 所有业务仍经后台校验；区分旧后台误分派和单项扫描失效，恢复不转移旧字段许可。
   async function request(type, payload = {}) {
@@ -172,15 +200,16 @@
     for (const item of current.excluded || []) excluded.append(node('p', `${item.label} · ${item.category} · ${item.reason}`));
     $('smartStatus').textContent = directFill ? `扫描 ${current.rows.length} 个字段，成功填入 ${current.rows.filter((row) => row.status === 'success').length} 个，剩余 ${current.rows.filter(unfinished).length} 个未完成。${current.notice || ''}` : `${current.origin} · 扫描 ${current.rows.length} 个字段；可填写 ${current.rows.filter((row) => row.status === 'matched').length}，待处理 ${current.rows.filter((row) => !row.target && !row.ignored).length}，缺资料 ${current.rows.filter((row) => row.status === 'missing_value').length}；资料版本 ${current.revision} ${current.notice || ''}`; $('smartStatus').className = 'muted';
     if (directFill) {
-      $('smartMatchedHeading').hidden = $('smartOnlyUnknown').checked || !current.rows.some((row) => unfinished(row) && row.source !== 'unknown');
-      $('smartUnknownHeading').hidden = !current.rows.some((row) => unfinished(row) && row.source === 'unknown');
+      $('smartMatchedHeading').hidden = $('smartOnlyUnknown').checked || !current.rows.some((row) => pendingVisible(row) && row.source !== 'unknown');
+      $('smartUnknownHeading').hidden = !current.rows.some((row) => pendingVisible(row) && row.source === 'unknown');
     }
     for (const row of current.rows) {
-      if (directFill && !row.ignored && !unfinished(row)) continue;
+      if (directFill && !row.ignored && !pendingVisible(row)) continue;
       if (row.ignored) { const ignored = node('p', row.field.label + ' · 本次已忽略'); ignored.append(button('恢复此字段', async () => update(await request('ignore', { scanId: row.field.scanId, ignored: false })))); excluded.append(ignored); continue; }
       const card = node('article', '', 'card smart-row'); card.dataset.scanId = row.field.scanId; card.dataset.status = row.status;
       const title = node('h4', row.field.label + ' · ' + (directFill && row.status === 'needs_confirmation' ? '待处理' : labels[row.status])); const check = node('input'); check.type = 'checkbox'; check.className = 'smart-check'; check.setAttribute('aria-label', '选择填写' + row.field.label); check.checked = selected.has(row.field.scanId); check.disabled = !row.target || ['unsupported','missing_value'].includes(row.status);
-      check.addEventListener('change', () => check.checked ? selected.add(row.field.scanId) : selected.delete(row.field.scanId)); const heading = node('div', '', 'smart-row-heading'); heading.append(check, title); card.append(heading, node('p', [row.field.group, row.field.type, directFill ? row.reason.replace('填写前仍需确认', '可直接填写') : row.reason].filter(Boolean).join(' · '), 'muted'));
+      if (directFill) { check.setAttribute('aria-label', '添加并记住字段：' + row.field.label); check.checked = learningSelected.has(row.field.scanId); check.disabled = busy; }
+      check.addEventListener('change', () => { const selection = directFill ? learningSelected : selected; check.checked ? selection.add(row.field.scanId) : selection.delete(row.field.scanId); if (directFill) cancelLearningPreview(); }); const heading = node('div', '', 'smart-row-heading'); heading.append(check, title); card.append(heading, node('p', [row.field.group, row.field.type, directFill ? row.reason.replace('未知字段，请手动选择或主动使用 AI', '本地未识别此字段，可手动填写或使用 AI').replace('存在多段经历，请明确选择来源', '存在多段经历，暂不能确定对应记录，请在网页手动填写').replace('填写前仍需确认', '可直接填写') : row.reason].filter(Boolean).join(' · '), 'muted'));
       // 固定原因和扫描序号可与导出日志对照，不显示候选内容或网页实际值。
       if (row.diagnostic?.message && row.status !== 'success') {
         card.append(node('p', `诊断 #${row.diagnostic.fieldNumber}：${row.diagnostic.message}`, 'muted'));
@@ -188,6 +217,7 @@
         if (Object.hasOwn(guardLabels, check)) card.append(node('p', `保护检查：${guardLabels[check]}（${check}）`, 'muted smart-guard'));
         else if (row.diagnostic.reasonCode === 'stale_context') card.append(node('p', '未收到具体保护检查；请重新加载扩展并刷新招聘页后重试，在“运行日志与错误诊断”中查看本次记录。', 'muted smart-guard'));
       }
+      if (directFill) { pendingActions(card, row); (row.source === 'unknown' ? $('smartUnknown') : $('smartMatched')).append(card); continue; }
       card.append(sourceSelect(row, async (source) => { selected.add(row.field.scanId); update(await request('select', { scanId: row.field.scanId, fieldId: source.fieldId, entryId: source.entryId })); }));
       // 跨站建议不预选、不填写；点击仅等同手选来源，仍须新控件回读和独立确认记忆。
       if (!row.target) for (const candidate of row.historyCandidates || []) {
@@ -253,7 +283,7 @@
     if (directFill && !globalThis.LocalApplyPanelContext) throw new Error('页面正在连接，请稍后重试');
     // 悬浮卡片固定绑定打开时的顶层标签，不能跟随另一个活动标签操作资料。
     const tab = Number.isInteger(targetTabId)?{id:targetTabId}:globalThis.LocalApplyPanelContext || (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
-    current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '正在识别当前页面字段…' : '正在扫描已授权页面…';
+    current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); cancelLearningPreview(); $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '正在识别当前页面字段…' : '正在扫描已授权页面…';
     update(await request('scanPage', { tabId: tab?.id, profileId: state.activeProfileId, confirmed: true }));
   }
   // 直接模式在填写或 AI 识别前刷新来源；配置/资料变化后自动重建本页扫描。
@@ -262,6 +292,22 @@
     else { try { update(await request('session')); } catch { await scanPage(); } }
   }
   $('smartScan').addEventListener('click', () => task(scanPage));
+  // 集中预览由后台主动读取勾选项；确认仅交回一次性令牌，不让 UI 提交原始值或映射。
+  $('smartLearnPreview')?.addEventListener('click', () => task(async () => {
+    cancelLearningPreview(); const scanIds = [...learningSelected];
+    const result = await request('previewLearnedFields', { scanIds });
+    if (JSON.stringify(scanIds) !== JSON.stringify([...learningSelected])) throw new Error('勾选项已变化，请重新预览');
+    learningPreview = result;
+    $('smartLearnChanges').replaceChildren(...learningPreview.changes.map((change) => node('pre', JSON.stringify({ 网页字段: change.label, 保存到: change.targetLabel, 操作: change.action, 网页控件: change.controlType, 资料类型: change.type, 可选项: change.options, 原内容: change.oldValue, 新内容: change.newValue }, null, 2))));
+    $('smartLearnConsent').checked = false; $('smartLearnReview').hidden = false;
+  }));
+  $('smartLearnCancel')?.addEventListener('click', () => task(async () => { cancelLearningPreview(); await request('cancelLearnedFields'); }));
+  // 仅显式确认后一次写入；失败保留勾选，要求重新预览而非循环逐条保存。
+  $('smartLearnCommit')?.addEventListener('click', () => task(async () => {
+    if (!learningPreview || !$('smartLearnConsent').checked) throw new Error('请先核对差异并勾选确认');
+    const token = learningPreview.token; cancelLearningPreview(); const view = await request('commitLearnedFields', { token, confirmed: true });
+    learningSelected.clear(); manualFields.clear(); webValues.clear(); update(view); $('smartStatus').textContent = '已统一保存字段、内容和本站控件映射，下次遇到时优先本地匹配。';
+  }));
   // 只筛选可见列表，不清空选择、草稿或后台扫描会话。
   $('smartOnlyUnknown')?.addEventListener('change', render);
   $('smartRefresh').addEventListener('click', () => task(async () => { if (directFill && !current) await scanPage(); else update(await request('session')); }));
@@ -271,7 +317,7 @@
   $('smartAICancel').addEventListener('click', async () => { aiPreview = null; $('smartAIReview').hidden = true; if (current) { try { await request('cancelAI'); } catch { /* 失效会话无需继续等待取消。 */ } } });
   $('smartAISend').addEventListener('click', () => task(async () => { if (!$('smartAIConsent').checked || !aiPreview) throw new Error('请先核对模型接收方及发送内容并勾选确认'); const preview = aiPreview; aiPreview = null; $('smartAICancel').disabled = false; const result = await request('recognize', { token: preview.token, confirmed: true }); update(result); $('smartAIReview').hidden = true; $('smartStatus').textContent = `AI 返回 ${result.suggestionCount} 条待确认建议；没有修改个人资料`; }));
   $('smartFillAll').addEventListener('click', () => task(async () => {
-    if (directFill) { await ensureCurrent(); await fillSelected([...selected],$('smartRememberAfter').checked,true);return; }
+    if (directFill) { await ensureCurrent(); await fillSelected(current.rows.filter((row) => row.target && !row.ignored && (row.status === 'matched' || row.chosen && ['failed', 'unsupported'].includes(row.status))).map((row) => row.field.scanId),$('smartRememberAfter').checked,true);return; }
     else if (!current) throw new Error('请先扫描页面');
     await prepareFill([...selected], directFill);
   }));
@@ -332,7 +378,7 @@
   $('smartUndo').addEventListener('click', () => task(async () => { if (confirm('确认撤销最近一次规则操作？')) { await request('undoRule', { revision: rulesView.revision, confirmed: true }); await showRules(); } }));
   $('smartExportV3').addEventListener('click', () => task(async () => { const result = await request('exportV3'); const url = URL.createObjectURL(new Blob([JSON.stringify(result.backup, null, 2)], { type: 'application/json' })); const link = node('a'); link.href = url; link.download = 'localapply-compatible-v3.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }));
   // 悬浮卡片绑定原文档，切标签保留扫描与草稿；旧侧栏跟随活动标签，换档案仍须清空。
-  function clear() { void stopFill();generation++; document.dispatchEvent(new Event('localapply:learning-reset')); current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); if ($('smartPageConsent')) $('smartPageConsent').checked = false; $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '点击自动填写，使用当前档案匹配网页字段' : '请选择当前招聘页并主动授权扫描'; }
+  function clear() { void stopFill();generation++; document.dispatchEvent(new Event('localapply:learning-reset')); current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); cancelLearningPreview(); if ($('smartPageConsent')) $('smartPageConsent').checked = false; $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '点击自动填写，使用当前档案匹配网页字段' : '请选择当前招聘页并主动授权扫描'; }
   window.addEventListener('pagehide',()=>{void stopFill();activeFill?.port?.disconnect();});
   // 旧侧栏只交字段标识和唯一网页标签；来源由最新规范绑定解析，绝不接受任意文本值或计划。
   globalThis.LocalApplyLearningUI=Object.freeze({

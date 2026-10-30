@@ -9,7 +9,7 @@ const ROOT = path.resolve(__dirname, '..');
 
 // 构建与生产相同的 repository/匹配/学习服务，网络和网页只由明确桩响应。
 async function fixture() {
-  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let completion = []; let recordBlocks = []; let onAdd = () => {}; let fillContractVersion = 1;let fillSessionVersion=1;
+  const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let failVerify = false; let completion = []; let recordBlocks = []; let onAdd = () => {}; let fillContractVersion = 1;let fillSessionVersion=1;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
   for (const file of ['templates','providers','key-vault','resume','field-matching','mapping-compat','fill-contract','fill-result','field-suggestions','applications','local-store','record-coordinator','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
@@ -22,7 +22,7 @@ async function fixture() {
     if (msg.type === 'learning:addRecord') { await onAdd(msg); return { ok: true }; }
     if (msg.type === 'learning:read') return { ok: true, value: actual };
     if (msg.type === 'learning:fill') { if (fillGate) await fillGate; actual = failFill ? '' : msg.value; return { ok: true, result: { status: failFill ? 'failed' : 'success', reason: failFill ? '受控组件回退' : '', diagnostic: fillDiagnostic, verifiedAt: new Date().toISOString() } }; }
-    if (msg.type === 'learning:verify') return { ok: true, result: { status: actual === msg.value ? 'success' : 'failed', verifiedAt: new Date().toISOString() } };
+    if (msg.type === 'learning:verify') return { ok: true, result: { status: !failVerify && actual === msg.value ? 'success' : 'failed', verifiedAt: new Date().toISOString() } };
     return { ok: true };
   } } };
   let response = () => JSON.stringify({ suggestions: [] }); const aiCalls = [];
@@ -35,7 +35,7 @@ async function fixture() {
   const send = (view, type, payload = {}) => service.handle({ type: 'learning:' + type, sessionId: view.sessionId, ...(type === 'prepareAI' ? { scanIds: view.rows.filter((row) => !row.target).map((row) => row.field.scanId) } : {}), ...payload });
   const setValue = (fieldId, value, entryId = null) => repo.command({ action: 'setValue', payload: { profileId, fieldId, entryId, value } });
   return { context, repo, disk, profileId, calls, aiCalls, field, scan, send, service, setValue,
-    response: (next) => { response = next; }, navigate: (next) => { url = next || url + '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, completion: (value) => { completion = value; },
+    response: (next) => { response = next; }, navigate: (next) => { url = next || url + '/new'; }, actual: (value) => { actual = value; }, fail: (value) => { failFill = value; }, failVerify: (value) => { failVerify = value; }, completion: (value) => { completion = value; },
     recordBlocks: (value) => { recordBlocks = value; }, pageFields: (value) => { fields = value; }, onAdd: (callback) => { onAdd = callback; }, diagnostic: (value) => { fillDiagnostic = value; }, protocol: (value) => { fillContractVersion = value; },
     sessionProtocol:(version)=>{fillSessionVersion=version;},
     holdFill: () => { let release; fillGate = new Promise((resolve) => { release = resolve; }); return release; } };
@@ -78,6 +78,82 @@ function suggestion(payload, fieldId = null, definition = null) {
 }
 // 创建定义不包含个人值，值只放入 confirmField 的独立字段。
 function definition(label = '附加说明') { return { label, type: 'text', group: '其他', aliases: [], options: [] }; }
+
+// 集中学习只使用合成网页值，预览不能写库，确认后定义/个人值/规则同批持久化。
+test('集中学习：未确认零写入，确认后复用本站记忆且不调用 AI', async () => {
+  const env = await fixture(); const field = env.field('合成集中备注'); const view = await env.scan(field); env.actual('合成网页内容');
+  const before = await env.repo.read();
+  await assert.rejects(env.send(view, 'commitLearnedFields', { confirmed: true, token: 'forged' }), /预览/);
+  const preview = await env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] });
+  assert.equal(preview.changes[0].newValue, '合成网页内容'); assert.deepEqual(await env.repo.read(), before);
+  await assert.rejects(env.send(view, 'commitLearnedFields', { token: preview.token }), /确认/);
+  const next = await env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] });
+  await env.send(view, 'commitLearnedFields', { token: next.token, confirmed: true });
+  const saved = await env.repo.read(); assert.equal(saved.revision, before.revision + 1);
+  const def = saved.fieldDefinitions.find((def) => def.label === field.label); assert.ok(def); assert.ok(!saved.publicFieldIds.includes(def.fieldId));
+  assert.equal(saved.fieldValues.find((value) => value.fieldId === def.fieldId).value, '合成网页内容');
+  assert.ok(!JSON.stringify(def).includes('合成网页内容')); assert.equal(saved.mappingRules.at(-1).confirmed, true);
+  const again = await env.scan(field); assert.equal(again.rows[0].source, 'memory'); assert.equal(again.rows[0].status, 'matched'); assert.equal(env.aiCalls.length, 0);
+  await assert.rejects(env.send(again, 'commitLearnedFields', { token: next.token, confirmed: true }), /预览/);
+});
+
+// 网页更改、被忽略及无值都不能沿用旧确认，更不能产生半批字段。
+test('集中学习：值变化、忽略、无值、越权和重复项均拒绝且零写入', async () => {
+  const env = await fixture(); const field = env.field('合成变化备注'); const view = await env.scan(field); const before = await env.repo.read();
+  await assert.rejects(env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }), /先在网页填写/);
+  env.actual('合成甲'); const preview = await env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }); env.actual('合成乙');
+  await assert.rejects(env.send(view, 'commitLearnedFields', { token: preview.token, confirmed: true }), /已变化/);
+  for (const scanIds of [[], [field.scanId, field.scanId], ['scan.not-authorized']]) await assert.rejects(env.send(view, 'previewLearnedFields', { scanIds }));
+  await env.send(view, 'ignore', { scanId: field.scanId, ignored: true }); await assert.rejects(env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }), /忽略/);
+  assert.deepEqual(await env.repo.read(), before);
+});
+
+// 明确来源可更新既有资料；旧内容必须出现在集中差异中而不是另建同名字段。
+test('集中学习：已知字段展示覆盖差异，下拉保存显示标签及控件特征', async () => {
+  const env = await fixture(); await env.setValue('builtin.name', '合成旧名'); let field = env.field('姓名'); let view = await env.scan(field); env.actual('合成新名');
+  let preview = await env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }); assert.equal(preview.changes[0].oldValue, '合成旧名');
+  await env.send(view, 'commitLearnedFields', { token: preview.token, confirmed: true });
+  assert.equal((await env.repo.read()).fieldValues.find((value) => value.fieldId === 'builtin.name').value, '合成新名');
+  field = env.field('合成自定义选择', { type: 'select', options: [{ value: '', text: '请选择' }, { value: 'A', text: '合成选项甲' }] }); view = await env.scan(field); env.actual('A');
+  preview = await env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }); assert.equal(preview.changes[0].type, 'select'); assert.equal(preview.changes[0].newValue, '合成选项甲');
+  await env.send(view, 'commitLearnedFields', { token: preview.token, confirmed: true }); const db = await env.repo.read();
+  const def = db.fieldDefinitions.find((value) => value.label === field.label); assert.equal(def.type, 'select'); assert.deepEqual([...def.options], ['合成选项甲']); assert.equal(db.mappingRules.at(-1).features.type, 'select');
+});
+
+// 数据版本或文档变化后整个确认失效，不保留已经过期的保存许可。
+test('集中学习：版本冲突和导航撤销确认，歧义经历不自动选择', async () => {
+  const env = await fixture(); const field = env.field('合成版本备注'); let view = await env.scan(field); env.actual('合成内容');
+  const preview = await env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }); await env.setValue('builtin.name', '合成外部修改');
+  await assert.rejects(env.send(view, 'commitLearnedFields', { token: preview.token, confirmed: true }), /已变化/);
+  view = await env.scan(field); env.navigate(); await assert.rejects(env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }), /导航/);
+  const school = env.field('学校名称', { group: '教育经历', kind: 'education' });
+  await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'education', title: '合成条目' } });
+  await env.repo.command({ action: 'createEntry', payload: { profileId: env.profileId, kind: 'education', title: '合成另一条目' } });
+  view = await env.scan(school); await assert.rejects(env.send(view, 'previewLearnedFields', { scanIds: [school.scanId] }), /歧义/);
+});
+
+// 仓库在独立副本完成整批校验，后项非法不会让前项资料或定义提前落盘。
+test('集中学习仓库：后项非法整批回滚，缺少确认及重复目标拒绝', async () => {
+  const env = await fixture(); const before = await env.repo.read();
+  const fields = [env.field('合成事务甲'), env.field('合成事务乙')];
+  const items = fields.map((field, index) => ({ definition: definition(field.label), fieldId: null, entryId: null, value: index ? {} : '合成值', mapping: { mappingId: 'mapping.atomic.' + index, origin: 'https://jobs.example.test', path: '/', label: field.label, semanticId: field.semanticId, features: env.context.FieldMatchingEngine.features(field), confirmed: true, enabled: true, lastVerifiedAt: new Date().toISOString(), ruleVersion: 1 } }));
+  await assert.rejects(env.repo.command({ action: 'confirmLearnedFields', payload: { profileId: env.profileId, items, confirmed: true }, expectedRevision: before.revision }));
+  assert.deepEqual(await env.repo.read(), before);
+  await assert.rejects(env.repo.command({ action: 'confirmLearnedFields', payload: { profileId: env.profileId, items }, expectedRevision: before.revision }), /确认/);
+  const same = { ...items[0], definition: null, fieldId: 'builtin.name' };
+  await assert.rejects(env.repo.command({ action: 'confirmLearnedFields', payload: { profileId: env.profileId, items: [same, same], confirmed: true }, expectedRevision: before.revision }), /同一资料/);
+  assert.deepEqual(await env.repo.read(), before);
+});
+
+// 明确取消后令牌作废；网页“尚未接受”的值不能进入任何学习预览。
+test('集中学习：取消预览释放确认，控件验证失败不保存', async () => {
+  const env = await fixture(); const field = env.field('合成取消备注'); const view = await env.scan(field); env.actual('合成内容');
+  const preview = await env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }); await env.send(view, 'cancelLearnedFields');
+  await assert.rejects(env.send(view, 'commitLearnedFields', { token: preview.token, confirmed: true }), /预览/);
+  const before = await env.repo.read(); env.failVerify(true);
+  await assert.rejects(env.send(view, 'previewLearnedFields', { scanIds: [field.scanId] }), /尚未稳定/);
+  assert.deepEqual(await env.repo.read(), before); assert.equal(env.aiCalls.length, 0);
+});
 
 // 通过现有确认、填写及回读链路建立旧形状规则，不直接伪造已验证状态。
 async function learnMapping(env, field, fieldId = 'builtin.gender', entryId = null) {

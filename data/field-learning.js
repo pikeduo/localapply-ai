@@ -185,6 +185,47 @@
       const result = await repository.command({ action, payload, expectedRevision: db.revision });
       undo = { before, revision: result.revision }; return result;
     }
+    // 仅主动勾选的字段进入学习；读取并跨延迟验证真实网页值，不接收 UI 提供的答案或控件脚本。
+    async function learningItem(item, db, row, task) {
+      check(!row.ignored, '已忽略字段不能保存');
+      const message = { documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId };
+      const response = await pageMessage(item.tabId, { type: 'learning:read', ...message }); task.check();
+      const raw = response.value; check(M.hasValue(raw) || raw === false, '请先在网页填写已勾选字段');
+      const verified = await pageMessage(item.tabId, { type: 'learning:verify', ...message, value: raw, operationId: task.id }); task.check();
+      check(verified.result?.status === 'success' && verified.result.verifiedAt, '网页字段尚未稳定或控件不支持验证，请在网页确认后重试');
+      let selected = row.target;
+      if (!selected && row.suggestion?.existingFieldId) {
+        const choices = item.sources.filter((source) => source.fieldId === row.suggestion.existingFieldId && (!row.suggestion.sourceRef || source.ref === row.suggestion.sourceRef));
+        check(choices.length === 1, 'AI 建议的资料来源不唯一，未自动选择经历');
+        selected = { fieldId: choices[0].fieldId, entryId: choices[0].entryId };
+      }
+      // 歧义来源不得静默落入新字段或第一段经历；已有确定匹配可直接复用，不展示本地选择器。
+      check(selected || !row.candidates?.length, '字段来源存在歧义，暂不支持集中保存此项');
+      let entryId = selected?.entryId || null;
+      if (!selected && row.field.kind) {
+        const record = (item.recordBlocks || []).flatMap((block) => block.records).find((record) => record.scanIds.includes(row.field.scanId));
+        check(record && Object.hasOwn(item.recordBindings || {}, record.recordId), '此经历尚未绑定，暂不支持集中保存，避免混入其他记录');
+        entryId = item.recordBindings[record.recordId];
+      }
+      const options = [...new Set(row.field.options.filter((option) => option.value !== '').map((option) => option.text).filter(Boolean))];
+      const type = Array.isArray(raw) ? 'multiSelect' : typeof raw === 'boolean' ? 'boolean' : row.field.type === 'number' ? 'number'
+        : ['date', 'month'].includes(row.field.type) ? 'date' : ['select', 'radio', 'combobox'].includes(row.field.type) ? 'select' : ['textarea', 'contenteditable'].includes(row.field.type) ? 'textarea' : 'text';
+      const definition = selected ? null : { label: row.field.label, type, group: row.field.group || '其他', aliases: [], options: ['select', 'multiSelect'].includes(type) ? options : [] };
+      if (definition) {
+        global.FieldSuggestions.validate({ suggestions: [{ scanId: row.field.scanId, existingFieldId: null, definition, sourceRef: null, confidence: 0 }] }, { fields: [row.field], catalog: [], sources: [] });
+        const normalize = global.WangshenTemplates.normalizeLabel;
+        check(!db.fieldDefinitions.some((def) => item.sources.some((source) => source.fieldId === def.fieldId) && [def.label, ...def.aliases].some((label) => normalize(label) === normalize(definition.label))), '同名字段已存在但来源不确定，未创建重复字段');
+      }
+      const valueType = definition?.type || db.fieldDefinitions.find((def) => def.fieldId === selected.fieldId).type;
+      // 原生控件编码转为唯一显示标签；不猜选、不把搜索词当成已选择结果。
+      const labelOf = (value) => { const found = row.field.options.filter((option) => option.value === String(value) || option.text === String(value)); check(found.length <= 1, '选项编码或标签存在歧义'); return found[0]?.text || value; };
+      let value = valueType === 'multiSelect' ? (Array.isArray(raw) ? raw.map(labelOf) : null) : valueType === 'select' ? labelOf(raw) : valueType === 'number' ? Number(raw) : raw;
+      check(value !== null && (valueType !== 'number' || Number.isFinite(value)), '网页值与字段类型不兼容');
+      const old = db.mappingRules.find((rule) => rule.profileId === item.profileId && rule.origin === item.origin && rule.semanticId === row.field.semanticId && rule.features && JSON.stringify(M.features(rule.features)) === JSON.stringify(M.features(row.field)));
+      check(!old || old.enabled !== false, '此网站规则已禁用，请先在规则管理中处理');
+      return { scanId: row.field.scanId, raw, definition, fieldId: selected?.fieldId || null, entryId, value,
+        mapping: { mappingId: old?.mappingId || 'mapping.' + crypto.randomUUID(), origin: item.origin, path: '/', label: row.field.label, semanticId: row.field.semanticId, features: M.features(row.field), confirmed: true, enabled: true, lastVerifiedAt: verified.result.verifiedAt, ruleVersion: (old?.ruleVersion || 0) + 1 } };
+    }
     // 后台统一校验会话和确认；填写意图只由规范库生成，不接受 UI/AI 提供计划或值。
     async function handle(msg, access) {
       if (msg.type === 'learning:scanPage') {
@@ -227,7 +268,34 @@
       if(msg.type==='learning:leaseFill'){check(typeof msg.batchId==='string'&&item.batch?.id===msg.batchId,'填写连接尚未绑定批次');const task=jobFor(item,db,msg.batchId);try{task.check();return {leased:true};}finally{task.done();}}
       if (msg.type === 'learning:revoke') { await drop(item.sessionId); await pageMessage(item.tabId, { type: 'learning:revoke' }); return {}; }
       if (msg.type === 'learning:session') { await refresh(item, db); return view(item, db); }
+      if (msg.type === 'learning:cancelLearnedFields') { item.learnPreview = null; return { cancelled: true }; }
       check(item.revision === db.revision, '资料已变化，请重新扫描并预览');
+      if (msg.type === 'learning:previewLearnedFields' || msg.type === 'learning:commitLearnedFields') {
+        check(!item.batch && !item.jobs?.size, '请先等待填写结束');
+        const task = jobFor(item, db);
+        try {
+          if (msg.type === 'learning:previewLearnedFields') {
+            item.learnPreview = null;
+            check(Array.isArray(msg.scanIds) && msg.scanIds.length > 0 && msg.scanIds.length <= 20 && new Set(msg.scanIds).size === msg.scanIds.length, '请选择 1–20 个字段');
+            const items = [];
+            for (const scanId of msg.scanIds) items.push(await learningItem(item, db, rowOf(item, scanId), task));
+            check(new Set(items.map((value) => value.mapping.semanticId)).size === items.length, '重复语义字段请分开处理');
+            task.check(); item.learnPreview = { token: crypto.randomUUID(), revision: db.revision, createdAt: Date.now(), items };
+            return { token: item.learnPreview.token, changes: items.map((value) => ({ label: value.mapping.label, targetLabel: value.definition?.label || item.sources.find((source) => source.fieldId === value.fieldId && source.entryId === value.entryId)?.label, controlType: value.mapping.features.type, action: value.definition ? '添加私有字段' : '更新已匹配字段', type: value.definition?.type || db.fieldDefinitions.find((def) => def.fieldId === value.fieldId).type, options: value.definition?.options || db.fieldDefinitions.find((def) => def.fieldId === value.fieldId)?.options || [], oldValue: value.fieldId ? M.valueOf(db, item.profileId, value)?.value ?? null : null, newValue: value.value })) };
+          }
+          const preview = item.learnPreview; item.learnPreview = null;
+          check(msg.confirmed === true && preview?.token === msg.token && preview.revision === db.revision && Date.now() - preview.createdAt < 300000, '请重新预览并确认集中更新');
+          const items = [];
+          for (const before of preview.items) {
+            const next = await learningItem(item, db, rowOf(item, before.scanId), task);
+            check(JSON.stringify([next.raw, next.value, next.fieldId, next.entryId, next.definition]) === JSON.stringify([before.raw, before.value, before.fieldId, before.entryId, before.definition]), '网页内容或字段已变化，请重新预览');
+            items.push({ definition: before.definition, fieldId: before.fieldId, entryId: before.entryId, value: before.value, mapping: next.mapping });
+          }
+          task.check();
+          await repository.command({ action: 'confirmLearnedFields', payload: { profileId: item.profileId, items, confirmed: true }, expectedRevision: preview.revision });
+          const latest = await fieldContext(item.profileId); rebuild(item, latest); return view(item, latest);
+        } finally { task.done(); }
+      }
       if (msg.type === 'learning:prepareRecords') { check(msg.confirmed === true, '补充网页经历需要用户主动操作');const task=jobFor(item,db,msg.batchId);try{task.check();return await prepareRecords(item,db,task);}finally{task.done();} }
       if (msg.type === 'learning:prepareAI') {
         check(Array.isArray(msg.scanIds) && msg.scanIds.length > 0 && msg.scanIds.length <= 20 && new Set(msg.scanIds).size === msg.scanIds.length, '请勾选 1–20 个需要 AI 识别的未知字段');
@@ -257,8 +325,11 @@
         return { ...view(item, db), suggestionCount: suggestions.length };
       }
       // 会话命令先明确分派；未知/旧版本命令不能误报为缺少单字段扫描授权。
-      check(['learning:ignore', 'learning:select', 'learning:readField', 'learning:previewValue', 'learning:commitValue', 'learning:fill', 'learning:remember'].includes(msg.type), '未知字段学习操作，请重新加载扩展并刷新招聘页');
+      check(['learning:ignore', 'learning:select', 'learning:focusField', 'learning:readField', 'learning:previewValue', 'learning:commitValue', 'learning:fill', 'learning:remember'].includes(msg.type), '未知字段学习操作，请重新加载扩展并刷新招聘页');
       const row = rowOf(item, msg.scanId);
+      if (msg.type === 'learning:focusField') {
+        await pageMessage(item.tabId, { type: 'learning:focus', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId }); return { focused: true };
+      }
       if (msg.type === 'learning:ignore') { row.ignored = msg.ignored === true; item.aiPreview = null; return view(item, db); }
       if (msg.type === 'learning:select') {
         row.target = target(item, msg.fieldId, msg.entryId); row.chosen = true; delete row.verification;

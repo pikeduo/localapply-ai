@@ -756,6 +756,36 @@
         if (request.expectedRevision !== undefined) check(request.expectedRevision === db.revision, '数据版本已变化，请重新预览');
         let result = null;
         switch (request.action) {
+          // 集中学习在同一副本校验并一次落盘；任一字段失败均不发布部分数据。
+          case 'confirmLearnedFields': {
+            keys(input, ['profileId', 'items', 'confirmed'], '集中学习');
+            check(input.confirmed === true && request.expectedRevision !== undefined, '集中学习需要预览版本及确认');
+            check(db.profiles.some((profile) => profile.profileId === input.profileId), '档案不存在');
+            list(input.items, '集中学习字段', 20); check(input.items.length > 0, '请选择字段');
+            result = []; const targets = new Set();
+            for (const item of input.items) {
+              keys(item, ['definition', 'fieldId', 'entryId', 'value', 'mapping'], '学习项');
+              let fieldId = item.fieldId;
+              check(!!item.definition !== !!fieldId, '字段来源必须唯一');
+              if (item.definition) {
+                keys(item.definition, ['label', 'type', 'group', 'aliases', 'options'], '新学习定义');
+                const def = makeDefinition({ ...item.definition, fieldId: id('custom') });
+                db.fieldDefinitions.push(def); fieldId = def.fieldId;
+                if (!item.entryId) db.bindings.push({ profileId: input.profileId, fieldId, fid: id('field'), key: fieldId, sensitive: true, autoFill: false, material: false, custom: true });
+              }
+              check(db.fieldDefinitions.some((def) => def.fieldId === fieldId), '字段不存在');
+              const entryId = item.entryId || null; const key = JSON.stringify([fieldId, entryId]);
+              check(!targets.has(key), '多个网页字段指向同一资料，请分开处理'); targets.add(key);
+              const row = { profileId: input.profileId, fieldId, entryId, value: clone(item.value), source: 'web-confirmed', updatedAt: now() };
+              const index = db.fieldValues.findIndex((value) => value.profileId === row.profileId && value.fieldId === fieldId && value.entryId === entryId);
+              if (index >= 0) db.fieldValues[index] = row; else db.fieldValues.push(row);
+              const rule = { ...clone(item.mapping), fieldId, entryId, profileId: input.profileId };
+              const existing = db.mappingRules.findIndex((value) => value.mappingId === rule.mappingId);
+              if (existing >= 0) db.mappingRules[existing] = rule; else db.mappingRules.push(rule);
+              result.push({ fieldId, entryId });
+            }
+            await commit(db, null, previous, true); return { result, revision: db.revision };
+          }
           // 所有申请写入复用唯一仓库队列、版本校验与完整数据库校验。
           case 'saveApplication': {
             check(request.expectedRevision !== undefined, '保存申请需要预览版本');

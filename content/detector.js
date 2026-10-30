@@ -441,9 +441,12 @@
             globalThis.LocalApplyPageTasks.cancelAll();
             authorized = false; globalThis.LocalApplyPageScanner.revoke(); detect(); sendResponse({ ok: true }); return;
           case 'learning:read':
+          case 'learning:focus':
           case 'learning:fill':
           case 'learning:verify': {
             const record = globalThis.LocalApplyPageScanner.record(msg.scanId, msg.documentId, msg.semanticId);
+            // 手动填写只定位真实网页控件，不打开菜单、改值或触发保存按钮。
+            if (msg.type === 'learning:focus') { record.el.scrollIntoView({ block: 'center', behavior: 'smooth' }); record.el.focus({ preventScroll: true }); sendResponse({ ok: true }); return; }
             if (msg.type === 'learning:read') { sendResponse({ ok: true, value: globalThis.LocalApplyPageScanner.readValue(record) }); return; }
             if (msg.type === 'learning:fill') {
               if (sender.url && sender.url.split(/[?#]/)[0] !== chrome.runtime.getURL('background.js')) throw new Error('填写意图只接受后台发送');

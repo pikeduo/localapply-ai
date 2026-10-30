@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>合成招聘申请 · 手填学习</title><style>body{font:16px/1.6 system-ui;margin:32px;max-width:700px}.form-item{margin:16px 0;padding:12px;border:1px solid #ddd}label{display:block}input,select,textarea{padding:8px}input[type=radio],input[type=checkbox]{padding:0}</style></head>
+<body><h1>合成招聘申请表</h1><form id="application">
+<div class="form-item"><label for="memo">合成手填备注</label><input id="memo"></div>
+<div class="form-item"><label for="choice">合成手填方向</label><select id="choice"><option value="">请选择</option><option value="a">合成方向甲</option><option value="b">合成方向乙</option></select></div>
+<fieldset class="form-item"><legend>合成手填班次</legend><label><input type="radio" name="shift" value="day">合成白班</label><label><input type="radio" name="shift" value="night">合成夜班</label></fieldset>
+<div class="form-item"><label><input id="flag" type="checkbox">合成手填标记</label></div>
+<div class="form-item"><label for="date">合成手填月份</label><input id="date" type="month"></div>
+<div class="form-item"><label for="amount">合成手填数量</label><input id="amount" type="number"></div>
+<div class="form-item"><label for="details">合成手填说明</label><textarea id="details"></textarea></div>
+<div class="form-item"><label for="ignored">合成忽略备注</label><input id="ignored"></div>
+<button type="submit">提交申请</button></form>
+<script>
+// 仅统计合成表单提交次数，所有测试必须保持为零。
+window.__submitCount=0;document.getElementById('application').addEventListener('submit',function(event){event.preventDefault();window.__submitCount++;});
+</script></body></html>
