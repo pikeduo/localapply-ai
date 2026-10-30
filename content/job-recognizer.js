@@ -28,16 +28,19 @@
     if (matching.length === 1) return matching[0];
     return rows.length === 1 && !rows[0].url ? rows[0] : null;
   }
-  // 飞书ATSX只读取明确职位详情根；官网品牌仅去掉确定的招聘官网后缀，不从域名或口号猜公司。
+  // 飞书ATSX只读取明确详情或申请表头；申请地址中的简历ID不能作为岗位ID。
   function feishuPosting() {
     const path = location.pathname.match(/^\/(?:[a-z\d_-]+\/)?(?:m\/)?position\/(\d{1,30})\/detail\/?$/i);
-    if (!/(?:^|\.)jobs\.feishu\.cn$/i.test(location.hostname) || !path) return null;
-    const roots = [...document.querySelectorAll('.jobDetail')].filter(visible); if (roots.length !== 1) return null;
-    const root = roots[0]; const titles = [...root.querySelectorAll('.job-header .job-title')].filter(visible);
+    const application = /^\/(?:[a-z\d_-]+\/)?(?:m\/)?resume\/\d{1,30}\/apply\/?$/i.test(location.pathname);
+    if (!/(?:^|\.)jobs\.feishu\.cn$/i.test(location.hostname) || (!path && !application)) return null;
+    const roots = [...document.querySelectorAll(application ? '.resumeEditForm-wrapper > form.atsx-form' : '.jobDetail')].filter(visible); if (roots.length !== 1) return null;
+    const root = roots[0]; const titles = [...root.querySelectorAll(application ? ':scope > .resumeEditForm-header > .resumeEditForm-headerText' : '.job-header .job-title')].filter(visible);
     if (titles.length !== 1) return null;
     const brands = [...document.querySelectorAll('.topbar-site-title')].filter(visible);
     const brand = brands.length === 1 ? brands[0].textContent.trim().match(/^(.{2,100}?)(?:校园招聘官网|社会招聘官网|校招官网|招聘官网)$/) : null;
     const company = brand && !/^(欢迎|加入|我们|人才|招聘|诚聘)/.test(brand[1]) ? brand[1].trim() : '';
+    // 已下载的申请表仅明确展示标题及品牌；不从个人地址、经历或推荐职位补齐地点。
+    if (application) return { title: titles[0].textContent.trim().slice(0, 500), company, id: '', location: '', employmentType: '', summary: '' };
     const info = [...root.querySelectorAll('.job-info > span[class^="infoText__"]')].filter(visible).map((node) => node.textContent.trim().slice(0, 100));
     const types = info.filter((text) => /^(全职|兼职|实习|正式|劳务|合同制)$/.test(text));
     const locations = info.filter((text) => text && !types.includes(text));

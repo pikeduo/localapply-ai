@@ -190,6 +190,28 @@ test('飞书ATSX：公开岗位识别、来源边界及资料保护', { timeout:
       assert.equal(await frame.locator('#jobCompany').inputValue(), '合成飞书企业'); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成研发岗位'); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成甲城');
       assert.deepEqual((await rpc(options, 'localapply:read')).database, before); await worker.evaluate((id) => floatingPanel.close(id), tabId);
     });
+    await t.test('申请页异步表头识别公司和岗位，不把简历ID或个人地址当岗位元数据', async () => {
+      const scan = await open('/index/resume/7602107101368125759/apply');
+      assert.equal((await scan()).recognized, false);
+      // 只使用自主合成结构，模拟申请页异步挂载；绝不执行下载页面的脚本。
+      await page.evaluate(() => {
+        document.querySelector('.jobDetail').remove();
+        const wrapper = document.createElement('div'); wrapper.className = 'resumeEditForm-wrapper';
+        wrapper.innerHTML = '<form class="atsx-form atsx-form-horizontal"><div class="resumeEditForm-header"><div class="resumeEditForm-headerText sofiaBold">合成申请岗位</div></div><label>个人地址<input id="personalAddress" value="不应读取的个人城市"></label><button type="submit">提交申请</button></form>';
+        document.body.append(wrapper); window.__applicationSubmits = 0;
+        wrapper.querySelector('form').addEventListener('submit', (event) => { event.preventDefault(); window.__applicationSubmits++; });
+        Object.defineProperty(document.getElementById('personalAddress'), 'value', { get() { window.__secretReads++; throw Error('禁止读取个人地址'); } });
+      });
+      const result = await scan(); assert.equal(result.recognized, true); assert.equal(result.candidate.companyName, '合成飞书企业'); assert.equal(result.candidate.jobTitle, '合成申请岗位');
+      assert.equal(result.candidate.jobId, ''); assert.equal(result.candidate.location, ''); assert.match(result.candidate.jobUrl, /\/resume\/7602107101368125759\/apply$/);
+      const ready = page.waitForEvent('framenavigated', { predicate: (frame) => frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+      await worker.evaluate(async (url) => floatingPanel.open((await chrome.tabs.query({})).find((tab) => tab.url === url).id), page.url()); const frame = await ready;
+      if (await frame.locator('#welcomeSkipAI').isVisible()) await frame.locator('#welcomeSkipAI').click();
+      await frame.waitForFunction(() => document.getElementById('jobTitle').value === '合成申请岗位');
+      assert.equal(await frame.locator('#jobCompany').inputValue(), '合成飞书企业'); assert.equal(await page.evaluate(() => __secretReads + __applicationSubmits), 0);
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); await frame.locator('#jobCompany').scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(root, 'feishu-application-job-recognition.png') });
+      await page.locator('.resumeEditForm-wrapper').evaluate((node) => node.after(node.cloneNode(true))); assert.equal((await scan()).recognized, false);
+    });
     await t.test('校招移动路径及明确JSON-LD优先级保留，来源参数继续脱敏', async () => {
       const scan = await open('/campus/m/position/2345678901234567890/detail?utm_source=synthetic&userId=synthetic'); let result = await scan(); assert.equal(result.recognized, true); assert.equal(result.candidate.jobId, '2345678901234567890'); assert.ok(!result.candidate.jobUrl.includes('?'));
       await page.evaluate(() => { const node = document.createElement('script'); node.type = 'application/ld+json'; node.textContent = JSON.stringify({ '@type': 'JobPosting', title: '结构化合成岗位', hiringOrganization: { name: '结构化合成组织' }, url: location.href }); document.head.append(node); });
