@@ -144,6 +144,18 @@ test('扩展页面消息正常转发，失效上下文提示重新打开', async
   assert.match((await context.sendMessage('wsa:getState')).error, /重新打开/);
 });
 
+// 原卡片仅在显式用户激活后续期；轮询、隐藏状态及普通管理页均不能隐式恢复权限。
+test('卡片过期消息仅在当前用户操作续期并使用新令牌重试一次', async () => {
+  for (const [active, hidden, pathname, renews] of [[true,false,'/panel/panel.html',1],[false,false,'/panel/panel.html',0],[true,true,'/panel/panel.html',0],[true,false,'/options/options.html',0]]) {
+    const calls = []; const location = { protocol: 'chrome-extension:', pathname, href: 'chrome-extension://test-extension' + pathname + '?token=old', search: '?token=old' };
+    const runtime = { id: 'test-extension', sendMessage: (message, callback) => { calls.push(message); callback(message.type === 'panel:reconnect' ? { ok: true, token: 'new' } : message.panelToken === 'new' ? { ok: true } : { ok: false, code: 'panel_session_invalid' }); } };
+    const context = vm.createContext({ chrome: { runtime }, location, URL, URLSearchParams, navigator: { userActivation: { isActive: active } }, document: { hidden }, history: { replaceState: (_, unused, url) => { location.href = url; location.search = new URL(url).search; } } });
+    vm.runInContext(source('common.js'), context); const result = await context.sendMessage('panel:layout', { collapsed: true });
+    assert.equal(calls.filter((row) => row.type === 'panel:reconnect').length, renews); assert.equal(result.ok, !!renews);
+    if (renews) { assert.equal(calls.length, 3); assert.equal(calls.at(-1).panelToken, 'new'); }
+  }
+});
+
 test('文件设置页走独立运行时，HTTP 页面不能启用该存储回退', async () => {
   let fileCalls = 0; let extensionCalls = 0;
   const context = vm.createContext({ location: { protocol: 'file:' },

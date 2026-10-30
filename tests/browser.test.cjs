@@ -8,6 +8,49 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 使用隔离资料和真实标签激活，验证返回原页及过期卡片的按钮恢复，不访问招聘服务器。
+test('卡片切页恢复：重复填写、编辑、折叠关闭与过期续期', { timeout: 90000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'panel-return-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.name', value: '合成切页姓名' } } });
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/phase5-job.html'); const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url()); let frame;
+    // 打开生产卡片，所有操作均通过真实按钮及原有后台权限入口。
+    async function open() {
+      const loaded = page.waitForEvent('framenavigated', { predicate: (next) => next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+      await worker.evaluate((id) => floatingPanel.open(id), tabId); frame = await loaded; await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
+    }
+    // 显式激活浏览器标签，避免无头浏览器仅切换Playwright焦点而没有真实tabs事件。
+    async function activate(target) { await worker.evaluate(async (url) => chrome.tabs.update((await chrome.tabs.query({})).find((tab) => tab.url === url).id, { active: true }), target.url()); await target.bringToFront(); }
+    // 先等待业务屏障，再回读网页内容；不以按钮点击完成冒充填写成功。
+    async function fill() { await frame.locator('#smartFillAll').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false'); assert.equal(await page.locator('#syntheticName').inputValue(), '合成切页姓名'); }
+    await activate(page); await open(); await fill(); const db = (await rpc(options, 'localapply:read')).database;
+    await t.test('切走再返回仍可编辑、最小化展开和再次自动填写，已有内容保留', async () => {
+      const session = await frame.locator('#tab-smart').getAttribute('data-session-id'); await activate(options); await activate(page);
+      assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), session);
+      await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => document.body.classList.contains('collapsed'));
+      await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => !document.body.classList.contains('collapsed'));
+      const created = context.waitForEvent('page'); await frame.locator('#panelSettings').click(); const editor = await created; await editor.waitForURL(/options\/options.html/);
+      await activate(page); await editor.close(); await fill(); await page.locator('#syntheticName').fill(''); await fill();
+    });
+    await t.test('过期卡片不由轮询续期，用户点击后轮换令牌并可重新填写和关闭', async () => {
+      const oldToken = new URL(frame.url()).searchParams.get('token');
+      // 只推进隔离worker的时钟，立即复现30分钟有效期；不等待或修改真实用户存储。
+      await worker.evaluate(() => { globalThis.__realNow = Date.now; Date.now = () => __realNow() + 1800001; });
+      const expired = await frame.evaluate(() => chrome.runtime.sendMessage({ type: 'panel:context', panelToken: new URLSearchParams(location.search).get('token') })); assert.equal(expired.code, 'panel_session_invalid');
+      await activate(options); await activate(page); await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => document.body.classList.contains('collapsed'));
+      const newToken = new URL(frame.url()).searchParams.get('token'); assert.notEqual(newToken, oldToken);
+      await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => !document.body.classList.contains('collapsed'));
+      await page.locator('#syntheticName').fill(''); await fill(); await page.screenshot({ path: path.join(root, 'panel-return-reconnected.png') });
+      await frame.locator('#panelClose').click(); await page.waitForFunction(() => document.getElementById('wsa-floatbar-host').getBoundingClientRect().width < 100);
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, db); assert.equal(await page.evaluate(() => __stage5Submissions), 0); assert.equal(api.calls.length, 0);
+      const logs = JSON.stringify(await rpc(options, 'diagnostics:read')); for (const secret of [oldToken,newToken,'合成切页姓名']) assert.ok(!logs.includes(secret));
+    });
+  } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 简化处理卡片只定位网页原控件；集中学习、刷新及真实重启均使用独立合成资料。
 test('待处理字段集中学习：原控件手填、统一确认与重启记忆', { timeout: 150000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'pending-learning-')); const api = await serve(); let context;

@@ -134,7 +134,10 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
         fieldLearning.changed(sender, msg); sendResponse({ ok: true }); return;
       }
       const panelSession = sender.url?.split(/[?#]/)[0] === chrome.runtime.getURL('panel/panel.html') ? await floatingPanel.authorize(sender, msg) : null;
+      // 续期只接受原扩展iframe、旧令牌和同一活动文档；网页不能借此恢复已撤销授权。
+      if (msg?.type === 'panel:reconnect') { sendResponse({ ok: true, ...await floatingPanel.reconnect(sender, msg) }); return; }
       if (!['wsa:ping', 'wsa:openPanel', 'wsa:contentSettings'].includes(msg && msg.type) && !trustedPage(sender) && !panelSession) {
+        if (sender.url?.split(/[?#]/)[0] === chrome.runtime.getURL('panel/panel.html')) { sendResponse({ ok: false, code: 'panel_session_invalid', error: '卡片会话已失效，请点击按钮重新连接；仍失败时刷新招聘页后重开插件' }); return; }
         throw new Error('此消息仅允许扩展管理页调用');
       }
       // 悬浮请求绑定自身标签，不能借显式 tabId 授权另一个页面。
@@ -287,7 +290,12 @@ chrome.action?.onClicked?.addListener(async (tab) => {
 });
 // 标签页导航及关闭立即丢弃卡片授权和限流状态。
 // 导航与关闭也清理字段学习的待确认值及进行中的模型任务。
-chrome.tabs?.onUpdated?.addListener((tabId, info) => { if (info.url || info.status === 'loading') { fieldLearning.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); } });
+chrome.tabs?.onUpdated?.addListener(async (tabId, info) => {
+  if (info.url || ['loading', 'complete'].includes(info.status)) {
+    // 活动状态或子框架加载不能清空原页权限；真实导航仍由文档及URL双重校验拦截。
+    if (await floatingPanel.reconcile(tabId).catch(() => true) !== false) fieldLearning.invalidate(tabId);
+  }
+});
 // 只释放已关闭标签的会话，不删除已确认的资料或映射。
 chrome.tabs?.onRemoved?.addListener((tabId) => { presenceTimes.delete(tabId); fieldLearning.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); jobTracking.close(tabId).catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => {});

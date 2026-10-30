@@ -5,7 +5,8 @@
   // 会话可跨后台休眠恢复，但不进入个人库、配置或备份。
   function create(browser, diagnostics, onClose = () => {}) {
     const sessions = new Map();
-    const restored = browser.storage.session?.get(KEY).then((data) => { for (const item of data[KEY] || []) if (Date.now() - item.createdAt < 1800000) sessions.set(item.tabId, item); }).catch(() => {});
+    // 过期回执仅用于同一存活文档的主动续期；普通授权仍严格执行30分钟有效期。
+    const restored = browser.storage.session?.get(KEY).then((data) => { for (const item of (data[KEY] || []).slice(-20)) sessions.set(item.tabId, item); }).catch(() => {});
     // 仅保存当前存活会话，不保存资料或网页内容。
     async function persist() { if (browser.storage.session) await browser.storage.session.set({ [KEY]: [...sessions.values()].slice(-20) }); }
     // 旧标签页重载扩展后可按需补注入；重复入口由模块自身的幂等保护处理。
@@ -30,20 +31,38 @@
       await diagnostics.append('panel.open').catch(() => {}); // 日志存储失败不能中断已打开的卡片。
     }
     // 每次私有请求都验证扩展 iframe、令牌、顶层 URL 与当前文档，拒绝伪造嵌入。
-    async function authorize(sender, message) {
+    async function authorize(sender, message, allowExpired = false) {
       await restored;
       if (sender.id !== browser.runtime.id || !sender.tab || !sender.frameId || sender.url?.split(/[?#]/)[0] !== browser.runtime.getURL('panel/panel.html')) return null;
       const item = sessions.get(sender.tab.id);
-      if (!item || message.panelToken !== item.token || Date.now() - item.createdAt >= 1800000) return null;
+      if (!item || message.panelToken !== item.token || !allowExpired && Date.now() - item.createdAt >= 1800000) return null;
       const tab = await browser.tabs.get(item.tabId); if (tab.url !== item.url) return null;
       const probe = await browser.tabs.sendMessage(item.tabId, { type: 'wsa:floatingProbe' }, { frameId: 0 });
       return probe?.open && probe.documentId === item.documentId ? item : null;
+    }
+    // 仅原卡片在活动标签的明确操作可续期；重新签发令牌并撤销旧填写及学习任务。
+    async function reconnect(sender, message) {
+      const item = await authorize(sender, message, true);
+      if (!item || !(await browser.tabs.get(item.tabId)).active) throw new Error('卡片会话已失效，请刷新招聘页后重新打开插件');
+      onClose(item.tabId);
+      const renewed = { ...item, token: crypto.randomUUID(), createdAt: Date.now() };
+      sessions.set(item.tabId, renewed); await persist();
+      return { token: renewed.token };
+    }
+    // 标签加载通知也可能来自子框架；只在顶层地址或文档确实改变后撤销会话。
+    async function reconcile(tabId) {
+      await restored; const item = sessions.get(tabId); if (!item) return null;
+      const tab = await browser.tabs.get(tabId).catch(() => null);
+      const probe = await browser.tabs.sendMessage(tabId, { type: 'wsa:floatingProbe' }, { frameId: 0 }).catch(() => null);
+      if (tab?.url === item.url && probe?.documentId === item.documentId) return false;
+      if (sessions.get(tabId) !== item) return false;
+      await invalidate(tabId); return true;
     }
     // 关闭立即撤销令牌，再移除网页中的扩展 iframe。
     async function close(tabId) { await restored; onClose(tabId); sessions.delete(tabId); await persist(); await browser.tabs.sendMessage(tabId, { type: 'wsa:floatingClose' }, { frameId: 0 }).catch(() => {}); await diagnostics.append('panel.close').catch(() => {}); }
     // 导航/关闭标签页清除旧会话，刷新不能沿用旧确认。
     async function invalidate(tabId) { await restored; if (sessions.delete(tabId)) await persist(); }
-    return { open, authorize, close, invalidate };
+    return { open, authorize, reconnect, reconcile, close, invalidate };
   }
   global.LocalApplyFloatingPanel = { create };
 })(globalThis);

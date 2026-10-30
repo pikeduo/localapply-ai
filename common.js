@@ -7,6 +7,19 @@ const stateBases = new WeakMap();
 let pendingSave = Promise.resolve();
 let savingCount = 0;
 let lastSaveError = null;
+let panelReconnect = null;
+
+// 续期只在用户当前操作中触发；合并并发请求，令牌只保留在原扩展iframe地址中。
+async function reconnectPanel() {
+  if (!panelReconnect) panelReconnect = (async () => {
+    const result = await sendMessage('panel:reconnect', {}, false);
+    if (result.ok && typeof result.token === 'string') {
+      const url = new URL(location.href); url.searchParams.set('token', result.token); history.replaceState(null, '', url.href);
+    }
+    return result;
+  })().finally(() => { panelReconnect = null; });
+  return panelReconnect;
+}
 
 // 页面只读取后台兼容投影，不再自行初始化、升级或写入整份存储。
 async function getState() {
@@ -66,12 +79,14 @@ function maskValue(value, sensitive, privacyMask, revealed) {
 }
 
 // 文件设置页使用独立运行时；扩展页仍只通过受限后台消息访问私有存储。
-function sendMessage(type, payload) {
+async function sendMessage(type, payload, allowReconnect = true) {
   if (globalThis.location?.protocol === 'file:') {
     if (globalThis.LocalApplyStandalone?.enabled) return globalThis.LocalApplyStandalone.request(type, payload);
     return Promise.resolve({ ok: false, error: '本地文件管理组件未加载。请保留完整项目目录中的 data 和 options 文件，刷新此页后重试。' });
   }
-  return new Promise((resolve) => {
+  // 轮询和隐藏页不能续期；只有用户点击后的短期浏览器激活状态才允许恢复同一文档。
+  const userAction = globalThis.navigator?.userActivation?.isActive === true && !globalThis.document?.hidden;
+  const response = await new Promise((resolve) => {
     const runtime = globalThis.chrome && globalThis.chrome.runtime;
     if (!runtime || !runtime.id || typeof runtime.sendMessage !== 'function') {
       resolve({ ok: false, error: '当前页面不在有效的浏览器扩展环境中。请先在浏览器扩展管理页加载本项目，再从插件的「设置」或「扩展选项」进入；直接打开 HTML 或通过本地服务器预览无法使用。扩展刚重载时，请关闭此页后重新打开。' });
@@ -94,6 +109,12 @@ function sendMessage(type, payload) {
         : error.message || String(error) });
     }
   });
+  if (allowReconnect && userAction && response.code === 'panel_session_invalid' && globalThis.location?.pathname === '/panel/panel.html') {
+    const renewed = await reconnectPanel();
+    if (renewed.ok) return sendMessage(type, payload, false);
+    return renewed;
+  }
+  return response;
 }
 
 function sendToTab(tabId, type, payload) {

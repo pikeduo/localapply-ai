@@ -11,7 +11,7 @@ function fixture() {
   const disk = {}; let url = 'https://jobs.example.test/apply?private=synthetic'; let doc = 'document.one'; let open = false;
   const storage = { get: async (key) => ({ [key]: structuredClone(disk[key]) }), set: async (value) => Object.assign(disk, structuredClone(value)) };
   const browser = { storage: { session: storage }, runtime: { id: 'synthetic-extension', getURL: (page) => 'chrome-extension://synthetic-extension/' + page },
-    tabs: { get: async () => ({ url }), sendMessage: async (id, message) => { if (message.type === 'wsa:floatingProbe') return { ok: true, open, documentId: doc };
+    tabs: { get: async () => ({ url, active: true }), sendMessage: async (id, message) => { if (message.type === 'wsa:floatingProbe') return { ok: true, open, documentId: doc };
       if (message.type === 'wsa:floatingOpen') { open = true; return { ok: true }; } if (message.type === 'wsa:floatingClose') open = false; return { ok: true }; } } };
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, Date });
   for (const file of ['fill-result','diagnostics','floating-panel']) vm.runInContext(fs.readFileSync(path.join(__dirname,'../data',file + '.js'),'utf8'), context);
@@ -33,6 +33,35 @@ test('诊断仅记录白名单与安全错误分类，保留上限且可清空',
   const restarted = env.context.LocalApplyDiagnostics.create(env.browser.storage.session); assert.equal((await restarted.read()).rows.length, 400);
   env.disk['localapply.diagnostics'][0].at = '2000-01-01T00:00:00.000Z'; assert.equal((await restarted.read()).rows.length, 399);
   await env.diagnostics.clear(); assert.equal((await env.diagnostics.read()).rows.length, 0);
+});
+
+// 相同顶层文档的加载通知不能撤销卡片；真实导航、重载仍撤销旧令牌。
+test('卡片加载通知核对真实文档，不因同页通知或后台重建失去权限', async () => {
+  const env = fixture(); assert.equal(await env.manager.reconcile(1), null);
+  await env.manager.open(1); const panelToken = env.token();
+  assert.equal(await env.manager.reconcile(1), false); assert.ok(await env.manager.authorize(env.sender, { panelToken }));
+  const restored = env.context.LocalApplyFloatingPanel.create(env.browser, env.diagnostics);
+  assert.equal(await restored.reconcile(1), false); assert.ok(await restored.authorize(env.sender, { panelToken }));
+  env.navigate(); assert.equal(await restored.reconcile(1), true); assert.equal(await restored.authorize(env.sender, { panelToken }), null);
+  const reloaded = fixture(); await reloaded.manager.open(1); const old = reloaded.token(); reloaded.reload();
+  assert.equal(await reloaded.manager.reconcile(1), true); assert.equal(await reloaded.manager.authorize(reloaded.sender, { panelToken: old }), null);
+});
+
+// 过期并不等于可以放开权限：续期仍须原令牌、原文档、原iframe及活动标签。
+test('过期卡片可在同一活动文档续期，轮换令牌且拒绝伪造和导航恢复', async () => {
+  const env = fixture(); await env.manager.open(1); const oldToken = env.token();
+  env.disk['localapply.panelSessions'][0].createdAt = Date.now() - 1800001;
+  let cancelled = 0; const manager = env.context.LocalApplyFloatingPanel.create(env.browser, env.diagnostics, () => { cancelled++; });
+  assert.equal(await manager.authorize(env.sender, { panelToken: oldToken }), null);
+  await assert.rejects(manager.reconnect(env.sender, { panelToken: 'forged' }));
+  await assert.rejects(manager.reconnect({ ...env.sender, frameId: 0 }, { panelToken: oldToken }));
+  const get = env.browser.tabs.get; env.browser.tabs.get = async () => ({ ...await get(), active: false });
+  await assert.rejects(manager.reconnect(env.sender, { panelToken: oldToken })); env.browser.tabs.get = get;
+  const renewed = await manager.reconnect(env.sender, { panelToken: oldToken }); assert.notEqual(renewed.token, oldToken);
+  assert.equal(cancelled, 1);
+  assert.ok(await manager.authorize(env.sender, { panelToken: renewed.token })); assert.equal(await manager.authorize(env.sender, { panelToken: oldToken }), null);
+  env.navigate(); await assert.rejects(manager.reconnect(env.sender, { panelToken: renewed.token }));
+  await manager.invalidate(1); await assert.rejects(manager.reconnect(env.sender, { panelToken: renewed.token }));
 });
 
 // 控件诊断只能带固定原因和数量，恶意或含个人资料的附加属性必须丢弃。
