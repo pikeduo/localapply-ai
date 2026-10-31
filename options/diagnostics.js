@@ -3,13 +3,14 @@
   'use strict';
   const $ = (id) => document.getElementById(id); if (!$('diagnosticsPanel')) return;
   let refreshTimer; let loadVersion = 0;
-  // 从受限后台读取已持久化记录；仅最新请求可更新视图，迟到响应不覆盖清理结果。
+  // 读取后台已转换为北京时间的记录；仅最新请求可更新视图，迟到响应不覆盖清理结果。
   async function load() {
     const version = ++loadVersion;
     const result = await sendMessage('diagnostics:read'); if (!result.ok) throw new Error(result.error);
     if (version !== loadVersion) return result;
     const status = $('logsStorageStatus');
     if (status) { status.textContent = result.storage?.lastWriteFailed ? '最近一次日志写入失败，当前显示的是之前已保存的记录；请检查扩展本地存储后重试。' : '日志自动保存在本浏览器扩展的 chrome.storage.local（localapply.diagnostics），重启后保留；点击“导出日志”另存为 JSON 文件。'; status.className = result.storage?.lastWriteFailed ? 'err' : 'muted'; }
+    if (status) status.textContent += ' 时间均为北京时间（UTC+8）。';
     // 使用官方实际占用统计，只展示字节与固定配额提示，不自动清理个人数据。
     if (status && result.databaseStorage) {
       const info = result.databaseStorage;

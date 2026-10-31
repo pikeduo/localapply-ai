@@ -4,6 +4,11 @@
   const KEY = 'localapply.diagnostics';
   const MAX_ROWS = 400;
   const fillReasons = global.LocalApplyFillResult.REASONS;
+  // 输出固定 UTC+8 的北京时间，保留同一时刻且不受操作系统时区影响。
+  function beijingTime(at) {
+    const timestamp = Date.parse(at);
+    return Number.isFinite(timestamp) ? new Date(timestamp + 8 * 3600000).toISOString().replace(/Z$/, '+08:00') : at;
+  }
   // 覆盖流程只记录固定操作和结果统计，网页原值及本地拟填值不进入诊断。
   const operations = ['panel.open','panel.close','page.presence','page.error','ui.error','jobs.scan','jobs.submitted','jobs.feedback','learning.beginFill','learning.cancelFill','learning.endFill','learning.scanPage','learning.prepareRecords','learning.overwriteContext','learning.previewOverwrite','learning.confirmOverwrite','learning.cancelOverwrite','learning.prepareAI','learning.recognize','learning.cancelAI','learning.ignore','learning.select','learning.readField','learning.previewValue','learning.commitValue','learning.fill','learning.remember','learning.revoke','learning.editRule','learning.deleteRule','learning.undoRule','localapply.command','localapply.saveLegacy','localapply.vault','localapply.previewImport','wsa.aiChat','wsa.listModels','wsa.probeCapabilities','wsa.resumeRoute','wsa.aiExtractResume','wsa.cancelResume','runtime.request'];
   // 将异常归为稳定错误码，外部响应、用户标签和凭据不进入日志。
@@ -38,8 +43,12 @@
       });
       pending = job.catch(() => { lastWriteFailed = true; }); return job;
     }
-    // 读取等待已有写入，导出不会丢掉刚完成的错误记录。
-    async function read() { await pending; const data = await storage.get(KEY); const cutoff = Date.now() - 7 * 86400000; return { version: 2, storage: { area: 'chrome.storage.local', key: KEY, maxRows: MAX_ROWS, retentionDays: 7, lastWriteFailed }, rows: (data[KEY] || []).filter((row) => Date.parse(row.at) >= cutoff).slice(-MAX_ROWS) }; }
+    // 等待已有写入并统一返回北京时间；仅转换副本，不改写存储中的原始时间。
+    async function read() {
+      await pending; const data = await storage.get(KEY); const cutoff = Date.now() - 7 * 86400000;
+      return { version: 2, timeZone: 'Asia/Shanghai', storage: { area: 'chrome.storage.local', key: KEY, maxRows: MAX_ROWS, retentionDays: 7, lastWriteFailed },
+        rows: (data[KEY] || []).filter((row) => Date.parse(row.at) >= cutoff).slice(-MAX_ROWS).map((row) => ({ ...row, at: beijingTime(row.at) })) };
+    }
     // 清理仅删除诊断日志，不能影响个人库或凭据。
     function clear() { const job = pending.then(async () => { await storage.set({ [KEY]: [] }); lastWriteFailed = false; }); pending = job.catch(() => { lastWriteFailed = true; }); return job; }
     return { append, read, clear };

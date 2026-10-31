@@ -27,12 +27,40 @@ test('诊断仅记录白名单与安全错误分类，保留上限且可清空',
   error.stack = 'Error: ' + secret + '\n at call (chrome-extension://synthetic-extension/data/ai-client.js:63:4)';
   await env.diagnostics.append('wsa.aiChat', { level: 'ERROR', error, payload: secret, value: secret, url: 'https://example.test/private', durationMs: 123 });
   const result = await env.diagnostics.read(); assert.equal(result.rows[0].httpStatus, 502); assert.equal(result.rows[0].file, 'data/ai-client.js');
+  assert.match(env.disk['localapply.diagnostics'][0].at, /Z$/); assert.match(result.rows[0].at, /\+08:00$/);
   assert.ok(!JSON.stringify(result).includes(secret)); assert.ok(!JSON.stringify(result).includes('example.test'));
   for (let i = 0; i < 405; i++) await env.diagnostics.append('page.presence', { count: i, kind: 'application' });
   assert.equal((await env.diagnostics.read()).rows.length, 400);
   const restarted = env.context.LocalApplyDiagnostics.create(env.browser.storage.session); assert.equal((await restarted.read()).rows.length, 400);
   env.disk['localapply.diagnostics'][0].at = '2000-01-01T00:00:00.000Z'; assert.equal((await restarted.read()).rows.length, 399);
   await env.diagnostics.clear(); assert.equal((await env.diagnostics.read()).rows.length, 0);
+});
+
+// 新旧时间偏移统一显示为北京时间，跨日跨年不丢时刻，读取不改写或重复加八小时。
+test('诊断时间固定为北京时间，兼容历史 UTC 并保持七天保留边界', async () => {
+  for (const [original, expected] of [
+    ['2026-10-29T03:43:40.349Z', '2026-10-29T11:43:40.349+08:00'],
+    ['2026-12-31T20:15:00.000Z', '2027-01-01T04:15:00.000+08:00'],
+    ['2027-01-01T04:15:00.000+08:00', '2027-01-01T04:15:00.000+08:00'],
+    ['2026-12-31T15:15:00.000-05:00', '2027-01-01T04:15:00.000+08:00']
+  ]) {
+    const env = fixture(); const now = Date.parse(original) + 3600000; const cutoff = now - 7 * 86400000;
+    // 仅固定此模块的保留时钟，不修改 Node 进程或其他测试的时间。
+    env.context.Date = class extends Date { static now() { return now; } };
+    env.disk['localapply.diagnostics'] = [
+      { id: 'current', at: original, operation: 'page.presence' },
+      { id: 'boundary', at: new Date(cutoff).toISOString(), operation: 'page.presence' },
+      { id: 'expired', at: new Date(cutoff - 1).toISOString(), operation: 'page.presence' },
+      { id: 'invalid', at: 'invalid-date', operation: 'page.presence' }
+    ];
+    const stored = structuredClone(env.disk['localapply.diagnostics']);
+    for (let read = 0; read < 2; read++) {
+      const report = await env.diagnostics.read(); assert.equal(report.timeZone, 'Asia/Shanghai'); assert.equal(report.rows.length, 2);
+      assert.equal(report.rows[0].at, expected); assert.equal(Date.parse(report.rows[0].at), Date.parse(original));
+      assert.equal(report.rows[1].id, 'boundary'); assert.equal(Date.parse(report.rows[1].at), cutoff);
+    }
+    assert.deepEqual(env.disk['localapply.diagnostics'], stored);
+  }
 });
 
 // 相同顶层文档的加载通知不能撤销卡片；真实导航、重载仍撤销旧令牌。

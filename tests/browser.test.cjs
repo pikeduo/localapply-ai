@@ -701,10 +701,16 @@ test('卡片导航与小球：固定导航、实时日志、收起拖动及重�
       await frame.locator('#logsTab').click(); await frame.waitForFunction(() => document.getElementById('logsOutput').textContent.includes('panel.open'));
       await rpc(options, 'diagnostics:uiError', { error: 'synthetic-private-error-value' });
       const result = await rpc(options, 'diagnostics:read'); retainedId = result.rows.at(-1).id; assert.equal(result.rows.at(-1).operation, 'ui.error');
+      // 界面读取固定北京时间，实际时刻与持久层 UTC 一致。
+      assert.equal(result.timeZone, 'Asia/Shanghai'); assert.ok(result.rows.every((row) => /\+08:00$/.test(row.at)));
       await frame.waitForFunction((id) => document.getElementById('logsOutput').textContent.includes(id), retainedId);
       assert.ok(!(await frame.locator('#logsOutput').textContent()).includes('synthetic-private-error-value'));
       assert.equal(await options.evaluate(async (id) => (await chrome.storage.local.get('localapply.diagnostics'))['localapply.diagnostics'].some((row) => row.id === id), retainedId), true);
       assert.match(await frame.locator('#logsStorageStatus').textContent(), /chrome.storage.local/);
+      assert.match(await frame.locator('#logsStorageStatus').textContent(), /北京时间（UTC\+8）/);
+      const displayed = (await frame.locator('#logsOutput').textContent()).split('\n').map((line) => JSON.parse(line)).find((row) => row.id === retainedId);
+      const storedAt = await options.evaluate(async (id) => (await chrome.storage.local.get('localapply.diagnostics'))['localapply.diagnostics'].find((row) => row.id === id).at, retainedId);
+      assert.match(displayed.at, /\+08:00$/); assert.match(storedAt, /Z$/); assert.equal(Date.parse(displayed.at), Date.parse(storedAt));
       await page.screenshot({ path: path.join(root, 'panel-navigation-logs.png') });
     });
     await t.test('× 撤销旧会话并显示可拖动小球，拖动不误展开，点击重新打开后日志保留', async () => {
@@ -726,6 +732,8 @@ test('卡片导航与小球：固定导航、实时日志、收起拖动及重�
       await context.close(); await setup(); await frame.locator('#logsTab').click(); await frame.waitForFunction((id) => document.getElementById('logsOutput').textContent.includes(id), retainedId);
       const downloaded = page.waitForEvent('download'); await frame.locator('#logsExport').click(); const download = await downloaded; const artifact = path.join(root, 'panel-navigation-diagnostics.json'); await download.saveAs(artifact);
       const report = JSON.parse(await fs.readFile(artifact, 'utf8')); assert.ok(report.rows.some((row) => row.id === retainedId)); assert.equal(report.storage.key, 'localapply.diagnostics');
+      // 重启后的 JSON 导出也带明确 UTC+8 偏移，不能重新显示 UTC。
+      assert.equal(report.timeZone, 'Asia/Shanghai'); assert.ok(report.rows.every((row) => /\+08:00$/.test(row.at)));
       assert.ok(!JSON.stringify(report).includes('synthetic-private-error-value')); assert.equal(api.calls.length, 0); assert.deepEqual(errors, []);
     });
   } finally { if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
