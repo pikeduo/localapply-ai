@@ -47,11 +47,11 @@ function Text({ id, name, multiline = false }) {
   const [value, setValue] = useState(mode==='parsed'?'网站解析内容 · '+id:mode === 'prefilled' && id.endsWith('.schoolText') ? '网页合成学校' : ''); globalThis.__atsx[id] = value;
   return h(Field, { id, name }, h(multiline ? 'textarea' : 'input', { id, value, onChange: (event) => setValue(event.target.value) }));
 }
-// 每条记录共享模板；AI模式故意使用未知角色标签，验证建议不能把多段内容串条。
+// 每条记录共享模板；可显式使用学校文本框区分已填内容和未确认搜索，AI模式验证多段来源。
 function Record({ kind, index, add }) {
   const prefix = { education: 'education', employment: 'career', internship: 'internship', project: 'project' }[kind]; const id = prefix + '[' + index + ']';
   return h('div', { className: 'resumeEditForm-item resumeEditForm-' + prefix },
-    kind === 'education' ? h(React.Fragment, null, mode === 'prefilled' ? h(Text, { id: id + '.schoolText', name: '学校名称' }) : h(Choice, { id: id + '.school', name: '学校名称', combo: true, values: ['合成本科大学', '合成硕士大学', '合成博士大学'] }),
+    kind === 'education' ? h(React.Fragment, null, mode === 'prefilled' || new URLSearchParams(location.search).get('schoolControl') === 'text' ? h(Text, { id: id + '.schoolText', name: '学校名称' }) : h(Choice, { id: id + '.school', name: '学校名称', combo: true, values: ['合成本科大学', '合成硕士大学', '合成博士大学'] }),
       h(Choice, { id: id + '.degree', name: '学历', values: ['本科', '硕士', '博士'] }), h(Text, { id: id + '.fieldOfStudy', name: '专业' }))
       : kind === 'project' ? h(React.Fragment, null, h(Text, { id: id + '.name', name: '项目名称' }), h(Text, { id: id + '.role', name: mode === 'ai-roles' ? '项目角色' : '职责' }))
         : h(React.Fragment, null, h(Text, { id: id + '.company', name: '公司名称' }), h(Text, { id: id + '.title', name: '职位名称' })),

@@ -125,10 +125,12 @@ test('网页解析纠错覆盖：差异确认、既有控件与多段经历保�
     await page.evaluate(()=>{const block=document.createElement('fieldset'); block.innerHTML='<legend>基本信息</legend><label>姓名<input id="parsed-name" value="网站解析姓名"></label><div><label for="parsed-gender">性别</label><select id="parsed-gender"><option value="F" selected>女</option><option value="M">男</option></select></div><div class="form-item"><span class="label">政治面貌</span><label><input type="radio" name="politicalStatus" value="群众" checked>群众</label><label><input type="radio" name="politicalStatus" value="中共党员">中共党员</label></div><label>出生日期<input id="parsed-birth" type="date" value="2001-03-16"></label><label>邮箱<input id="parsed-email" value="synthetic@example.test"></label><label>合成未知代号<input id="parsed-unknown" value="保留未知内容"></label>'; document.querySelector('form').prepend(block);});
     const loaded=page.waitForEvent('framenavigated',{predicate:(frame)=>frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});
     await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url()); const frame=await loaded; await frame.locator('#profileSel option').first().waitFor({state:'attached'});
-    // 统一等待业务状态，所有覆盖请求均由卡片按钮生成，不直接注入页面填写意图。
-    const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false',null,{timeout:60000});
+    // 超时时保留合成页面的可见性及业务状态，区分标签暂停和业务错误，不记录会话令牌。
+    const idle=async()=>{try{await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false',null,{timeout:60000});}catch(error){await fs.writeFile(path.join(root,'parsed-overwrite-timeout.json'),JSON.stringify({status:await frame.locator('#smartStatus').textContent(),panelHidden:await frame.evaluate(()=>document.hidden),pageHidden:await page.evaluate(()=>document.hidden),tabActive:await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((tab)=>tab.url===url)?.active,page.url()),diagnostics:await rpc(options,'diagnostics:read')},null,2));throw error;}};
     const preview=async()=>{await frame.locator('#smartOverwritePreview').click(); await idle();};
     await t.test('默认自动填写保留网站解析结果，取消差异预览也不修改',async()=>{
+      // 自动填写应在当前标签执行；显式建立前置状态，避免扩展初始化改变活动页造成等待。
+      await worker.evaluate(async(url)=>chrome.tabs.update((await chrome.tabs.query({})).find((tab)=>tab.url===url).id,{active:true}),page.url()); await page.bringToFront();
       await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.locator('#parsed-name').inputValue(),'网站解析姓名'); assert.equal(await page.evaluate(()=>__atsx['project[0].name']),'网站解析内容 · project[0].name');
       await frame.locator('#smartOverwriteOpen').click(); await idle(); assert.equal(await frame.locator('.smart-overwrite-record').count(),3); assert.deepEqual(await frame.locator('.smart-overwrite-record').evaluateAll((nodes)=>nodes.map((node)=>node.value)),['','','']);
       await preview(); const changes=await frame.locator('.smart-overwrite-change').allTextContents(); assert.ok(changes.some((text)=>text.includes('网站解析姓名')&&text.includes('合成纠错姓名'))); assert.ok(!changes.some((text)=>text.includes('项目经历')));
@@ -213,6 +215,61 @@ test('网站上传后补填：零写入说明、经历配对和空白字段确�
       const logs=await rpc(options,'diagnostics:read'); await fs.writeFile(path.join(root,'parsed-gaps-diagnostics.json'),JSON.stringify(logs,null,2));
       for(const secret of ['合成补填角色一','合成补填角色二','网站解析内容']) assert.ok(!JSON.stringify(logs).includes(secret));
       await page.locator('input[id="project[0].name"]').scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(root,'parsed-gaps-filled.png')});
+    });
+  } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
+});
+
+// 自动关联只为补填提供整条来源：真实React单条教育和乱序项目无需二次手动配对。
+test('自动经历配对：单条补填、乱序项目和局部歧义的React回归', {timeout:90000}, async(t)=> {
+  const root=path.join(ROOT,'.browser-tests'); await fs.mkdir(root,{recursive:true}); const profile=await fs.mkdtemp(path.join(root,'auto-pair-')); const api=await serve(); let context;
+  try {
+    context=await launch(profile); context.setDefaultTimeout(10000); const {worker,extensionId}=await extension(context);
+    const options=await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+    const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
+    const entryId=(await rpc(options,'localapply:command',{request:{action:'createEntry',payload:{profileId,kind:'project',title:'合成自动配对项目二'}}})).result;
+    for(const [key,value] of [['school','合成本科大学'],['degree','本科'],['major','合成自动专业']]) await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.'+key,value}}});
+    for(const [entry,name,role,description] of [[null,'合成自动项目一','合成自动角色一','合成自动描述一'],[entryId,'合成自动项目二','合成自动角色二','合成自动描述二']]) for(const [key,value] of [['projectName',name],['projectRole',role],['projectDescription',description]]) await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.'+key,entryId:entry,value}}});
+    const before=(await rpc(options,'localapply:read')).database;
+    // 仅通过网页控件设定合成的已解析内容，再从真实卡片发起普通自动填写。
+    async function scenario(ambiguous=false,caseId=ambiguous?'ambiguous':'unique') {
+      const page=await context.newPage(); await page.goto(api.base+'/test-pages/feishu-atsx-controls.html?mode=parsed&schoolControl=text&autoPairCase='+caseId); await page.locator('.resumeEditForm-project').first().waitFor();
+      await page.locator('input[id="education[0].fieldOfStudy"]').fill('');
+      for(const [index,name] of [[0,'合成自动项目二'],[1,ambiguous?'无法确定项目':'合成自动项目一']]) {await page.locator(`input[id="project[${index}].name"]`).fill(name); await page.locator(`input[id="project[${index}].role"]`).fill(''); await page.locator(`textarea[id="project[${index}].desc"]`).fill('');}
+      const loaded=page.waitForEvent('framenavigated',{predicate:(frame)=>frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});
+      await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url()); const frame=await loaded; await frame.locator('#profileSel option').first().waitFor({state:'attached'});
+      await frame.locator('#smartFillAll').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+      // 断言前留存合成场景状态，失败也能追溯配对与学历保护，不读取真实招聘资料。
+      const sessionId=await frame.locator('#tab-smart').getAttribute('data-session-id');
+      await fs.writeFile(path.join(root,'auto-pair-'+caseId+'.json'),JSON.stringify({status:await frame.locator('#smartStatus').textContent(),view:await rpc(options,'learning:session',{sessionId}),state:await page.evaluate(()=>__atsx)},null,2));
+      return {page,frame};
+    }
+    await t.test('单条教育与两条反向项目直接补齐五项，保留网页学历学校和日期',async()=>{
+      const {page,frame}=await scenario(); const state=await page.evaluate(()=>__atsx);
+      assert.equal(state['education[0].fieldOfStudy'],'合成自动专业'); assert.equal(state['education[0].schoolText'],'网站解析内容 · education[0].schoolText'); assert.equal(state['education[0].degree'],'本科'); assert.deepEqual(state['education[0].period'],['2018-09','2019-06']);
+      for(const [index,role,description] of [[0,'合成自动角色二','合成自动描述二'],[1,'合成自动角色一','合成自动描述一']]) {assert.equal(state[`project[${index}].role`],role); assert.equal(state[`project[${index}].desc`],description);}
+      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 5 个字段，失败\/不支持 0，需确认 0/); assert.equal(await frame.locator('.smart-pair-record').count(),0); assert.equal(await frame.locator('#smartOverwriteReview').isVisible(),false); assert.equal(state.adds+state.saves+state.submits,0);
+      await page.screenshot({path:path.join(root,'auto-pair-filled.png')});
+    });
+    await t.test('同模块中一条不明确时，只保护该条，其他记录仍自动补齐',async()=>{
+      const {page,frame}=await scenario(true); const state=await page.evaluate(()=>__atsx); assert.equal(state['project[0].role'],'合成自动角色二'); assert.equal(state['project[0].desc'],'合成自动描述二'); assert.equal(state['project[1].role'],''); assert.equal(state['project[1].desc'],'');
+      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 3 个字段，失败\/不支持 0/); assert.ok(await frame.locator('.smart-pair-record').count()>0); assert.equal(state.adds+state.saves+state.submits,0);
+    });
+    await t.test('确认纠正同一来源学校后，普通填写仍能补齐其他空白',async()=>{
+      const {page,frame}=await scenario(false,'confirmed'); const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+      await frame.locator('#smartOverwriteOpen').click(); await idle(); await frame.locator('#smartOverwritePreview').click(); await idle(); assert.equal(await frame.locator('.smart-overwrite-change').count(),1);
+      await frame.locator('#smartOverwriteConsent').check(); await frame.locator('#smartOverwriteConfirm').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['education[0].schoolText']),'合成本科大学');
+      await page.locator('input[id="education[0].fieldOfStudy"]').fill(''); await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['education[0].fieldOfStudy']),'合成自动专业');
+      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 1 个字段，失败\/不支持 0/); assert.equal(await page.evaluate(()=>__atsx.adds+__atsx.saves+__atsx.submits),0); assert.deepEqual((await rpc(options,'localapply:read')).database,before);
+    });
+    await t.test('自动来源确认后网页身份改动即停止写入，资料和日志没有身份原文',async()=>{
+      const page=await context.newPage(); await page.goto(api.base+'/test-pages/feishu-atsx-controls.html?mode=parsed&autoPairCase=identity-change'); await page.locator('.resumeEditForm-project').first().waitFor();
+      await page.locator('input[id="project[0].name"]').fill('合成自动项目二'); await page.locator('input[id="project[0].role"]').fill('');
+      const tabId=await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((tab)=>tab.url===url).id,page.url()); let view=await rpc(options,'learning:scanPage',{tabId,profileId,confirmed:true}); view=await rpc(options,'learning:prepareRecords',{sessionId:view.sessionId,confirmed:true});
+      const role=view.rows.find((row)=>row.field.label==='职责'&&row.target?.entryId===entryId); assert.ok(role); await page.locator('input[id="project[0].name"]').fill('用户已更换的项目');
+      view=await rpc(options,'learning:fill',{sessionId:view.sessionId,scanId:role.field.scanId,confirmed:true}); assert.equal(view.rows.find((row)=>row.field.scanId===role.field.scanId).recordBindingRequired,true); assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'');
+      assert.deepEqual((await rpc(options,'localapply:read')).database,before); assert.equal(api.calls.length,0); assert.equal(await page.evaluate(()=>__atsx.adds+__atsx.saves+__atsx.submits),0);
+      const logs=await rpc(options,'diagnostics:read'); for(const secret of ['合成自动项目二','合成自动角色一','合成自动专业','用户已更换的项目']) assert.ok(!JSON.stringify(logs).includes(secret));
+      await fs.writeFile(path.join(root,'auto-pair-diagnostics.json'),JSON.stringify(logs,null,2));
     });
   } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
 });

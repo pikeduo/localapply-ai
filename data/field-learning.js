@@ -390,6 +390,7 @@
             const wasBound=Object.hasOwn(item.recordBindings,record.recordId); const bound=Object.hasOwn(staged.recordBindings,record.recordId);
             if(wasBound!==bound || bound && item.recordBindings[record.recordId]!==staged.recordBindings[record.recordId]) record.scanIds.forEach((id)=>rebound.add(id));
             if(bound) item.recordBindings[record.recordId]=staged.recordBindings[record.recordId]; else delete item.recordBindings[record.recordId];
+            records.confirmBinding(item,record.recordId);
             record.scanIds.forEach((id)=>bound?item.protectedRecords.delete(id):item.protectedRecords.add(id));
           }
           // 改配只重建运行时来源，清除旧手选/验证/覆盖许可；未勾选项不会获得写入令牌。
@@ -473,7 +474,7 @@
       }
       // 会话命令先明确分派；未知/旧版本命令不能误报为缺少单字段扫描授权。
       check(['learning:ignore', 'learning:select', 'learning:focusField', 'learning:readField', 'learning:previewValue', 'learning:commitValue', 'learning:fill', 'learning:remember'].includes(msg.type), '未知字段学习操作，请重新加载扩展并刷新招聘页');
-      const row = rowOf(item, msg.scanId);
+      let row = rowOf(item, msg.scanId);
       if (msg.type === 'learning:focusField') {
         await pageMessage(item.tabId, { type: 'learning:focus', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId }); return { focused: true };
       }
@@ -518,12 +519,16 @@
         check(Object.keys(msg).every((key) => ['type', 'sessionId', 'scanId', 'confirmed', 'overwriteToken', 'panelToken','batchId'].includes(key)), '填写意图只能由后台生成');
         check(msg.confirmed === true && row.target, '填写前必须核对本地来源并确认');
         check(item.fillContractVersion === global.LocalApplyFillContract.VERSION, '页面填写契约尚未加载，请刷新网页后重新扫描');
-        const value = M.valueOf(db, item.profileId, row.target)?.value; check(M.hasValue(value), '本地没有该字段值，请先填写资料');
+        const source = clone(row.target); const value = M.valueOf(db, item.profileId, source)?.value; check(M.hasValue(value), '本地没有该字段值，请先填写资料');
         // 覆盖令牌只允许当前项、当前资料版本及五分钟内已展示的差异，不能用布尔开关绕过。
         const overwrite = msg.overwriteToken !== undefined;
         if (overwrite) check(row.conflict?.token === msg.overwriteToken && row.conflict.revision === db.revision && Date.now() - row.conflict.createdAt < 300000 && JSON.stringify(value) === JSON.stringify(row.conflict.after), '覆盖确认已失效，请重新填写并预览差异');
-        const task=jobFor(item,db,msg.batchId);task.check();row.status = 'filling'; delete row.diagnostic;
+        const task=jobFor(item,db,msg.batchId);task.check();
         try {
+          // 自动配对也须在写入前复核当前记录，不能沿用用户已改动的学校/公司/项目依据。
+          if(!await records.validateBinding(item,db,row.field.scanId,task)) { rebuild(item,db); return view(item,db); }
+          row=rowOf(item,msg.scanId); check(row.target&&row.target.fieldId===source.fieldId&&row.target.entryId===source.entryId&&JSON.stringify(M.valueOf(db,item.profileId,row.target)?.value)===JSON.stringify(value),'经历来源已变化，请重新识别');
+          row.status='filling'; delete row.diagnostic;
           const intent = global.LocalApplyFillContract.createIntent(db, item.profileId, row.target, row.field, { sessionId: item.sessionId, tabId: item.tabId, documentId: item.documentId });
           task.check();const result = await pageMessage(item.tabId, { type: 'learning:fill', documentId: item.documentId, scanId: row.field.scanId, semanticId: row.field.semanticId, value, intent,operationId:task.id, ...(overwrite ? { overwrite: true, expectedCurrent: row.conflict.before } : {}) });task.check();
           check(['success', 'failed', 'unsupported', 'needs_confirmation'].includes(result.result.status), '网页返回无效填写结果');
@@ -535,6 +540,8 @@
           row.diagnostic = global.LocalApplyDiagnostics.fillInfo({ ...result.result.diagnostic, traceAvailable: !!result.result.diagnostic,
             fieldNumber: item.fields.findIndex((field) => field.scanId === row.field.scanId) + 1, controlType: row.field.type, fieldKind: row.field.kind, status: row.status });
         } catch (error) {
+          // 来源复核可能已重建行对象，失败必须落到当前界面行，不能留在旧引用上。
+          row = item.rows.find((current) => current.field.scanId === msg.scanId) || row;
           row.status = 'failed'; row.reason = task.signal.aborted?'已取消填写':error.message; row.verification = null; row.chosen = true;
           row.diagnostic = global.LocalApplyDiagnostics.fillInfo({ phase: 'write', reasonCode: task.signal.aborted?'cancelled':'operation_error', status: 'failed', traceAvailable: false,
             fieldNumber: item.fields.findIndex((field) => field.scanId === row.field.scanId) + 1, controlType: row.field.type, fieldKind: row.field.kind });
