@@ -108,3 +108,23 @@ test('受控组件回退、子项校验失败和取消验证不记成功，也�
   env = fixture('phone', '+44 2070000000'); env.item.el.onChange = () => { env.item.el.attrs['aria-invalid'] = 'true'; }; assert.equal((await env.fill()).status, 'failed'); assert.equal(env.marks(), 0);
   env = fixture(); const controller = new AbortController(); controller.abort(); assert.equal((await env.fill({ signal: controller.signal })).ok, false); assert.equal(env.writes(), 0);
 });
+
+// 修改已有年月的年份时，只接受保留原月份的延迟回写；不能吞掉月份或对侧外部变化。
+test('ATSX改年回写保留原月，目标月份或对侧被改动仍停止', async () => {
+  for(const mode of ['retained','month-changed','peer-changed']) {
+    const env=fixture('date','2028-06'); const {el}=env.item; el.value='2018-09'; const peer={...el,value:'2019-06'};
+    env.item.compound={kind:'date',atsx:true,parts:{value:el,peer}};
+    env.context.LocalApplyATSX={range:(node)=>node===el || node===peer,dateText:(node)=>node.value,exclusion:()=>null};
+    // 只替代组件的异步回写；执行器的原节点、来源投影、子项守卫均保留生产实现。
+    env.context.LocalApplyFieldAdapters.fill=async(item,value,lifecycle)=>{
+      lifecycle.check(); lifecycle.changed(el); await Promise.resolve(); el.value=mode==='month-changed'?'2028-10':'2028-09';
+      if(mode==='peer-changed')peer.value='2000-01';
+      lifecycle.settled(el,{iso:'2028-',precision:'month',partial:true}); lifecycle.check();
+      el.value='2028-06'; lifecycle.settled(el,{iso:'2028-06',precision:'month'}); lifecycle.check(); return {ok:true};
+    };
+    const state=env.context.LocalApplyDatePhoneControls.snapshot(env.item); const adapter=env.context.LocalApplyDatePhoneAdapters.find((adapter)=>adapter.id==='date');
+    const result=await adapter.execute({adapterId:'date',operation:'fill-date'},{item:env.item,intent:env.intent,assertActive:()=>env.item,consumePlan:()=>state});
+    assert.equal(result.ok,mode==='retained',JSON.stringify(result)); if(mode!=='retained')assert.equal(result.diagnostic.guardCheck,'value');
+    assert.equal(peer.value,mode==='peer-changed'?'2000-01':'2019-06');
+  }
+});

@@ -20,7 +20,7 @@ async function fixture() {
     calls.push({ type: msg.type, ...msg });
     if (msg.type === 'learning:scan') return { ok: true, snapshot: { documentId: 'document.test', fillContractVersion, fillSessionVersion, origin: new URL(url).origin, fields: structuredClone(fields), completion, recordBlocks } };
     if (msg.type === 'learning:addRecord') { await onAdd(msg); return { ok: true }; }
-    if (msg.type === 'learning:read') return { ok: true, value: actual };
+    if (msg.type === 'learning:read') return { ok: true, value: typeof actual==='function'?actual(msg):actual };
     if (msg.type === 'learning:fill') { if (fillGate) await fillGate; actual = failFill ? '' : msg.value; return { ok: true, result: { status: failFill ? 'failed' : 'success', reason: failFill ? '受控组件回退' : '', diagnostic: fillDiagnostic, verifiedAt: new Date().toISOString() } }; }
     if (msg.type === 'learning:verify') return { ok: true, result: { status: !failVerify && actual === msg.value ? 'success' : 'failed', verifiedAt: new Date().toISOString() } };
     return { ok: true };
@@ -69,6 +69,96 @@ test('跨网站历史建议必须手选后填写，新验证成功并确认才�
   assert.equal(db.mappingRules.length, 2); assert.equal(JSON.stringify(db.mappingRules.find((rule) => rule.origin === old.origin)), previous);
   assert.ok(db.mappingRules.find((rule) => rule.origin !== old.origin).lastVerifiedAt > old.lastVerifiedAt);
   assert.ok(!JSON.stringify(await env.repo.exportBackup()).includes('historyCandidates')); assert.equal(env.aiCalls.length, 0);
+});
+
+// 网站解析纠错只向原填写管线签发短期令牌，预览和取消都不写网页或个人资料。
+test('单次覆盖：预览取消零写入，确认只覆盖勾选且有本地内容的字段', async () => {
+  const env=await fixture(); await env.setValue('builtin.name','合成本地姓名'); const field=env.field('姓名'); const missing=env.field('邮箱'); const unknown=env.field('合成未知代号');
+  let view=await env.scan(field,missing,unknown); env.actual('合成网站解析错误'); const before=await env.repo.read();
+  assert.equal((await env.send(view,'overwriteContext')).records.length,0);
+  let preview=await env.send(view,'previewOverwrite',{bindings:[]}); assert.equal(preview.changes.length,1); assert.equal(preview.changes[0].before,'合成网站解析错误'); assert.equal(preview.changes[0].after,'合成本地姓名');
+  await env.send(view,'cancelOverwrite'); await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId],confirmed:true}),/预览/);
+  preview=await env.send(view,'previewOverwrite',{bindings:[]}); await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId]}),/预览/);
+  preview=await env.send(view,'previewOverwrite',{bindings:[]}); await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[unknown.scanId],confirmed:true}),/预览/);
+  assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0); assert.deepEqual(await env.repo.read(),before);
+  preview=await env.send(view,'previewOverwrite',{bindings:[]}); const result=await env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId],confirmed:true});
+  assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
+  view=await env.send(result,'fill',{scanId:field.scanId,confirmed:true,overwriteToken:result.overwrite[0].token}); assert.equal(view.rows[0].status,'success'); assert.equal(env.calls.at(-1).expectedCurrent,'合成网站解析错误'); assert.equal(env.calls.at(-1).value,'合成本地姓名');
+  await assert.rejects(env.send(view,'fill',{scanId:field.scanId,confirmed:true,overwriteToken:result.overwrite[0].token}),/覆盖确认/);
+  assert.deepEqual(await env.repo.read(),before); assert.equal(env.aiCalls.length,0);
+});
+
+// 网页编辑、结构/版本变化和导航都使已展示的差异失效，不允许确认旧快照。
+test('单次覆盖：网页、结构、资料版本变化及伪造令牌拒绝执行', async () => {
+  const env=await fixture(); await env.setValue('builtin.name','合成本地姓名'); const field=env.field('姓名'); let view=await env.scan(field); env.actual('网页旧值');
+  let preview=await env.send(view,'previewOverwrite',{bindings:[]}); env.actual('网页新值'); await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId],confirmed:true}),/网页内容.*变化/);
+  preview=await env.send(view,'previewOverwrite',{bindings:[]}); await assert.rejects(env.send(view,'confirmOverwrite',{token:'forged',scanIds:[field.scanId],confirmed:true}),/预览/);
+  preview=await env.send(view,'previewOverwrite',{bindings:[]}); env.pageFields([field,env.field('合成动态字段')]); await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId],confirmed:true}),/预览/);
+  view=await env.scan(field); preview=await env.send(view,'previewOverwrite',{bindings:[]}); await env.setValue('builtin.name','已更新资料'); await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId],confirmed:true}),/资料已变化/);
+  view=await env.scan(field); preview=await env.send(view,'previewOverwrite',{bindings:[]}); env.navigate(); await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId],confirmed:true}),/导航/);
+  assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
+});
+
+// 网页解析出的多条经历没有天然可信配对，必须显式选择，预览时不污染原会话来源。
+test('单次覆盖：多段已有经历显式配对，不按顺序猜选且不可重复或跨档案绑定', async () => {
+  const env=await fixture(); await env.setValue('builtin.projectName','合成项目一'); const entryId=(await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'project',title:'合成项目二'}})).result; await env.setValue('builtin.projectName','合成项目二',entryId);
+  const fields=[0,1].map((index)=>env.field('项目名称',{kind:'project',group:'项目经历',index})); const blocks=[{blockId:'scan.projects',kind:'project',canAdd:false,records:fields.map((field,index)=>({recordId:'scan.project'+index,scanIds:[field.scanId]}))}]; env.recordBlocks(blocks); env.completion(fields.map((field)=>({scanId:field.scanId,present:true})));
+  let view=await env.scan(...fields); env.actual('合成网页错误项目'); const before=await env.repo.read();
+  assert.equal((await env.send(view,'overwriteContext')).records.length,2); assert.equal((await env.send(view,'previewOverwrite',{bindings:[]})).changes.length,0);
+  const bindings=[{recordId:'scan.project0',entryId},{recordId:'scan.project1',entryId:null}]; let preview=await env.send(view,'previewOverwrite',{bindings}); assert.deepEqual(Array.from(preview.changes,(row)=>row.after),['合成项目二','合成项目一']);
+  assert.ok((await env.send(view,'session')).rows.every((row)=>!row.chosen)); await env.send(view,'cancelOverwrite');
+  await assert.rejects(env.send(view,'previewOverwrite',{bindings:[bindings[0],{...bindings[1],entryId}]}),/重复/);
+  await assert.rejects(env.send(view,'previewOverwrite',{bindings:[{...bindings[0],entryId:'entry.other-profile'}]}),/不属于/);
+  preview=await env.send(view,'previewOverwrite',{bindings}); const confirmed=await env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[fields[0].scanId],confirmed:true});
+  assert.equal(confirmed.rows[0].target.entryId,entryId); assert.equal(confirmed.rows[1].chosen,undefined); assert.equal(confirmed.overwrite.length,1); assert.deepEqual(await env.repo.read(),before);
+});
+
+// 部分勾选仍须采用整块已确认配对，改配记录不能残留旧手选来源或旧验证结果。
+test('单次覆盖：交换或跳过已有绑定时只写勾选项，其他字段来源同步且清除旧验证', async () => {
+  for(const skip of [false,true]) {
+    const env=await fixture(); await env.setValue('builtin.projectName','合成项目一'); await env.setValue('builtin.projectRole','合成角色一');
+    const entryId=(await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'project',title:'合成项目二'}})).result;
+    await env.setValue('builtin.projectName','合成项目二',entryId); await env.setValue('builtin.projectRole','合成角色二',entryId);
+    const fields=[0,1].flatMap((index)=>['项目名称','职责'].map((label)=>env.field(label,{kind:'project',group:'项目经历',index})));
+    env.recordBlocks([{blockId:'scan.projects',kind:'project',canAdd:false,records:[0,1].map((index)=>({recordId:'scan.project'+index,scanIds:fields.slice(index*2,index*2+2).map((field)=>field.scanId)}))}]);
+    let view=await env.scan(...fields); view=await env.send(view,'prepareRecords',{confirmed:true});
+    for(const [index,source] of [[1,null],[3,entryId]]) { view=await env.send(view,'select',{scanId:fields[index].scanId,fieldId:'builtin.projectRole',entryId:source}); view=await env.send(view,'fill',{scanId:fields[index].scanId,confirmed:true}); assert.equal(view.rows[index].status,'success'); }
+    env.completion(fields.map((field)=>({scanId:field.scanId,present:true}))); env.actual('合成网页解析旧值'); const before=await env.repo.read(); const writes=env.calls.filter((call)=>call.type==='learning:fill').length;
+    const bindings=[{recordId:'scan.project0',entryId},...(skip?[]:[{recordId:'scan.project1',entryId:null}])];
+    const preview=await env.send(view,'previewOverwrite',{bindings}); view=await env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[fields[0].scanId],confirmed:true});
+    assert.equal(view.overwrite.length,1); assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,writes);
+    view=await env.send(view,'session');
+    for(const index of [1,3]) { const row=view.rows[index]; assert.equal(row.chosen,undefined); assert.equal(row.verification,undefined); assert.equal(row.conflict,undefined); assert.equal(row.target?.entryId,skip&&index===3?undefined:index===1?entryId:null); }
+    const records=(await env.send(view,'overwriteContext')).records; assert.equal(records[0].entryId,entryId); assert.equal(Object.hasOwn(records[1],'entryId'),!skip); if(!skip)assert.equal(records[1].entryId,null);
+    assert.deepEqual(await env.repo.read(),before);
+  }
+});
+
+// 覆盖不能绕过用户忽略、明确学历限制或五分钟许可有效期。
+test('单次覆盖：忽略字段、学历不符和预览过期均不产生覆盖许可', async () => {
+  const env=await fixture(); await env.setValue('builtin.name','合成本地姓名'); await env.setValue('builtin.school','合成硕士学校'); await env.setValue('builtin.degree','硕士');
+  const field=env.field('姓名'); let view=await env.scan(field); env.actual('网页旧值'); await env.send(view,'ignore',{scanId:field.scanId,ignored:true});
+  assert.equal((await env.send(view,'previewOverwrite',{bindings:[]})).changes.length,0);
+  await env.send(view,'ignore',{scanId:field.scanId,ignored:false}); const preview=await env.send(view,'previewOverwrite',{bindings:[]});
+  const now=Date.now(); env.context.Date=class extends Date { /* 仅推进合成后台时钟，不修改进程或真实存储。 */ static now(){return now+300001;} };
+  await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId],confirmed:true}),/过期/); env.context.Date=Date;
+  const school=env.field('学校名称',{kind:'education',group:'教育经历',degree:'undergrad'}); env.recordBlocks([{blockId:'scan.education',kind:'education',canAdd:false,records:[{recordId:'scan.undergraduate',scanIds:[school.scanId]}]}]);
+  view=await env.scan(school); await assert.rejects(env.send(view,'previewOverwrite',{bindings:[{recordId:'scan.undergraduate',entryId:null}]}),/学历/);
+  assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
+});
+
+// 已有年月整体前移/后移采用不同安全顺序，拒绝无效源范围且不放宽单项控件校验。
+test('单次覆盖：年月范围按安全顺序签发勾选项，错误范围不执行', async () => {
+  for(const [start,end,expected] of [['2024-09','2026-06',[1,0]],['2010-09','2011-06',[0,1]],['2026-09','2024-06',null]]) {
+    const env=await fixture(); await env.setValue('builtin.projectStartDate',start); await env.setValue('builtin.projectEndDate',end);
+    const fields=['开始日期','结束日期'].map((label)=>env.field(label,{kind:'project',group:'项目经历',type:'month',layout:'date:year-month'}));
+    env.recordBlocks([{blockId:'scan.projects',kind:'project',canAdd:false,records:[{recordId:'scan.project',scanIds:fields.map((field)=>field.scanId)}]}]);
+    const view=await env.scan(...fields); env.actual((msg)=>msg.scanId===fields[0].scanId?'2018-09':'2019-06');
+    const preview=await env.send(view,'previewOverwrite',{bindings:[{recordId:'scan.project',entryId:null}]}); const payload={token:preview.token,scanIds:fields.map((field)=>field.scanId),confirmed:true};
+    if(expected) { const confirmed=await env.send(view,'confirmOverwrite',payload); assert.deepEqual(Array.from(confirmed.overwrite,(row)=>row.scanId),expected.map((index)=>fields[index].scanId)); }
+    else await assert.rejects(env.send(view,'confirmOverwrite',payload),/范围无效/);
+    assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
+  }
 });
 
 // 模型建议只允许引用本次元数据中存在的字段与来源。

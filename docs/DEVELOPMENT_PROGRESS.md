@@ -1,7 +1,18 @@
 # localapply-ai｜开发进度与阶段验收记录
 
-> **文档版本：** v2.59
-> **更新日期：** 2026-10-30
+> **文档版本：** v2.60
+> **更新日期：** 2026-10-31
+
+> **网站简历解析纠错覆盖（2026-10-31）：** 悬浮卡片新增“覆盖网页已填内容”，先选择网页经历对应的本地记录，再预览原内容/本地拟填内容并勾选确认。普通“自动填写此页面”继续保留网页已有内容；本次覆盖不设全局开关，无法可靠区分网站解析与用户手填的内容，必须核对差异。本地缺值、未知字段、忽略项及未配对经历不覆盖，不自动提交或保存申请，也不修改个人档案和映射。
+>
+> 后台新增 `overwriteContext / previewOverwrite / confirmOverwrite / cancelOverwrite`，复用既有单项覆盖令牌、FillIntent/FillPlan、批次取消和延迟回读。预览绑定文档/扫描结构/revision，五分钟一次有效；确认前整批核对原值，写入前逐项再次复核。预览和取消不改变原配对；确认时相关模块的整套配对一起更新，防止交换两条来源但只勾选部分字段造成重复绑定，同时清除改配记录的旧手选/验证。差异带网页记录序号，仅驻留可信界面和后台内存，不进入数据库、备份、AI或诊断日志；Schema v5、密钥和简历解析模块不变。
+>
+> **日期覆盖修复：** 已有年月范围整体后移时，旧结束时间会阻止新开始时间。现在仅在同一明确记录、两端均被勾选且日期格式明确时，按有效中间范围决定先写开始还是结束，不临时清空对侧、不增加未勾选端点。源范围错误或无法安全逐项调整时拒绝；单端覆盖仍遵循原范围校验。ATSX改年异步回写只接纳保留原月份的预期投影，目标月份或对侧被外部改动仍停止，保留原有受控组件验证。
+>
+> **验证：** 定向基础 **163/163**，相关Playwright **53/53**，均0失败/取消/跳过。覆盖差异取消、未确认/伪造/过期令牌、网页/结构/revision变化、忽略/学历保护、两条项目反向配对、部分勾选与跳过后清除旧验证、年月前移/后移及单端保护；实际合成页面一次覆盖 **17项**，文本、原生下拉/单选/日期、搜索下拉、React经历及年月均回读成功，未勾选姓名、未知字段及缺值描述保留。保留AI建议、本地学习重启与飞书控件故障回归；未运行完整历史套件，未调用真实模型或操作真实登录页，实际网站仍需用户复验。本次不推进其他阶段。
+>
+> **复现与产物：** `node --test --test-reporter=tap tests/field-learning.test.cjs tests/fill-contract.test.cjs tests/mapping-compat.test.cjs tests/fill-verification.test.cjs tests/date-phone-registry.test.cjs tests/baseline.test.cjs`；`node --test --test-reporter=tap --test-timeout=240000 --test-name-pattern='网页解析纠错覆盖|飞书AI建议填写|悬浮AI辅助填写|飞书ATSX填写|待处理字段集中学习|新版阶段三：日期电话' tests/browser.test.cjs`。日志 `.browser-tests/parsed-overwrite-unit-verified.log`、`parsed-overwrite-regression-verified.log`；合成截图 `parsed-overwrite-review.png`、`parsed-overwrite-filled.png`，白名单诊断 `parsed-overwrite-diagnostics.json`。最后补充界面成功计数断言，覆盖场景再验 **6/6**，为上述53项子集，不累加，命令 `node --test --test-reporter=tap --test-name-pattern='网页解析纠错覆盖' tests/browser.test.cjs`，日志 `parsed-overwrite-acceptance.log`。调试阶段的日期顺序失败、合成radio标签及模块标题断言错误均保留原日志；较宽首轮 **50通过/3失败**（含父项）不计作最终成功，修正后以上53项通过，不删原有回归断言。
+>
 
 > **AI建议能够识别但无法填写（2026-10-30）：** 复现多段项目中模型推荐正确字段、却引用首条来源时，旧 `suggestedSource` 会把模型引用与当前经历绑定不一致当成错误，阻止第二/第三条填写。改为语义采用已校验字段建议、实际值按本会话独立校验的整条记录绑定解析；模型不能重新分配记录。另复现唯一附加项目有值、空首条模板造成虚假来源重复，现只在唯一实际经历及空白单槽的原保护条件下排除占位。没有绑定的多段、当前条缺值、明确学历冲突、预览后成员换条仍拒绝，不借用其他经历内容，不放宽确认令牌或网页非空保护。
 >

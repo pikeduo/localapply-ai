@@ -108,6 +108,73 @@ test('飞书AI建议填写：多段项目角色按当前记录落地且不覆盖
   } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
 });
 
+// 网站解析纠错只使用合成React页面，覆盖前必须核对字段及经历对应，不保存或提交。
+test('网页解析纠错覆盖：差异确认、既有控件与多段经历保护', {timeout:120000}, async(t)=> {
+  const root=path.join(ROOT,'.browser-tests'); await fs.mkdir(root,{recursive:true}); const profile=await fs.mkdtemp(path.join(root,'parsed-overwrite-')); const api=await serve(); let context;
+  try {
+    context=await launch(profile); context.setDefaultTimeout(10000); const {worker,extensionId}=await extension(context);
+    const options=await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+    const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
+    // 所有来源经后台规范命令创建，缺失的第二条项目描述故意留空。
+    const set=async(key,value,entryId=null)=>rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.'+key,entryId,value}}});
+    for(const [key,value] of [['name','合成纠错姓名'],['gender','男'],['politicalStatus','中共党员'],['birthDate','2000-02-15'],['school','合成硕士大学'],['degree','硕士'],['major','合成新专业'],['educationStartDate','2024-09'],['graduationDate','2026-06'],['projectName','合成项目一'],['projectRole','合成角色一'],['projectDescription','合成描述一'],['projectStartDate','2020-01'],['projectEndDate','2020-08']]) await set(key,value);
+    const entryId=(await rpc(options,'localapply:command',{request:{action:'createEntry',payload:{profileId,kind:'project',title:'合成项目二'}}})).result;
+    for(const [key,value] of [['projectName','合成项目二'],['projectRole','合成角色二'],['projectStartDate','2021-01'],['projectEndDate','2021-08']]) await set(key,value,entryId);
+    const before=(await rpc(options,'localapply:read')).database;
+    const page=await context.newPage(); await page.goto(api.base+'/test-pages/feishu-atsx-controls.html?mode=parsed'); await page.locator('.resumeEditForm-item').first().waitFor();
+    await page.evaluate(()=>{const block=document.createElement('fieldset'); block.innerHTML='<legend>基本信息</legend><label>姓名<input id="parsed-name" value="网站解析姓名"></label><div><label for="parsed-gender">性别</label><select id="parsed-gender"><option value="F" selected>女</option><option value="M">男</option></select></div><div class="form-item"><span class="label">政治面貌</span><label><input type="radio" name="politicalStatus" value="群众" checked>群众</label><label><input type="radio" name="politicalStatus" value="中共党员">中共党员</label></div><label>出生日期<input id="parsed-birth" type="date" value="2001-03-16"></label><label>邮箱<input id="parsed-email" value="synthetic@example.test"></label><label>合成未知代号<input id="parsed-unknown" value="保留未知内容"></label>'; document.querySelector('form').prepend(block);});
+    const loaded=page.waitForEvent('framenavigated',{predicate:(frame)=>frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});
+    await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url()); const frame=await loaded; await frame.locator('#profileSel option').first().waitFor({state:'attached'});
+    // 统一等待业务状态，所有覆盖请求均由卡片按钮生成，不直接注入页面填写意图。
+    const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false',null,{timeout:60000});
+    const preview=async()=>{await frame.locator('#smartOverwritePreview').click(); await idle();};
+    await t.test('默认自动填写保留网站解析结果，取消差异预览也不修改',async()=>{
+      await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.locator('#parsed-name').inputValue(),'网站解析姓名'); assert.equal(await page.evaluate(()=>__atsx['project[0].name']),'网站解析内容 · project[0].name');
+      await frame.locator('#smartOverwriteOpen').click(); await idle(); assert.equal(await frame.locator('.smart-overwrite-record').count(),3); assert.deepEqual(await frame.locator('.smart-overwrite-record').evaluateAll((nodes)=>nodes.map((node)=>node.value)),['','','']);
+      await preview(); const changes=await frame.locator('.smart-overwrite-change').allTextContents(); assert.ok(changes.some((text)=>text.includes('网站解析姓名')&&text.includes('合成纠错姓名'))); assert.ok(!changes.some((text)=>text.includes('项目经历')));
+      await frame.locator('#smartOverwriteCancel').click(); await idle(); assert.equal(await page.locator('#parsed-name').inputValue(),'网站解析姓名'); assert.deepEqual((await rpc(options,'localapply:read')).database,before);
+    });
+    await t.test('手动配对两条项目，缺失资料不覆盖，未确认及预览后改值均不能执行',async()=>{
+      await frame.locator('#smartOverwriteOpen').click(); await idle(); const selects=frame.locator('.smart-overwrite-record'); await selects.nth(0).selectOption('null'); await selects.nth(1).selectOption(JSON.stringify(entryId)); await selects.nth(2).selectOption('null'); await preview();
+      const changes=frame.locator('.smart-overwrite-change'); assert.equal(await changes.count(),18,JSON.stringify(await frame.evaluate(()=>sendMessage('learning:session',{sessionId:document.getElementById('tab-smart').dataset.sessionId})).then((view)=>view.rows.map((row)=>({label:row.field.label,group:row.field.group,type:row.field.type,target:row.target,status:row.status})))));
+      assert.ok(!(await changes.allTextContents()).some((text)=>text.includes('project[0].desc'))); await frame.locator('#smartOverwriteConfirm').click(); await idle(); assert.ok((await frame.locator('#smartStatus').textContent()).includes('确认'));
+      await page.locator('#parsed-name').fill('用户刚改的姓名'); await frame.locator('#smartOverwriteConsent').check(); await frame.locator('#smartOverwriteConfirm').click(); await idle(); assert.ok((await frame.locator('#smartStatus').textContent()).includes('网页内容在预览后已变化')); assert.equal(await page.locator('#parsed-gender').inputValue(),'F');
+      await preview(); await changes.filter({hasText:'用户刚改的姓名'}).locator('input').uncheck(); await frame.locator('#smartOverwriteConsent').check(); await page.screenshot({path:path.join(root,'parsed-overwrite-review.png')});
+    });
+    await t.test('确认后覆盖下拉单选日期和React经历，未选及缺值保留且零保存提交',async()=>{
+      await frame.locator('#smartOverwriteConfirm').click(); await idle();
+      // 留存既有白名单诊断以定位失败阶段，产物只来自隔离合成测试。
+      await fs.writeFile(path.join(root,'parsed-overwrite-diagnostics.json'),JSON.stringify(await rpc(options,'diagnostics:read'),null,2));
+      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 17 个字段，失败\/不支持 0，需确认 0/);
+      assert.equal(await page.locator('#parsed-name').inputValue(),'用户刚改的姓名'); assert.equal(await page.locator('#parsed-gender').inputValue(),'M'); assert.equal(await page.locator('input[name="politicalStatus"]:checked').inputValue(),'中共党员'); assert.equal(await page.locator('#parsed-birth').inputValue(),'2000-02-15');
+      const state=await page.evaluate(()=>__atsx); assert.equal(state['education[0].school'],'合成硕士大学'); assert.equal(state['education[0].degree'],'硕士'); assert.deepEqual(state['education[0].period'],['2024-09','2026-06']);
+      for(const [index,name,role,start,end] of [[0,'合成项目二','合成角色二','2021-01','2021-08'],[1,'合成项目一','合成角色一','2020-01','2020-08']]) { assert.equal(state[`project[${index}].name`],name); assert.equal(state[`project[${index}].role`],role); assert.deepEqual(state[`project[${index}].period`],[start,end]); }
+      assert.equal(state['project[0].desc'],'网站解析内容 · project[0].desc'); assert.equal(state['project[1].desc'],'合成描述一'); assert.equal(await page.locator('#parsed-email').inputValue(),'synthetic@example.test'); assert.equal(await page.locator('#parsed-unknown').inputValue(),'保留未知内容'); assert.equal(state.adds+state.saves+state.submits,0);
+      assert.deepEqual((await rpc(options,'localapply:read')).database,before); assert.equal(api.calls.length,0); const logs=JSON.stringify(await rpc(options,'diagnostics:read')); for(const secret of ['网站解析姓名','合成纠错姓名','合成项目一','用户刚改的姓名','synthetic@example.test']) assert.ok(!logs.includes(secret));
+      await page.locator('input[id="project[0].name"]').scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(root,'parsed-overwrite-filled.png')});
+    });
+    await t.test('年月范围整体前移先写开始，未勾选字段不获得额外覆盖',async()=>{
+      await set('educationStartDate','2010-01'); await set('graduationDate','2012-02');
+      await frame.locator('#smartScan').click(); await idle(); await frame.locator('#smartOverwriteOpen').click(); await idle();
+      await frame.locator('.smart-overwrite-record').nth(0).selectOption('null'); await preview();
+      const changes=frame.locator('.smart-overwrite-change'); for(const input of await changes.locator('input').all())await input.uncheck();
+      await changes.filter({hasText:'网页教育背景第1条 · 开始日期'}).locator('input').check(); await changes.filter({hasText:'网页教育背景第1条 · 结束日期'}).locator('input').check();
+      await frame.locator('#smartOverwriteConsent').check(); await frame.locator('#smartOverwriteConfirm').click(); await idle();
+      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 2 个字段，失败\/不支持 0，需确认 0/);
+      assert.deepEqual(await page.evaluate(()=>__atsx['education[0].period']),['2010-01','2012-02']); assert.equal(await page.locator('#parsed-name').inputValue(),'用户刚改的姓名');
+      assert.equal(await page.evaluate(()=>__atsx['project[0].name']),'合成项目二');
+    });
+    await t.test('单独覆盖会导致范围无效时保留网页，不额外写入未选结束日期',async()=>{
+      await set('educationStartDate','2015-01'); await set('graduationDate','2016-02');
+      await frame.locator('#smartScan').click(); await idle(); await frame.locator('#smartOverwriteOpen').click(); await idle(); await frame.locator('.smart-overwrite-record').nth(0).selectOption('null'); await preview();
+      const changes=frame.locator('.smart-overwrite-change'); for(const input of await changes.locator('input').all())await input.uncheck(); await changes.filter({hasText:'网页教育背景第1条 · 开始日期'}).locator('input').check();
+      await frame.locator('#smartOverwriteConsent').check(); await frame.locator('#smartOverwriteConfirm').click(); await idle();
+      assert.deepEqual(await page.evaluate(()=>__atsx['education[0].period']),['2010-01','2012-02']); assert.match(await frame.locator('#smartStatus').textContent(),/失败\/不支持 1/);
+      assert.equal(await page.evaluate(()=>__atsx.adds+__atsx.saves+__atsx.submits),0); assert.equal(api.calls.length,0);
+    });
+  } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
+});
+
 // 使用隔离资料和真实标签激活，验证返回原页及过期卡片的按钮恢复，不访问招聘服务器。
 test('卡片切页恢复：重复填写、编辑、折叠关闭与过期续期', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'panel-return-')); const api = await serve(); let context;

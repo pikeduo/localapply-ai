@@ -4,7 +4,8 @@
   const KEY = 'localapply.diagnostics';
   const MAX_ROWS = 400;
   const fillReasons = global.LocalApplyFillResult.REASONS;
-  const operations = ['panel.open','panel.close','page.presence','page.error','ui.error','jobs.scan','jobs.submitted','jobs.feedback','learning.beginFill','learning.cancelFill','learning.endFill','learning.scanPage','learning.prepareRecords','learning.prepareAI','learning.recognize','learning.cancelAI','learning.ignore','learning.select','learning.readField','learning.previewValue','learning.commitValue','learning.fill','learning.remember','learning.revoke','learning.editRule','learning.deleteRule','learning.undoRule','localapply.command','localapply.saveLegacy','localapply.vault','localapply.previewImport','wsa.aiChat','wsa.listModels','wsa.probeCapabilities','wsa.resumeRoute','wsa.aiExtractResume','wsa.cancelResume','runtime.request'];
+  // 覆盖流程只记录固定操作和结果统计，网页原值及本地拟填值不进入诊断。
+  const operations = ['panel.open','panel.close','page.presence','page.error','ui.error','jobs.scan','jobs.submitted','jobs.feedback','learning.beginFill','learning.cancelFill','learning.endFill','learning.scanPage','learning.prepareRecords','learning.overwriteContext','learning.previewOverwrite','learning.confirmOverwrite','learning.cancelOverwrite','learning.prepareAI','learning.recognize','learning.cancelAI','learning.ignore','learning.select','learning.readField','learning.previewValue','learning.commitValue','learning.fill','learning.remember','learning.revoke','learning.editRule','learning.deleteRule','learning.undoRule','localapply.command','localapply.saveLegacy','localapply.vault','localapply.previewImport','wsa.aiChat','wsa.listModels','wsa.probeCapabilities','wsa.resumeRoute','wsa.aiExtractResume','wsa.cancelResume','runtime.request'];
   // 将异常归为稳定错误码，外部响应、用户标签和凭据不进入日志。
   function errorInfo(error) {
     const message = String(error?.message || error || '');

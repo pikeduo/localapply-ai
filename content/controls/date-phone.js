@@ -61,14 +61,17 @@
         const lifecycle = {
           check() { guard(context, state); if (snapshot(context.item).some((row) => observed.get(row.node) !== row.value)) throw F.failure('stale_context', 'failed', { guardCheck: 'value' }); },
           changed(node) { guard(context, state); const row = snapshot(context.item).find((row) => row.node === node); if (row) observed.set(node, row.value); },
-          // 日历最终点选后只接纳同一原节点、来源和精度一致的延迟回写，日期读法兼容限定的年龄说明。
+          // 日历只接纳已点端点的来源投影；改年时允许保留原月份，对侧和外部修改仍受保护。
           settled(node, expected) {
             guard(context, state);
             const length = { year: 4, month: 7, day: 10 }[expected?.precision]; const source = A.dateValue(context.intent.value);
             // ATSX 只允许当前已点端点的明确年/年月投影；对侧及焦点节点继续使用原观察值。
             if (id === 'date' && context.item.compound?.atsx && node === context.item.el && source?.month && expected?.precision === 'month'
               && (expected.iso === source.iso.slice(0, 7) || expected.partial === true && expected.iso === String(source.year) + '-')) {
-              const row = snapshot(context.item).find((row) => row.node === node); if (row.value === expected.iso) observed.set(node, row.value);
+              const row = snapshot(context.item).find((row) => row.node === node);
+              const retainedMonth = /^(?:\d{4})?-(\d{2})?$/.exec(observed.get(node) || '')?.[1] || '';
+              const projection = expected.partial === true ? expected.iso + retainedMonth : expected.iso;
+              if (row.value === projection) observed.set(node, row.value);
               return;
             }
             if (id !== 'date' || context.item.compound || node !== context.item.el || !node.readOnly || !length || source?.iso.slice(0, length) !== expected.iso) throw F.failure('stale_context', 'failed', { guardCheck: 'date_projection' });

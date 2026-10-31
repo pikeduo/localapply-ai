@@ -7,9 +7,10 @@ globalThis.__atsx = { adds: 0, choices: 0, saves: 0, submits: 0, dates: 0 };
 
 // 标签说明不进入字段名，故意保留外壳和输入重复 ID 的真实页面结构。
 function Field({ id, name, children }) { return h('div', { className: 'atsx-row atsx-form-item' }, h('div', { className: 'atsx-form-item-label' }, h('label', { htmlFor: id }, h('div', { className: 'customResumeForm-fieldName' }, name)), h('span', null, '合成说明不属于标签')), h('div', { className: 'atsx-form-item-control-wrapper' + (mode === 'invalid-date' && name === '起止时间' ? ' has-error' : '') }, children)); }
-// 查询与选中状态独立；候选在明确 ID 包装中的唯一列表内，关闭后保留菜单 DOM。
+// 查询与选中状态独立；解析模式带已有选择，用于验证确认后的覆盖仍真正点选候选。
 function Choice({ id, name, values, combo = false }) {
-  const [query, setQuery] = useState(''); const [value, setValue] = useState(''); const [open, setOpen] = useState(false); const [ready, setReady] = useState(false);
+  const initial=mode==='parsed'?values[0]:'';
+  const [query, setQuery] = useState(combo?initial:''); const [value, setValue] = useState(initial); const [open, setOpen] = useState(false); const [ready, setReady] = useState(false);
   const timer = useRef(); const key = id + '-popup'; globalThis.__atsx[id] = value;
   // 查询取消旧响应；慢响应与失败模式只改变夹具，不使用真实模型。
   function search(text) { setQuery(text); setReady(false); clearTimeout(timer.current); timer.current = setTimeout(() => setReady(true), mode === 'slow' ? 2300 : 80); }
@@ -22,10 +23,10 @@ function Choice({ id, name, values, combo = false }) {
       h('div', { className: 'atsx-select-search atsx-select-search--inline', hidden: !combo && !open }, h('input', { id, className: 'atsx-select-search__field', value: query, onChange: (event) => search(event.target.value), onBlur: () => { if (combo && mode !== 'query-only') setQuery(value); } }))))),
     createPortal(h('div', { id: key, className: 'atsx-select-dropdown', hidden: !open }, h('ul', { role: 'listbox', 'aria-busy': !ready }, ready && values.filter((text) => !combo || text.includes(query)).flatMap((text) => (mode === 'duplicate' ? [0, 1] : [0]).map((variant) => h('li', { key: text + variant, className: 'atsx-select-dropdown-menu-item', role: 'option', 'aria-selected': value === text, onMouseDown: (event) => event.preventDefault(), onClick: () => choose(text) }, text))))), document.body));
 }
-// 年月端点使用两列候选及真正的辅助焦点框，组件不会从隐藏 input.value 读取日期。
+// 年月端点使用两列候选及真正焦点框；解析模式保留已有起止年月以验证显式覆盖。
 function Period({ id }) {
-  const [parts, setParts] = useState(mode === 'partial-date' ? [{ year: '2019', month: '' }, { year: '', month: '' }] : [{ year: '', month: '' }, { year: '', month: '' }]);
-  const [open, setOpen] = useState(-1); const [focused, setFocused] = useState(false); const helper = useRef(); const [committed, setCommitted] = useState(['', '']); globalThis.__atsx[id] = committed;
+  const [parts, setParts] = useState(mode === 'parsed' ? [{year:'2018',month:'09'},{year:'2019',month:'06'}] : mode === 'partial-date' ? [{ year: '2019', month: '' }, { year: '', month: '' }] : [{ year: '', month: '' }, { year: '', month: '' }]);
+  const [open, setOpen] = useState(-1); const [focused, setFocused] = useState(false); const helper = useRef(); const [committed, setCommitted] = useState(mode==='parsed'?['2018-09','2019-06']:['', '']); globalThis.__atsx[id] = committed;
   // 点选按当前端点更新，完成起始后自动切到结束，与公开组件的交互一致。
   function pick(kind, value) {
     globalThis.__atsx.dates++; const next = parts.map((part) => ({ ...part })); next[open][kind] = value;
@@ -41,9 +42,9 @@ function Period({ id }) {
       h('span', { className: 'atsx-date-picker-period-month-label-year' }, part.year || 'YYYY'), h('span', { className: 'atsx-date-picker-period-month-label-separator' }, '-'), h('span', { className: 'atsx-date-picker-period-month-label-month' }, part.month || 'MM')))),
     h('input', { className: 'atsx-date-picker-period-hidden-input', ref: helper, onBlur: commit })), createPortal(panel, document.body));
 }
-// 普通字段受 React 控制，框架值作为断言，不能只查看 DOM 输入值。
+// 普通字段受React控制；解析模式模拟网站已有内容，框架状态作为真实写入断言。
 function Text({ id, name, multiline = false }) {
-  const [value, setValue] = useState(mode === 'prefilled' && id.endsWith('.schoolText') ? '网页合成学校' : ''); globalThis.__atsx[id] = value;
+  const [value, setValue] = useState(mode==='parsed'?'网站解析内容 · '+id:mode === 'prefilled' && id.endsWith('.schoolText') ? '网页合成学校' : ''); globalThis.__atsx[id] = value;
   return h(Field, { id, name }, h(multiline ? 'textarea' : 'input', { id, value, onChange: (event) => setValue(event.target.value) }));
 }
 // 每条记录共享模板；AI模式故意使用未知角色标签，验证建议不能把多段内容串条。
@@ -57,9 +58,9 @@ function Record({ kind, index, add }) {
     h(Period, { id: id + '.period' }), kind !== 'education' && h(Text, { id: id + '.desc', name: '描述', multiline: true }),
     h('div', { className: 'formOperate' }, h('div', { className: 'formOperate-addBtn-container' }, h('div', { className: 'formOperate-addBtn', onClick: add }, '添加')), h('div', { className: 'formOperate-removeBtn-container' }, h('div', { className: 'formOperate-removeBtn' }, '删除'))));
 }
-// 空模块及重复模块复现同一个结构，不添加提交和保存的隐式操作。
+// 解析模式预置两条项目，其余空模块及添加操作维持原结构，不隐式保存或提交。
 function Section({ kind, title }) {
-  const [records, setRecords] = useState(kind === 'education' ? [0] : []); const prefix = { education: 'education', employment: 'career', internship: 'internship', project: 'project' }[kind];
+  const [records, setRecords] = useState(kind === 'education' ? [0] : mode==='parsed'&&kind==='project'?[0,1]:[]); const prefix = { education: 'education', employment: 'career', internship: 'internship', project: 'project' }[kind];
   // 只有明确点击结构化添加入口才新增一条，计数可验证重复填充不追加。
   function add() { globalThis.__atsx.adds++; setRecords((rows) => [...rows, rows.length]); }
   return h('div', { className: 'createFormSection-container' }, h('div', { className: 'resumeEditForm-' + prefix + ' createFormSection-repeatable' },

@@ -78,7 +78,7 @@
     function rebuild(item, db, fields = item.fields) {
       const old = item.rows || [];
       const oldSources = item.sources || [];
-      // 来源只取已校验网页记录和本会话绑定，不能由 UI/AI 提供 entryId 配对。
+      // 来源只取已校验网页记录和会话绑定；人工改配须经独立覆盖预览，AI不能决定配对。
       const bindings = {};
       for (const block of item.recordBlocks || []) for (const record of block.records) if (Object.hasOwn(item.recordBindings || {}, record.recordId)) {
         for (const scanId of record.scanIds) bindings[scanId] = { kind:block.kind, entryId:item.recordBindings[record.recordId] };
@@ -166,6 +166,59 @@
     function target(item, fieldId, entryId) {
       const found = item.sources.find((source) => source.fieldId === fieldId && source.entryId === (entryId || null));
       check(found, '请选择当前档案已有的字段来源'); return { fieldId, entryId: entryId || null };
+    }
+    // 覆盖预览只展示本地经历摘要；未绑定的网页记录须由用户明确配对，不按序号猜测。
+    function overwriteRecords(item, db) {
+      const T = global.WangshenTemplates; const primary = { education:'school', employment:'employmentCompany', internship:'internshipCompany', project:'projectName' };
+      return (item.recordBlocks || []).flatMap((block) => {
+        const options = [null, ...db.entries.filter((entry) => entry.profileId === item.profileId && entry.kind === block.kind).sort((a,b) => a.order-b.order).map((entry) => entry.entryId)]
+          .filter((entryId) => item.sources.some((source) => source.entryId === entryId && source.hasValue && T.recordKind(db.fieldDefinitions.find((def) => def.fieldId === source.fieldId)?.group || '') === block.kind))
+          .map((entryId, index) => ({ entryId, label: `${T.RECORD_GROUPS[block.kind]} · ${String(M.valueOf(db,item.profileId,{fieldId:'builtin.'+primary[block.kind],entryId})?.value || db.entries.find((entry)=>entry.entryId===entryId)?.title || '本地记录'+(index+1)).slice(0,100)}` }));
+        return options.length ? block.records.map((record,index) => ({ recordId:record.recordId, label:`网页${T.RECORD_GROUPS[block.kind]}第${index+1}条`, options,
+          ...(Object.hasOwn(item.recordBindings || {}, record.recordId) ? { entryId:item.recordBindings[record.recordId] } : {}) })) : [];
+      });
+    }
+    // 在独立会话副本中预演记录配对，预览/取消均不改变原匹配、网页或数据库。
+    function overwriteProjection(item, db, bindings) {
+      check(Array.isArray(bindings) && bindings.length <= 400 && new Set(bindings.map((row)=>row?.recordId)).size === bindings.length, '覆盖经历对应关系格式错误');
+      const staged = { ...item, recordBindings:{}, protectedRecords:new Set() }; const changed = new Set(); const available=new Map(overwriteRecords(item,db).map((row)=>[row.recordId,row]));
+      for (const binding of bindings) {
+        check(binding && Object.keys(binding).sort().join() === 'entryId,recordId' && (binding.entryId === null || typeof binding.entryId === 'string'), '覆盖经历对应关系格式错误');
+        const block = item.recordBlocks.find((block)=>block.records.some((record)=>record.recordId===binding.recordId)); const record = block?.records.find((record)=>record.recordId===binding.recordId);
+        check(record && available.get(record.recordId)?.options.some((option)=>option.entryId===binding.entryId), '覆盖来源不属于当前经历');
+        check(record.scanIds.every((id)=>M.sourceRole(db,item.profileId,{entryId:binding.entryId},item.fields.find((field)=>field.scanId===id)?.degree || '')), '覆盖经历不符合网页要求的学历');
+        check(!block.records.some((row)=>row.recordId!==record.recordId && Object.hasOwn(staged.recordBindings,row.recordId) && staged.recordBindings[row.recordId]===binding.entryId), '同一模块不能重复使用同一条本地经历');
+        staged.recordBindings[record.recordId] = binding.entryId;
+        if (!Object.hasOwn(item.recordBindings || {},record.recordId) || item.recordBindings[record.recordId]!==binding.entryId) record.scanIds.forEach((id)=>changed.add(id));
+      }
+      staged.rows = item.rows.filter((row)=>!changed.has(row.field.scanId)); records.synchronize(staged,db); rebuild(staged,db);
+      staged.rows = staged.rows.filter((row)=> {
+        const previous=item.rows.find((value)=>value.field.scanId===row.field.scanId); if(previous?.ignored || !row.target || !M.hasValue(M.valueOf(db,item.profileId,row.target)?.value)) return false;
+        if (!['matched','success'].includes(row.status) && !row.chosen) return false;
+        const record=item.recordBlocks.flatMap((block)=>block.records).find((record)=>record.scanIds.includes(row.field.scanId));
+        if (row.field.kind && (!record || !Object.hasOwn(staged.recordBindings,record.recordId) || row.target.entryId!==staged.recordBindings[record.recordId])) return false;
+        return M.sourceRole(db,item.profileId,row.target,row.field.degree || '');
+      });
+      return staged;
+    }
+    // 同一记录的年月范围只调整已勾选两端的执行顺序，保证中间范围有效，不临时清空对侧。
+    function overwriteOrder(item, changes) {
+      const ordered=[...changes]; const pairs={education:['educationStartDate','graduationDate'],employment:['employmentStartDate','employmentEndDate'],internship:['internshipStartDate','internshipEndDate'],project:['projectStartDate','projectEndDate']};
+      // 仅比较明确年月投影；精度不足或未知格式仍交给原控件校验，不能补全日期。
+      const month=(value)=>typeof value==='string' && /^\d{4}-(?:0[1-9]|1[0-2])(?:-\d{2})?$/.test(value)?value.slice(0,7):null;
+      for(const block of item.recordBlocks || []) for(const record of block.records) {
+        const pair=pairs[block.kind]; if(!pair)continue;
+        const ends=pair.map((key)=>ordered.filter((change)=>record.scanIds.includes(change.scanId) && change.target.fieldId==='builtin.'+key && item.fields.some((field)=>field.scanId===change.scanId && field.type==='month' && field.layout==='date:year-month')));
+        if(ends.some((rows)=>rows.length!==1))continue;
+        const [start,end]=ends.map((rows)=>rows[0]); const [oldStart,oldEnd,nextStart,nextEnd]=[start.before,end.before,start.after,end.after].map(month);
+        if(!oldStart || !oldEnd || !nextStart || !nextEnd)continue;
+        check(nextStart<=nextEnd, '本地起止年月范围无效，请先修正资料');
+        const startFirst=nextStart<=oldEnd; const endFirst=nextEnd>=oldStart;
+        check(startFirst || endFirst, '起止年月无法安全逐项覆盖，请在网页手动调整范围');
+        const [first,last]=startFirst?[start,end]:[end,start];
+        if(ordered.indexOf(first)>ordered.indexOf(last)) { ordered.splice(ordered.indexOf(first),1); ordered.splice(ordered.indexOf(last),0,first); }
+      }
+      return ordered;
     }
     // AI只推荐字段语义；已绑定经历决定实际来源，模型引用不能改配或阻止正确的本地配对。
     function suggestedSource(item, db, row) {
@@ -298,7 +351,58 @@
       if (msg.type === 'learning:revoke') { await drop(item.sessionId); await pageMessage(item.tabId, { type: 'learning:revoke' }); return {}; }
       if (msg.type === 'learning:session') { await refresh(item, db); return view(item, db); }
       if (msg.type === 'learning:cancelLearnedFields') { item.learnPreview = null; return { cancelled: true }; }
+      if (msg.type === 'learning:cancelOverwrite') { item.overwritePreview = null; return { cancelled:true }; }
       check(item.revision === db.revision, '资料已变化，请重新扫描并预览');
+      if (['learning:overwriteContext','learning:previewOverwrite','learning:confirmOverwrite'].includes(msg.type)) {
+        check(!item.batch && !item.jobs?.size, '请先等待填写结束');
+        const task=jobFor(item,db);
+        try {
+          await refresh(item,db); task.check();
+          if(msg.type==='learning:overwriteContext') { item.overwritePreview=null; return { records:overwriteRecords(item,db) }; }
+          if(msg.type==='learning:previewOverwrite') {
+            item.overwritePreview=null; const staged=overwriteProjection(item,db,msg.bindings || []); const changes=[];
+            for(const row of staged.rows) {
+              const {value:before}=await pageMessage(item.tabId,{type:'learning:read',documentId:item.documentId,scanId:row.field.scanId,semanticId:row.field.semanticId}); task.check();
+              const after=M.valueOf(db,item.profileId,row.target).value;
+              if(before===null || before===undefined || before==='' || Array.isArray(before)&&!before.length || JSON.stringify(before)===JSON.stringify(after)) continue;
+              const block=item.recordBlocks.find((block)=>block.records.some((record)=>record.scanIds.includes(row.field.scanId)));
+              const recordLabel=block?`网页${global.WangshenTemplates.RECORD_GROUPS[block.kind]}第${block.records.findIndex((record)=>record.scanIds.includes(row.field.scanId))+1}条`:'';
+              changes.push({scanId:row.field.scanId,semanticId:row.field.semanticId,label:row.field.label,group:row.field.group,recordLabel,target:clone(row.target),before:clone(before),after:clone(after)});
+            }
+            item.overwritePreview={token:crypto.randomUUID(),revision:db.revision,createdAt:Date.now(),structure:JSON.stringify([item.fields,item.recordBlocks]),bindings:clone(msg.bindings || []),changes};
+            return {token:item.overwritePreview.token,changes:changes.map(({semanticId,target,...change})=>change)};
+          }
+          const preview=item.overwritePreview; item.overwritePreview=null;
+          check(msg.confirmed===true && preview?.token===msg.token && preview.revision===db.revision && Date.now()-preview.createdAt<300000 && preview.structure===JSON.stringify([item.fields,item.recordBlocks]), '覆盖预览已变化或过期，请重新核对差异');
+          check(Array.isArray(msg.scanIds) && msg.scanIds.length>0 && msg.scanIds.length<=500 && new Set(msg.scanIds).size===msg.scanIds.length && msg.scanIds.every((id)=>preview.changes.some((row)=>row.scanId===id)), '请选择预览中的覆盖字段');
+          const staged=overwriteProjection(item,db,preview.bindings); const selected=overwriteOrder(item,preview.changes.filter((row)=>msg.scanIds.includes(row.scanId)));
+          // 整批先回读核对，尚未签发覆盖令牌时不改变来源；每项实际写入仍复核原网页值。
+          for(const change of selected) {
+            const row=staged.rows.find((row)=>row.field.scanId===change.scanId);
+            check(row && JSON.stringify(row.target)===JSON.stringify(change.target) && JSON.stringify(M.valueOf(db,item.profileId,row.target)?.value)===JSON.stringify(change.after), '覆盖来源已变化，请重新预览');
+            const result=await pageMessage(item.tabId,{type:'learning:read',documentId:item.documentId,scanId:change.scanId,semanticId:change.semanticId}); task.check();
+            check(JSON.stringify(result.value)===JSON.stringify(change.before), '网页内容在预览后已变化，请重新核对差异');
+          }
+          item.recordBindings ||= {}; item.protectedRecords ||= new Set(); const rebound=new Set();
+          // 同一模块按已确认的整套配对原子更新；仅更新勾选记录会在交换来源时造成重复绑定。
+          for(const block of item.recordBlocks) if(block.records.some((record)=>selected.some((row)=>record.scanIds.includes(row.scanId)))) for(const record of block.records) {
+            const wasBound=Object.hasOwn(item.recordBindings,record.recordId); const bound=Object.hasOwn(staged.recordBindings,record.recordId);
+            if(wasBound!==bound || bound && item.recordBindings[record.recordId]!==staged.recordBindings[record.recordId]) record.scanIds.forEach((id)=>rebound.add(id));
+            if(bound) item.recordBindings[record.recordId]=staged.recordBindings[record.recordId]; else delete item.recordBindings[record.recordId];
+            record.scanIds.forEach((id)=>bound?item.protectedRecords.delete(id):item.protectedRecords.add(id));
+          }
+          // 改配只重建运行时来源，清除旧手选/验证/覆盖许可；未勾选项不会获得写入令牌。
+          item.rows=item.rows.map((row)=>rebound.has(row.field.scanId)?{field:row.field,ignored:row.ignored,webFilled:row.webFilled,webOccupied:row.webOccupied}:row);
+          if(rebound.size) { item.valuePreview=null; item.learnPreview=null; }
+          records.synchronize(item,db); rebuild(item,db);
+          const overwrite=selected.map((change)=> {
+            const row=rowOf(item,change.scanId); const token=crypto.randomUUID();
+            Object.assign(row,{target:change.target,chosen:true,source:'manual',status:'matched',reason:'已核对本次覆盖差异，尚未写入验证',conflict:{before:change.before,after:change.after,token,revision:db.revision,createdAt:Date.now()}});
+            delete row.verification; return {scanId:change.scanId,token};
+          });
+          return {...view(item,db),overwrite};
+        } finally { task.done(); }
+      }
       if (['learning:previewSuggestion', 'learning:acceptSuggestion'].includes(msg.type)) {
         check(!item.batch && !item.jobs?.size, '请先等待填写结束');
         await refresh(item, db); const row = rowOf(item, msg.scanId); const source = suggestedSource(item, db, row);
