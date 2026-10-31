@@ -36,6 +36,15 @@ test('诊断仅记录白名单与安全错误分类，保留上限且可清空',
   await env.diagnostics.clear(); assert.equal((await env.diagnostics.read()).rows.length, 0);
 });
 
+// 零写入诊断仅保留固定数量，区分已填/待配对/未知，错误类型和原值不得进入日志。
+test('诊断保存网站上传后保护原因的数量，不接受原始内容或字符串统计', async () => {
+  const env=fixture(); const secret='合成网页和简历私密内容';
+  await env.diagnostics.append('learning.prepareRecords',{recordBindingRequired:12,webOccupied:8,unknown:2,source:secret,value:secret});
+  let row=(await env.diagnostics.read()).rows[0]; assert.equal(row.recordBindingRequired,12); assert.equal(row.webOccupied,8); assert.equal(row.unknown,2); assert.ok(!JSON.stringify(row).includes(secret));
+  await env.diagnostics.append('learning.prepareRecords',{recordBindingRequired:secret,webOccupied:-1,unknown:Infinity});
+  row=(await env.diagnostics.read()).rows[1]; for(const key of ['recordBindingRequired','webOccupied','unknown']) assert.equal(row[key],undefined);
+});
+
 // 新旧时间偏移统一显示为北京时间，跨日跨年不丢时刻，读取不改写或重复加八小时。
 test('诊断时间固定为北京时间，兼容历史 UTC 并保持七天保留边界', async () => {
   for (const [original, expected] of [

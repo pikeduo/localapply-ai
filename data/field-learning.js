@@ -111,8 +111,8 @@
           const latest = source && sources(db, item.profileId).find((value) => value.fieldId === source.fieldId && value.entryId === source.entryId && JSON.stringify(value.value) === JSON.stringify(source.value));
           if ((!suggestion.existingFieldId || db.fieldDefinitions.some((def) => def.fieldId === suggestion.existingFieldId)) && (suggestion.sourceRef === null || latest)) row.suggestion = { ...suggestion, sourceRef: latest?.ref || null };
         }
-        // 未确认来源的已有经历不能将另一条简历资料补进其空字段，需逐项明确选择。
-        if (item.protectedRecords?.has(row.field.scanId) && !row.chosen && row.source !== 'memory' && row.target) Object.assign(row, { target: null, status: 'needs_confirmation', reason: '网页已有经历但尚未绑定来源，请手动选择，避免混入另一条记录' });
+        // 已知字段与经历配对分开标记；不能把来源待确认伪装成未知语义再交给AI猜配。
+        if (item.protectedRecords?.has(row.field.scanId) && !row.chosen && row.source !== 'memory' && (row.target || row.source === 'context' && row.candidates.length)) Object.assign(row, { target: null, recordBindingRequired: true, status: 'needs_confirmation', reason: '已识别字段含义，但网页已有经历尚未配对；请在“覆盖网页已填内容”中核对整条来源及补填范围' });
       }
       item.revision = db.revision; item.sources = sources(db, item.profileId);
     }
@@ -147,7 +147,7 @@
     // 经独立协调器绑定整条来源；控件适配器只执行一个字段，不负责添加或分配记录。
     async function prepareRecords(item, db, task) {
       const { added, protectedGroups, remaining } = await records.prepare(item, db, task);
-      item.recordNotice = `已补充 ${added} 条网页经历${protectedGroups ? `；${protectedGroups} 个模块已有未绑定内容，保留原记录，请手动选择来源` : ''}${remaining ? `；没有更多可用槽位或已达到本次添加上限，另有 ${remaining} 条经历尚未分配，请检查网页后继续` : ''}`;
+      item.recordNotice = `已补充 ${added} 条网页经历${protectedGroups ? `；${protectedGroups} 个模块已有未绑定内容，保留原记录；请在“覆盖网页已填内容”中配对经历并核对补填或覆盖范围` : ''}${remaining ? `；没有更多可用槽位或已达到本次添加上限，另有 ${remaining} 条经历尚未分配，请检查网页后继续` : ''}`;
       rebuild(item, db); return view(item, db);
     }
     // 再扫描只读取已经授权的同一文档，动态新增时清理旧建议/确认令牌。
@@ -364,7 +364,8 @@
             for(const row of staged.rows) {
               const {value:before}=await pageMessage(item.tabId,{type:'learning:read',documentId:item.documentId,scanId:row.field.scanId,semanticId:row.field.semanticId}); task.check();
               const after=M.valueOf(db,item.profileId,row.target).value;
-              if(before===null || before===undefined || before==='' || Array.isArray(before)&&!before.length || JSON.stringify(before)===JSON.stringify(after)) continue;
+              // 空白项也进入明确勾选范围，让网站解析后的缺项可随经历配对补齐；无法回读仍跳过。
+              if(before===null || before===undefined || JSON.stringify(before)===JSON.stringify(after)) continue;
               const block=item.recordBlocks.find((block)=>block.records.some((record)=>record.scanIds.includes(row.field.scanId)));
               const recordLabel=block?`网页${global.WangshenTemplates.RECORD_GROUPS[block.kind]}第${block.records.findIndex((record)=>record.scanIds.includes(row.field.scanId))+1}条`:'';
               changes.push({scanId:row.field.scanId,semanticId:row.field.semanticId,label:row.field.label,group:row.field.group,recordLabel,target:clone(row.target),before:clone(before),after:clone(after)});
@@ -445,7 +446,7 @@
       if (msg.type === 'learning:prepareRecords') { check(msg.confirmed === true, '补充网页经历需要用户主动操作');const task=jobFor(item,db,msg.batchId);try{task.check();return await prepareRecords(item,db,task);}finally{task.done();} }
       if (msg.type === 'learning:prepareAI') {
         check(Array.isArray(msg.scanIds) && msg.scanIds.length > 0 && msg.scanIds.length <= 20 && new Set(msg.scanIds).size === msg.scanIds.length, '请勾选 1–20 个需要 AI 识别的未知字段');
-        const fields = msg.scanIds.map((scanId) => { const row = rowOf(item, scanId); check(!row.target && !row.ignored && row.status !== 'unsupported', '只能选择未忽略的未知字段使用 AI'); return row.field; });
+        const fields = msg.scanIds.map((scanId) => { const row = rowOf(item, scanId); check(!row.recordBindingRequired, '字段含义已识别，请先在“覆盖网页已填内容”中配对经历，AI不能代替来源确认'); check(!row.target && !row.ignored && row.status !== 'unsupported', '只能选择未忽略的未知字段使用 AI'); return row.field; });
         const settings = await repository.readAiSettings(); const provider = global.LocalApplyProviders.resolve(settings);
         check(settings.model, '请先配置模型；不配置 AI 仍可手动匹配');
         // 只在用户主动预览时按上下文分配目录预算，省略范围必须可见，不改变本地匹配。

@@ -20,7 +20,7 @@
     </section><section id="tab-smart">
       <div class="card">
         <h3>当前招聘页面</h3>
-        <p class="muted">自动填写默认保留网页已有内容。网站解析有误时，可点击“覆盖网页已填内容”，核对差异后用本地简历纠正。未知字段可选择 AI 辅助识别，不会提交申请。</p>
+        <p class="muted">自动填写默认保留网页已有内容。网站上传解析后，可点击“覆盖网页已填内容”，配对经历并选择补填空白或纠正已有内容。未知字段可选择 AI 辅助识别，不会提交申请。</p>
         <div class="smart-actions"><button id="smartFillAll" class="btn">自动填写此页面</button><button id="smartScan" class="btn ghost">仅扫描字段</button></div>
         <button id="smartOverwriteOpen" class="btn ghost" type="button">覆盖网页已填内容</button>
         <button id="smartStopFill" class="btn ghost" type="button" hidden>停止填写</button><p id="smartStatus" role="status"></p>
@@ -28,7 +28,8 @@
         <label class="filter-toggle"><input type="checkbox" id="smartOnlyUnknown">只看未知字段</label><div id="smartMetrics" class="metrics" aria-label="扫描结果统计"></div>
         <label><input id="smartRememberAfter" type="checkbox" /> 填写验证成功后记住映射</label>
       </div>
-      <section id="smartOverwriteReview" class="card" hidden><h3>用本地简历纠正网页内容</h3><p class="muted">仅覆盖本次勾选项，本地缺少内容或未识别的字段保留。网页自动解析和手填内容无法可靠区分，请核对差异。多段经历请先选择对应的本地记录；未选择的记录跳过。</p><div id="smartOverwriteRecords"></div><button id="smartOverwritePreview" class="btn" type="button">预览覆盖差异</button><div id="smartOverwriteChanges"></div><label><input id="smartOverwriteConsent" type="checkbox">我已核对勾选项及经历对应，确认本次以本地内容覆盖</label><div class="smart-actions"><button id="smartOverwriteConfirm" class="btn" type="button">确认覆盖已勾选内容</button><button id="smartOverwriteCancel" class="btn ghost" type="button">取消</button></div></section>
+      <!-- 校对统一展示空白补填及已有内容覆盖，只有明确勾选确认的字段进入原验证管线。 -->
+      <section id="smartOverwriteReview" class="card" hidden><h3>用本地简历补齐或纠正网页内容</h3><p class="muted">仅填写本次勾选项，分别标明补填空白和覆盖已有；本地缺值或未知字段保留。网页自动解析和手填内容无法可靠区分，请核对差异。多段经历先选择对应的本地记录；未选择的记录跳过。</p><div id="smartOverwriteRecords"></div><button id="smartOverwritePreview" class="btn" type="button">预览填写差异</button><div id="smartOverwriteChanges"></div><label><input id="smartOverwriteConsent" type="checkbox">我已核对勾选项及经历对应，确认以本地内容补填或覆盖这些字段</label><div class="smart-actions"><button id="smartOverwriteConfirm" class="btn" type="button">确认填写已勾选内容</button><button id="smartOverwriteCancel" class="btn ghost" type="button">取消</button></div></section>
       <div id="smartAIReview" class="card" hidden><h3>确认模型接收方与发送内容</h3><p id="smartRecipient"></p><p id="smartAICoverage" role="status"></p><p>仅发送以下脱敏元数据及本地来源引用，不发送实际值、完整简历或网页 HTML。</p><pre id="smartAIPayload"></pre><label><input type="checkbox" id="smartAIConsent" /> 我确认向该服务商发送上述内容（可能计费）</label><button id="smartAISend" class="btn">确认发送并识别</button><button id="smartAICancel" class="btn ghost">取消</button></div>
       <section class="card smart-learning-batch"><p class="muted">手动填写使用网页原控件。左上角勾选需记住的字段，完成后统一核对保存（每批最多 20 项）。</p><button id="smartLearnPreview" class="btn" type="button">更新已勾选字段</button><div id="smartLearnReview" hidden><h3>确认字段、内容及控件类型</h3><div id="smartLearnChanges"></div><label><input id="smartLearnConsent" type="checkbox">我已核对差异，确认更新本地字段、内容和本站映射</label><div class="smart-actions"><button id="smartLearnCommit" class="btn" type="button">确认统一更新</button><button id="smartLearnCancel" class="btn ghost" type="button">取消</button></div></div></section>
       <h3 id="smartMatchedHeading" hidden>未填写字段 / 待处理及缺少资料</h3><div id="smartMatched"></div>

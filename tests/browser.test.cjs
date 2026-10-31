@@ -175,6 +175,48 @@ test('网页解析纠错覆盖：差异确认、既有控件与多段经历保�
   } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
 });
 
+// 复现网站上传后只解析部分React字段：先明确配对，再按勾选补填空白，已有内容始终受保护。
+test('网站上传后补填：零写入说明、经历配对和空白字段确认填写', {timeout:90000}, async(t)=> {
+  const root=path.join(ROOT,'.browser-tests'); await fs.mkdir(root,{recursive:true}); const profile=await fs.mkdtemp(path.join(root,'parsed-gaps-')); const api=await serve(); let context;
+  try {
+    context=await launch(profile); context.setDefaultTimeout(10000); const {worker,extensionId}=await extension(context);
+    const options=await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
+    const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
+    const entryId=(await rpc(options,'localapply:command',{request:{action:'createEntry',payload:{profileId,kind:'project',title:'合成补填项目二'}}})).result;
+    for(const [entry,name,role] of [[null,'合成补填项目一','合成补填角色一'],[entryId,'合成补填项目二','合成补填角色二']]) for(const [key,value] of [['projectName',name],['projectRole',role]]) await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.'+key,entryId:entry,value}}});
+    const before=(await rpc(options,'localapply:read')).database; const page=await context.newPage(); await page.goto(api.base+'/test-pages/feishu-atsx-controls.html?mode=parsed'); await page.locator('.resumeEditForm-project').first().waitFor();
+    for(const index of [0,1]) await page.locator(`input[id="project[${index}].role"]`).fill('');
+    const loaded=page.waitForEvent('framenavigated',{predicate:(frame)=>frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});
+    await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url()); const frame=await loaded; await frame.locator('#profileSel option').first().waitFor({state:'attached'});
+    // 每步等待真实业务屏障，不注入填写值或跳过后台确认。
+    const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+    await t.test('默认零写入说明配对原因，已识别职责不误送AI',async()=>{
+      await frame.locator('#smartFillAll').click(); await idle(); const status=await frame.locator('#smartStatus').textContent(); assert.match(status,/本次未写入字段/); assert.match(status,/已识别字段需先配对经历/);
+      const card=frame.locator('.smart-row').filter({has:frame.locator('h4',{hasText:'职责'})}).first(); assert.equal(await card.locator('.smart-ai-start').count(),0); await card.locator('.smart-pair-record').waitFor();
+      await frame.locator('#smartAI').click(); await idle(); assert.match(await frame.locator('#smartStatus').textContent(),/请先勾选/);
+      const logs=await rpc(options,'diagnostics:read'); assert.equal(logs.rows.filter((row)=>row.operation==='learning.prepareAI').length,0); const preparation=logs.rows.findLast((row)=>row.operation==='learning.prepareRecords'); assert.equal(preparation.recordBindingRequired,10); assert.ok(preparation.webOccupied>0); // 两条项目各五个已知字段，待配对数量也包含本地缺值项。
+      assert.equal(await page.evaluate(()=>__atsx['project[0].role']),''); await card.locator('.smart-pair-record').click(); await idle();
+    });
+    await t.test('反向配对预览包含空白项，取消零写入，确认仅填写勾选项',async()=>{
+      const selects=frame.locator('.smart-overwrite-record'); assert.equal(await selects.count(),2); await selects.nth(0).selectOption(JSON.stringify(entryId)); await selects.nth(1).selectOption('null');
+      await frame.locator('#smartOverwritePreview').click(); await idle(); const changes=frame.locator('.smart-overwrite-change'); assert.equal(await changes.count(),4); assert.equal(await changes.filter({hasText:'补填空白'}).count(),2);
+      await frame.locator('#smartOverwriteCancel').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'');
+      await frame.locator('#smartOverwriteOpen').click(); await idle(); await selects.nth(0).selectOption(JSON.stringify(entryId)); await selects.nth(1).selectOption('null'); await frame.locator('#smartOverwritePreview').click(); await idle();
+      for(const input of await changes.locator('input').all()) await input.uncheck(); await changes.filter({hasText:'网页项目经历第1条 · 职责'}).locator('input').check();
+      await frame.locator('#smartOverwriteConsent').check(); await page.screenshot({path:path.join(root,'parsed-gaps-review.png')}); await frame.locator('#smartOverwriteConfirm').click(); await idle();
+      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 1 个字段，失败\/不支持 0/); assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'合成补填角色二'); assert.equal(await page.evaluate(()=>__atsx['project[1].role']),'');
+      for(const index of [0,1]) assert.equal(await page.evaluate((index)=>__atsx[`project[${index}].name`],index),'网站解析内容 · project['+index+'].name');
+    });
+    await t.test('再次普通自动填写只补另一条空白，不猜配不覆盖不提交，日志无原值',async()=>{
+      await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['project[1].role']),'合成补填角色一'); assert.equal(await page.evaluate(()=>__atsx['project[0].name']),'网站解析内容 · project[0].name');
+      assert.equal(await page.evaluate(()=>__atsx.adds+__atsx.saves+__atsx.submits),0); assert.deepEqual((await rpc(options,'localapply:read')).database,before); assert.equal(api.calls.length,0);
+      const logs=await rpc(options,'diagnostics:read'); await fs.writeFile(path.join(root,'parsed-gaps-diagnostics.json'),JSON.stringify(logs,null,2));
+      for(const secret of ['合成补填角色一','合成补填角色二','网站解析内容']) assert.ok(!JSON.stringify(logs).includes(secret));
+      await page.locator('input[id="project[0].name"]').scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(root,'parsed-gaps-filled.png')});
+    });
+  } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
+});
+
 // 使用隔离资料和真实标签激活，验证返回原页及过期卡片的按钮恢复，不访问招聘服务器。
 test('卡片切页恢复：重复填写、编辑、折叠关闭与过期续期', { timeout: 90000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'panel-return-')); const api = await serve(); let context;

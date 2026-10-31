@@ -33,7 +33,7 @@
     function append(operation, detail = {}) {
       if (!operations.includes(operation)) operation = 'runtime.request';
       const row = { id: crypto.randomUUID(), at: new Date().toISOString(), operation, level: ['DEBUG','INFO','WARNING','ERROR'].includes(detail.level) ? detail.level : 'INFO' };
-      for (const key of ['durationMs','count','success','failed','unsupported','needsConfirmation']) if (Number.isFinite(detail[key]) && detail[key] >= 0) row[key] = Math.min(Math.round(detail[key]), 10000000);
+      for (const key of ['durationMs','count','success','failed','unsupported','needsConfirmation','recordBindingRequired','webOccupied','unknown']) if (Number.isFinite(detail[key]) && detail[key] >= 0) row[key] = Math.min(Math.round(detail[key]), 10000000);
       if (['application','login','other'].includes(detail.kind)) row.kind = detail.kind;
       if (detail.error) Object.assign(row, errorInfo(detail.error));
       if (operation === 'learning.fill') { const fill = fillInfo(detail.fill); if (fill) row.fill = fill; }

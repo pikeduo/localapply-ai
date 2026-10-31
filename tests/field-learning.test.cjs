@@ -113,6 +113,41 @@ test('单次覆盖：多段已有经历显式配对，不按顺序猜选且不�
   assert.equal(confirmed.rows[0].target.entryId,entryId); assert.equal(confirmed.rows[1].chosen,undefined); assert.equal(confirmed.overwrite.length,1); assert.deepEqual(await env.repo.read(),before);
 });
 
+// 网站解析只填部分字段时，必须先确认整条经历；补填令牌也绑定空白原值，不能覆盖用户后改内容。
+test('网站上传后补填：区分语义与配对，确认空白项后复用原填写验证且不覆盖其他内容', async () => {
+  const env=await fixture(); await env.setValue('builtin.school','合成正确学校'); await env.setValue('builtin.major','合成正确专业');
+  const school=env.field('学校名称',{kind:'education',group:'教育经历'}); const major=env.field('专业',{kind:'education',group:'教育经历'}); const unknown=env.field('合成未知项目',{kind:'education',group:'教育经历'});
+  env.recordBlocks([{blockId:'scan.education',kind:'education',canAdd:true,records:[{recordId:'scan.education0',scanIds:[school.scanId,major.scanId,unknown.scanId]}]}]);
+  env.completion([school,major,unknown].map((field)=>({scanId:field.scanId,present:field===school})));
+  const actual={[school.scanId]:'网站解析学校',[major.scanId]:'',[unknown.scanId]:''}; env.actual((msg)=>actual[msg.scanId]);
+  let view=await env.scan(school,major,unknown); const before=await env.repo.read(); view=await env.send(view,'prepareRecords',{confirmed:true});
+  assert.ok(view.rows.slice(0,2).every((row)=>row.recordBindingRequired && !row.target)); assert.equal(view.rows[2].source,'unknown'); assert.equal(view.rows[2].recordBindingRequired,undefined);
+  assert.equal(env.calls.filter((call)=>['learning:addRecord','learning:fill'].includes(call.type)).length,0);
+  await assert.rejects(env.send(view,'prepareAI',{scanIds:[major.scanId]}),/先.*配对经历/); assert.equal(env.aiCalls.length,0);
+  assert.ok((await env.send(view,'prepareAI',{scanIds:[unknown.scanId]})).payload.fields.length===1);
+  const bindings=[{recordId:'scan.education0',entryId:null}]; let preview=await env.send(view,'previewOverwrite',{bindings});
+  assert.equal(preview.changes.length,2); assert.equal(preview.changes.find((row)=>row.scanId===major.scanId).before,'');
+  await env.send(view,'cancelOverwrite'); assert.ok((await env.send(view,'session')).rows[1].recordBindingRequired);
+  preview=await env.send(view,'previewOverwrite',{bindings}); actual[major.scanId]='用户刚填写';
+  await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[major.scanId],confirmed:true}),/网页内容.*变化/);
+  assert.ok((await env.send(view,'session')).rows[1].recordBindingRequired); actual[major.scanId]='';
+  preview=await env.send(view,'previewOverwrite',{bindings}); const confirmed=await env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[major.scanId],confirmed:true});
+  assert.equal(confirmed.overwrite.length,1); assert.ok(!confirmed.rows[1].recordBindingRequired); assert.equal(confirmed.rows[0].chosen,undefined);
+  view=await env.send(confirmed,'fill',{scanId:major.scanId,confirmed:true,overwriteToken:confirmed.overwrite[0].token});
+  assert.equal(view.rows[1].status,'success'); const writes=env.calls.filter((call)=>call.type==='learning:fill'); assert.equal(writes.length,1); assert.equal(writes[0].scanId,major.scanId); assert.equal(writes[0].expectedCurrent,''); assert.equal(writes[0].value,'合成正确专业');
+  assert.deepEqual(await env.repo.read(),before); assert.ok(!JSON.stringify(await env.repo.exportBackup()).includes('recordBindingRequired'));
+});
+
+// 多条来源也应明确标为配对待确认，不能因target为空而当作未知字段调用AI。
+test('网站上传后多段经历：已知候选保持配对保护，缺来源及真正未知分别处理', async () => {
+  const env=await fixture(); await env.setValue('builtin.projectName','合成项目一');
+  const entryId=(await env.repo.command({action:'createEntry',payload:{profileId:env.profileId,kind:'project',title:'合成项目二'}})).result; await env.setValue('builtin.projectName','合成项目二',entryId);
+  const field=env.field('项目名称',{kind:'project',group:'项目经历'}); env.recordBlocks([{blockId:'scan.projects',kind:'project',canAdd:true,records:[{recordId:'scan.project0',scanIds:[field.scanId]}]}]); env.completion([{scanId:field.scanId,present:true}]);
+  let view=await env.scan(field); assert.equal(view.rows[0].source,'context'); assert.equal(view.rows[0].candidates.length,2);
+  view=await env.send(view,'prepareRecords',{confirmed:true}); assert.equal(view.rows[0].recordBindingRequired,true); assert.equal(view.rows[0].target,null);
+  await assert.rejects(env.send(view,'prepareAI'),/配对经历/); assert.equal(env.calls.filter((call)=>['learning:addRecord','learning:fill'].includes(call.type)).length,0); assert.equal(env.aiCalls.length,0);
+});
+
 // 部分勾选仍须采用整块已确认配对，改配记录不能残留旧手选来源或旧验证结果。
 test('单次覆盖：交换或跳过已有绑定时只写勾选项，其他字段来源同步且清除旧验证', async () => {
   for(const skip of [false,true]) {

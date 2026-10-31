@@ -104,7 +104,11 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
     const incomplete = response?.ok && (msg?.type === 'jobs:scan' && !response.recognized || outcome && outcome.status !== 'success');
     if (!quiet) try { await diagnostics.append(operation, { level: response?.ok ? incomplete ? 'WARNING' : 'INFO' : 'ERROR', durationMs: Date.now() - started, count,
       ...(response?.rows ? { success: response.rows.filter((row) => row.status === 'success').length, failed: response.rows.filter((row) => row.status === 'failed').length,
-        unsupported: response.rows.filter((row) => row.status === 'unsupported').length, needsConfirmation: response.rows.filter((row) => row.status === 'needs_confirmation').length } : {}),
+        unsupported: response.rows.filter((row) => row.status === 'unsupported').length, needsConfirmation: response.rows.filter((row) => row.status === 'needs_confirmation').length,
+        // 固定数量区分语义未知、经历未配对和已有内容保护，不记录标签或实际值。
+        recordBindingRequired: response.rows.filter((row) => row.recordBindingRequired && !row.ignored).length,
+        webOccupied: response.rows.filter((row) => row.webOccupied && !row.ignored).length,
+        unknown: response.rows.filter((row) => row.source === 'unknown' && !row.ignored).length } : {}),
       ...(outcome?.diagnostic ? { fill: outcome.diagnostic } : {}),
       ...(incomplete ? { error: new Error(msg.type === 'jobs:scan' ? '缺少岗位元数据' : outcome.status === 'unsupported' ? '控件格式暂不支持' : outcome.status === 'needs_confirmation' ? '网页内容需要确认' : '网页填写校验失败') } : {}),
       ...(!response?.ok ? { error: logError || response?.error } : {}) }); }
