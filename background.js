@@ -258,7 +258,8 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
           sendResponse({ ok: false, error: '未知消息类型: ' + (msg && msg.type) });
       }
     } catch (e) {
-      sendResponse({ ok: false, error: e.message || String(e), detail: e.detail }, e);
+      // 仅透传已定义的恢复状态；不能将任意异常属性作为续权或执行许可。
+      sendResponse({ ok: false, error: e.message || String(e), detail: e.detail, ...(e.code === 'learning_session_unavailable' ? { code: e.code } : {}) }, e);
     }
   })();
   return true; // 所有分支都异步回复

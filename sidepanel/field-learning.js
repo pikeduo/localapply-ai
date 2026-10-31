@@ -8,6 +8,7 @@
   const guardLabels = Object.freeze({ context: '页面、授权或扫描绑定已变化', members: '日期或电话的子控件已变化', attributes: '控件属性已变化', safety: '控件已断开、禁用或受到保护', value: '交互期间输入框内容发生变化', date_projection: '日期来源或目标精度不一致' });
   let current = null; let aiPreview = null; let fillIds = []; let busy = false; let rulesView = null; let selectionInitialized = false;
   let generation = 0; let polling = false; let activity = 0; let pageActive = true;
+  let needsSessionRefresh = false;
   let activeFill = null;
   const drafts = new Map(); const selected = new Set(); const aiSelected = new Set();
   // 点选或聚焦使已在途的轮询结果失效，避免重绘替换正在操作的复选框、吞掉用户点击。
@@ -79,7 +80,18 @@
     const existing = current.rows.filter((row) => !row.ignored && row.webOccupied && row.status !== 'success').length;
     return (pairing ? ` ${pairing} 个已识别字段需先配对经历。` : '') + (pairing || existing ? ' 网站上传解析后的纠错或补填，请点击“覆盖网页已填内容”，核对经历及勾选范围后确认。' : '');
   }
-  // 统一错误恢复，不输出 Key、响应原文或网页内容到日志。
+  // 仅卡片的会话缺失可主动恢复；导航、档案变化及其他业务错误仍按原保护拒绝。
+  function canReconnect(error) { return directFill && ['learning_session_unavailable', 'panel_session_invalid'].includes(error.code); }
+  // 被动观察不续权、不重扫，保留列表与勾选；过期预览不能继续用于AI发送、学习或覆盖。
+  function retainResults() {
+    needsSessionRefresh = true; aiPreview = null; fillIds = []; cancelLearningPreview(); cancelOverwrite();
+    $('smartAIReview').hidden = true; $('smartAIConsent').checked = false; $('smartAIPayload').textContent = ''; delete $('smartAIReview').dataset.token;
+    if ($('smartLearnConsent')) $('smartLearnConsent').checked = false;
+    if ($('smartLearnChanges')) $('smartLearnChanges').replaceChildren();
+    if ($('smartFillReview')) $('smartFillReview').hidden = true;
+    $('smartStatus').textContent = '已保留上次扫描结果，点击自动填写或刷新结果即可重新连接；旧确认需要重新核对。'; $('smartStatus').className = 'muted';
+  }
+  // 用户操作中丢会话只恢复最新列表，不重放旧字段命令或确认；真实错误仍明确显示。
   async function task(operation) {
     if (busy) return;
     activity++; // 新操作使更早的轮询结果失效，避免清空后被旧的“已填”标记覆盖。
@@ -89,13 +101,22 @@
     $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = true; });
     if (directFill) $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = true; });
     try { return await operation(); }
-    catch (error) { if (started === generation) { $('smartStatus').textContent = error.message; $('smartStatus').className = 'err'; if (directFill) $('smartStatus').scrollIntoView({ block: 'center' }); } }
+    catch (error) {
+      if (started === generation) {
+        if (canReconnect(error)) {
+          retainResults();
+          try { await scanPage(); error = new Error('已重新连接并刷新字段列表，请重新选择此项；旧确认已失效。'); error.code = 'stale_field'; }
+          catch (recoveryError) { if (canReconnect(recoveryError)) { retainResults(); return; } error = recoveryError; }
+        }
+        if (started === generation) { $('smartStatus').textContent = error.message; $('smartStatus').className = error.code === 'stale_field' ? 'muted' : 'err'; if (directFill) $('smartStatus').scrollIntoView({ block: 'center' }); }
+      }
+    }
     finally { busy = false; $('tab-smart').setAttribute('aria-busy', 'false'); $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = button.id === 'smartUndo' ? !rulesView?.canUndo : false; }); if (directFill) $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = false; }); }
   }
   // 所有业务仍经后台校验；区分旧后台误分派和单项扫描失效，恢复不转移旧字段许可。
-  async function request(type, payload = {}) {
+  async function request(type, payload = {}, allowReconnect = true) {
     const started = generation; const sessionId = payload.sessionId || current?.sessionId;
-    const result = await sendMessage('learning:' + type, { sessionId, ...payload });
+    const result = await sendMessage('learning:' + type, { sessionId, ...payload }, allowReconnect);
     if (result.diagnosticsSaved === false && $('logsStorageStatus')) { $('logsStorageStatus').textContent = '本次操作的日志保存失败；填写结果仍有效，请打开诊断面板检查存储并重试。'; $('logsStorageStatus').className = 'err'; }
     if (started !== generation) throw new Error(directFill ? '页面或档案已切换，请重新点击填写' : '页面或档案已切换，请重新授权');
     if (!result.ok) {
@@ -106,11 +127,11 @@
       if (result.error === '网页字段不在授权扫描范围内' && typeof payload.scanId === 'string' && current?.sessionId === sessionId) {
         const fresh = await sendMessage('learning:session', { sessionId });
         if (started !== generation || current?.sessionId !== sessionId) throw new Error('页面或档案已切换，请重新点击填写');
-        if (!fresh.ok) throw new Error(fresh.error);
+        if (!fresh.ok) { const error = new Error(fresh.error); error.code = fresh.code; throw error; }
         update(fresh); aiPreview = null; $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true;
         const error = new Error('网页字段已更新，列表已刷新，请重新选择此项。'); error.code = 'stale_field'; throw error;
       }
-      throw new Error(result.error);
+      const error = new Error(result.error); error.code = result.code; throw error;
     }
     return result;
   }
@@ -155,6 +176,7 @@
   function update(view) {
     const previousIds = new Set(current?.rows.map((row) => row.field.scanId) || []);
     current = view;
+    needsSessionRefresh = false;
     $('tab-smart').dataset.sessionId = view.sessionId;
     if (!selectionInitialized || directFill) { view.rows.filter((row) => row.status === 'matched' && (!selectionInitialized || !previousIds.has(row.field.scanId))).forEach((row) => selected.add(row.field.scanId)); selectionInitialized = true; }
     render();
@@ -313,20 +335,22 @@
     }
   }
 
-  // 扫描绑定用户点击的当前文档；卡片无需授权复选框，后台仍校验会话与来源。
+  // 扫描绑定用户点击的当前文档；成功后才替换旧结果，恢复失败时保留原列表。
   async function scanPage(targetTabId, legacyAction = false) {
     if (!directFill && !legacyAction && !$('smartPageConsent').checked) throw new Error('请先勾选授权扫描当前招聘页'); // 旧填写按钮本身沿用原有主动扫描许可，普通智能扫描仍保留勾选。
     await flushSaves(); const state = await getState();
     if (directFill && !globalThis.LocalApplyPanelContext) throw new Error('页面正在连接，请稍后重试');
     // 悬浮卡片固定绑定打开时的顶层标签，不能跟随另一个活动标签操作资料。
     const tab = Number.isInteger(targetTabId)?{id:targetTabId}:globalThis.LocalApplyPanelContext || (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
-    current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); cancelLearningPreview(); cancelOverwrite(); $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '正在识别当前页面字段…' : '正在扫描已授权页面…';
-    update(await request('scanPage', { tabId: tab?.id, profileId: state.activeProfileId, confirmed: true }));
+    $('smartStatus').textContent = directFill ? '正在识别当前页面字段…' : '正在扫描已授权页面…';
+    const view = await request('scanPage', { tabId: tab?.id, profileId: state.activeProfileId, confirmed: true });
+    current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); aiPreview = null; fillIds = []; cancelLearningPreview(); cancelOverwrite(); $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true;
+    update(view);
   }
-  // 直接模式在填写或 AI 识别前刷新来源；配置/资料变化后自动重建本页扫描。
+  // 主动填写/刷新才重建缺失会话，不能因普通业务错误绕过导航或档案保护。
   async function ensureCurrent() {
-    if (!current) await scanPage();
-    else { try { update(await request('session')); } catch { await scanPage(); } }
+    if (!current || needsSessionRefresh) await scanPage();
+    else { try { update(await request('session')); } catch (error) { if (!canReconnect(error)) throw error; await scanPage(); } }
   }
   $('smartScan').addEventListener('click', () => task(scanPage));
   // 单次校对复用同一入口，先选择整条经历再读取补填及覆盖差异；打开不改变来源。
@@ -386,7 +410,8 @@
   }));
   // 只筛选可见列表，不清空选择、草稿或后台扫描会话。
   $('smartOnlyUnknown')?.addEventListener('change', render);
-  $('smartRefresh').addEventListener('click', () => task(async () => { if (directFill && !current) await scanPage(); else update(await request('session')); }));
+  // 刷新与直接填写共用主动恢复，避免后台重建后反复请求已不存在的旧扫描。
+  $('smartRefresh').addEventListener('click', () => task(async () => { if (directFill) await ensureCurrent(); else update(await request('session')); }));
   $('smartRevoke').addEventListener('click', async () => {const sessionId=current?.sessionId;await stopFill();if(sessionId)await sendMessage('learning:revoke',{sessionId}).catch(()=>{});clear();$('smartStatus').textContent=directFill?'已清除扫描结果，点击即可重新填写':'已撤销本页授权';});
   // 就近入口和批量入口共享发送预览；只展示脱敏元数据，用户确认前不调用模型。
   async function prepareAI(scanIds) {
@@ -467,7 +492,7 @@
   $('smartUndo').addEventListener('click', () => task(async () => { if (confirm('确认撤销最近一次规则操作？')) { await request('undoRule', { revision: rulesView.revision, confirmed: true }); await showRules(); } }));
   $('smartExportV3').addEventListener('click', () => task(async () => { const result = await request('exportV3'); const url = URL.createObjectURL(new Blob([JSON.stringify(result.backup, null, 2)], { type: 'application/json' })); const link = node('a'); link.href = url; link.download = 'localapply-compatible-v3.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }));
   // 悬浮卡片绑定原文档，切标签保留扫描与草稿；旧侧栏跟随活动标签，换档案仍须清空。
-  function clear() { void stopFill();generation++; document.dispatchEvent(new Event('localapply:learning-reset')); current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); cancelLearningPreview(); cancelOverwrite(); if ($('smartPageConsent')) $('smartPageConsent').checked = false; $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '点击自动填写，使用当前档案匹配网页字段' : '请选择当前招聘页并主动授权扫描'; }
+  function clear() { void stopFill();generation++; document.dispatchEvent(new Event('localapply:learning-reset')); current = null; needsSessionRefresh = false; aiPreview = null; fillIds = []; selectionInitialized = false; selected.clear(); aiSelected.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); cancelLearningPreview(); cancelOverwrite(); if ($('smartPageConsent')) $('smartPageConsent').checked = false; $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '点击自动填写，使用当前档案匹配网页字段' : '请选择当前招聘页并主动授权扫描'; }
   window.addEventListener('pagehide',()=>{void stopFill();activeFill?.port?.disconnect();});
   // 旧侧栏只交字段标识和唯一网页标签；来源由最新规范绑定解析，绝不接受任意文本值或计划。
   globalThis.LocalApplyLearningUI=Object.freeze({
@@ -495,14 +520,14 @@
   // 管理页或另一卡片切换活动档案时也清空旧来源；只检查 ID，不读取通知中的个人值。
   chrome.storage.onChanged.addListener((changes,area)=>{const profileId=changes['localapply.database']?.newValue?.activeProfileId;if(area==='local'&&profileId&&current&&profileId!==current.profileId)clear();});
   chrome.tabs.onActivated.addListener((info) => { if (!directFill) clear(); else if (globalThis.LocalApplyPanelContext) { pageActive = info.tabId === globalThis.LocalApplyPanelContext.id; document.dispatchEvent(new Event('localapply:page-activation')); } });
-  // 后台观察只在未编辑时重绘；展开资料编辑器后保留 DOM，避免手填内容使读取按钮消失。
+  // 后台观察不续权；会话丢失只标记待主动恢复，保留用户正在处理的DOM与勾选。
   setInterval(async () => {
-    if (!current || busy || polling || !pageActive || document.hidden || $('tab-smart').hidden || document.querySelector('.smart-editor[open]') || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
+    if (!current || needsSessionRefresh || busy || polling || !pageActive || document.hidden || $('tab-smart').hidden || document.querySelector('.smart-editor[open]') || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
     const id = current.sessionId; const startedActivity = activity; polling = true;
     try {
-      const view = await request('session');
+      const view = await request('session', {}, false);
       if (current?.sessionId === id && startedActivity === activity && !busy && !document.querySelector('.smart-editor[open]') && (view.revision !== current.revision || JSON.stringify(view.rows.map((row) => [row.field, directFill && row.webFilled, row.status])) !== JSON.stringify(current.rows.map((row) => [row.field, directFill && row.webFilled, row.status])))) update(view);
-    } catch (error) { if (current?.sessionId === id && startedActivity === activity && !busy) { $('smartStatus').textContent = error.message; $('smartStatus').className = 'err'; } }
+    } catch (error) { if (current?.sessionId === id && startedActivity === activity && !busy) { if (canReconnect(error)) retainResults(); else { $('smartStatus').textContent = error.message; $('smartStatus').className = 'err'; } } }
     finally { polling = false; }
   }, 2000);
 })();

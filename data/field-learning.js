@@ -63,11 +63,11 @@
           kind: entry?.kind || '', hasValue: M.hasValue(row.value) };
       });
     }
-    // 获取并核对当前文档，导航/过期/切换档案后旧确认不能继续使用。
+    // 区分内存扫描会话丢失与实际页面变化，可信界面可在用户下次操作时重新扫描。
     async function session(id) {
       const item = sessions.get(id);
       if (item && Date.now() - item.createdAt >= 1800000) void drop(id);
-      check(sessions.has(id), '扫描会话已过期或页面已导航/关闭，请重新授权扫描');
+      if (!sessions.has(id)) { const error = new Error('扫描会话已过期或页面已导航/关闭，请重新授权扫描'); error.code = 'learning_session_unavailable'; throw error; }
       const tab = await browser.tabs.get(item.tabId);
       if (tab.url !== item.url) { void drop(id); throw new Error('页面已导航，请重新授权扫描'); }
       const db = await fieldContext(item.profileId); check(db.profiles.some((profile) => profile.profileId === item.profileId), '档案已删除');

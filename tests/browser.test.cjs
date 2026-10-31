@@ -301,11 +301,50 @@ test('卡片切页恢复：重复填写、编辑、折叠关闭与过期续期',
       const created = context.waitForEvent('page'); await frame.locator('#panelSettings').click(); const editor = await created; await editor.waitForURL(/options\/options.html/);
       await activate(page); await editor.close(); await fill(); await page.locator('#syntheticName').fill(''); await fill();
     });
+    await t.test('后台扫描内存重建后切回保留列表和勾选，轮询不报红或主动重新授权', async () => {
+      // 重建学习服务模拟后台丢失内存，保留原卡片及文档；不伪称浏览器worker真实重启。
+      await page.evaluate(() => { const label=document.createElement('label'); label.textContent='合成切页备注'; const input=document.createElement('input'); input.id='return-note'; label.append(input); document.getElementById('jobApplication').append(label); });
+      await frame.locator('#smartRefresh').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      const row=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'合成切页备注'})}); await row.locator('.smart-check').check();
+      // 在后台丢失前保留真实覆盖预览；恢复标记须废弃该确认，但不能改掉网页内容。
+      await page.locator('#syntheticName').fill('合成网页已有姓名'); await frame.locator('#smartOverwriteOpen').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      await frame.locator('#smartOverwritePreview').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false'); await frame.locator('#smartOverwriteConsent').check();
+      const session=await frame.locator('#tab-smart').getAttribute('data-session-id'); const list=await frame.locator('.smart-row').allTextContents();
+      // 只记录命令名，确认轮询没有触发重扫、模型调用或网页写入，也不能续卡片令牌。
+      await frame.evaluate(() => { const original=sendMessage; globalThis.__returnRequests=[]; sendMessage=async(...args)=>{__returnRequests.push(args[0]); return original(...args);}; });
+      const token=new URL(frame.url()).searchParams.get('token'); await frame.locator('#smartRefresh').focus();
+      await activate(options); await worker.evaluate(() => Object.assign(fieldLearning,FieldLearning.create(repository,aiClient,chrome))); await activate(page);
+      await frame.waitForFunction(() => document.getElementById('smartStatus').className === 'err' || document.getElementById('smartStatus').textContent.includes('已保留'));
+      assert.notEqual(await frame.locator('#smartStatus').getAttribute('class'),'err',await frame.locator('#smartStatus').textContent());
+      assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'),session); assert.deepEqual(await frame.locator('.smart-row').allTextContents(),list); assert.equal(await row.locator('.smart-check').isChecked(),true);
+      const polled=await frame.evaluate(() => __returnRequests.length); await page.waitForTimeout(2300); assert.equal(await frame.evaluate(() => __returnRequests.length),polled);
+      assert.equal(new URL(frame.url()).searchParams.get('token'),token); assert.deepEqual(await frame.evaluate(() => [...new Set(__returnRequests)]),['learning:session']);
+      assert.equal(await frame.locator('#smartOverwriteReview').isHidden(),true); assert.equal(await frame.locator('#smartOverwriteConsent').isChecked(),false); assert.equal(await page.locator('#syntheticName').inputValue(),'合成网页已有姓名');
+      await frame.locator('#smartStatus').scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(root,'panel-return-results-retained.png')});
+      await frame.locator('#resumeTab').click(); await frame.locator('#resumeView').waitFor({state:'visible'}); await frame.locator('#logsTab').click(); await frame.locator('#logsView').waitFor({state:'visible'}); await frame.locator('#autoTab').click();
+      assert.equal(await row.locator('.smart-check').isChecked(),true);
+      await frame.locator('#smartRefresh').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      assert.notEqual(await frame.locator('#tab-smart').getAttribute('data-session-id'),session); assert.notEqual(await frame.locator('#smartStatus').getAttribute('class'),'err');
+      const stale=await frame.evaluate((sessionId) => sendMessage('learning:session',{sessionId}),session); assert.equal(stale.code,'learning_session_unavailable');
+      await page.locator('#syntheticName').fill(''); await fill(); await page.screenshot({path:path.join(root,'panel-return-scan-recovered.png')});
+    });
+    await t.test('旧单字段操作仅刷新列表并要求重选，不重放旧读取或确认', async () => {
+      const session=await frame.locator('#tab-smart').getAttribute('data-session-id'); const row=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'合成切页备注'})});
+      // 聚焦复选框暂停观察轮询，稳定复现用户先点击旧字段按钮的时序。
+      await row.locator('.smart-check').focus(); await worker.evaluate(() => Object.assign(fieldLearning,FieldLearning.create(repository,aiClient,chrome)));
+      await row.locator('.smart-read-web').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+      assert.notEqual(await frame.locator('#tab-smart').getAttribute('data-session-id'),session); assert.notEqual(await frame.locator('#smartStatus').getAttribute('class'),'err'); assert.match(await frame.locator('#smartStatus').textContent(),/重新选择/);
+      assert.match(await row.locator('.smart-web-value').textContent(),/尚未读取/); await row.locator('.smart-read-web').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false'); assert.ok(!(await row.locator('.smart-web-value').textContent()).includes('尚未读取'));
+      assert.deepEqual((await rpc(options,'localapply:read')).database,db); assert.equal(api.calls.length,0); assert.equal(await page.evaluate(() => __stage5Submissions),0);
+    });
     await t.test('过期卡片不由轮询续期，用户点击后轮换令牌并可重新填写和关闭', async () => {
       const oldToken = new URL(frame.url()).searchParams.get('token');
       // 只推进隔离worker的时钟，立即复现30分钟有效期；不等待或修改真实用户存储。
       await worker.evaluate(() => { globalThis.__realNow = Date.now; Date.now = () => __realNow() + 1800001; });
       const expired = await frame.evaluate(() => chrome.runtime.sendMessage({ type: 'panel:context', panelToken: new URLSearchParams(location.search).get('token') })); assert.equal(expired.code, 'panel_session_invalid');
+      // 即使刚有用户激活，观察轮询也不能隐式轮换已过期令牌；只保留结果等待主动点击。
+      await frame.locator('#smartRefresh').focus(); await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('已保留'));
+      assert.notEqual(await frame.locator('#smartStatus').getAttribute('class'),'err'); assert.equal(new URL(frame.url()).searchParams.get('token'),oldToken);
       await activate(options); await activate(page); await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => document.body.classList.contains('collapsed'));
       const newToken = new URL(frame.url()).searchParams.get('token'); assert.notEqual(newToken, oldToken);
       await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => !document.body.classList.contains('collapsed'));

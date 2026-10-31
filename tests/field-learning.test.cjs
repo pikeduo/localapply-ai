@@ -982,6 +982,33 @@ test('未授权或导航后的会话不能扫描或把旧数据填入新页面',
   await assert.rejects(env.send(view, 'session'), /导航/);
 });
 
+// 缺失只返回固定恢复状态；恢复后的新扫描不能接续原AI、覆盖或资料保存许可。
+test('扫描会话恢复：缺失有明确原因码，重扫不复用旧确认且不被动写入', async () => {
+  const env=await fixture(); await env.setValue('builtin.name','合成本地姓名'); const name=env.field('姓名'); const unknown=env.field('合成重连备注'); const view=await env.scan(name,unknown); env.actual('合成网页备注');
+  const before=await env.repo.read(); const ai=await env.send(view,'prepareAI'); const overwrite=await env.send(view,'previewOverwrite',{bindings:[]});
+  const value=await env.send(view,'previewValue',{scanId:unknown.scanId,definition:definition('合成重连字段'),value:'合成确认内容'});
+  const learned=await env.send(view,'previewLearnedFields',{scanIds:[unknown.scanId]});
+  env.service.invalidate(42); const count=env.calls.length;
+  await assert.rejects(env.send(view,'session'),{code:'learning_session_unavailable'}); assert.equal(env.calls.length,count);
+  const fresh=await env.scan(name,unknown); assert.notEqual(fresh.sessionId,view.sessionId);
+  await assert.rejects(env.send(fresh,'recognize',{token:ai.token,confirmed:true}),/预览|确认|过期/);
+  await assert.rejects(env.send(fresh,'confirmOverwrite',{token:overwrite.token,scanIds:[name.scanId],confirmed:true}),/预览/);
+  await assert.rejects(env.send(fresh,'commitValue',{scanId:unknown.scanId,token:value.token,confirmed:true}),/预览/);
+  await assert.rejects(env.send(fresh,'commitLearnedFields',{token:learned.token,confirmed:true}),/预览/);
+  assert.equal(env.aiCalls.length,0); assert.equal(env.calls.filter((call)=>['learning:fill','learning:addRecord'].includes(call.type)).length,0); assert.deepEqual(await env.repo.read(),before);
+});
+
+// 过期可重扫，但真实导航及活动档案变化必须保留独立拒绝，不能伪装成连接恢复。
+test('扫描会话恢复：区分过期、导航与活动档案变化', async () => {
+  const expired=await fixture(); const view=await expired.scan(expired.field('姓名')); const started=Date.now();
+  expired.context.Date=class extends Date { static now() { return started+1800001; } };
+  await assert.rejects(expired.send(view,'session'),{code:'learning_session_unavailable'});
+  const navigated=await fixture(); const prior=await navigated.scan(navigated.field('姓名')); navigated.navigate();
+  await assert.rejects(navigated.send(prior,'session'),(error)=>{assert.match(error.message,/页面已导航/);assert.equal(error.code,undefined);return true;});
+  const switched=await fixture(); const previous=await switched.scan(switched.field('姓名')); await switched.repo.command({action:'createProfile',payload:{name:'合成另一档案'}});
+  await assert.rejects(switched.send(previous,'session'),(error)=>{assert.match(error.message,/活动档案已变化/);assert.equal(error.code,undefined);return true;});
+});
+
 // 无凭据时所有本地操作继续正常；活动档案改变后旧页面确认立即失效。
 test('无 API Key 可手动创建及填写，切换活动档案后拒绝旧会话', async () => {
   const env = await fixture(); await env.setValue('builtin.name', '合成姓名'); const field = env.field('姓名'); let view = await env.scan(field);
