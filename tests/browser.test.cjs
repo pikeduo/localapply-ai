@@ -1463,6 +1463,84 @@ test('分层第一步：字段语义与控件描述独立', { timeout: 60000 }, 
   }
 });
 
+// 岗位 AI 走真实卡片、加密配置和 loopback Mock，绝不操作线上招聘表单。
+test('AI岗位识别：发送确认、证据回填、取消与本地保存', { timeout: 120000 }, async (t) => {
+  const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'job-ai-')); const api = await serve(); let context; let frame; const errors = [];
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const page = await context.newPage(); page.on('pageerror', (error) => errors.push(error.message)); await page.goto(api.base + '/test-pages/phase5-job.html?token=synthetic-private-job-link');
+    await page.evaluate(() => {
+      document.querySelectorAll('script[type="application/ld+json"],[data-company],[data-job-location]').forEach((element) => element.remove()); document.title = '合成岗位 AI 测试'; document.querySelector('main h1').textContent = '合成待识别职位';
+      // 私人控件、标签、隐藏和推荐文本均不可进入模型上下文。
+      const header = document.createElement('div'); header.dataset.jobHeader = ''; header.innerHTML = '<p>公司：合成岗位企业｜岗位：合成云端开发｜地点：合成乙城</p><label>synthetic-private-label<input value="synthetic-private-input"></label><textarea>synthetic-private-textarea</textarea><span contenteditable="true">synthetic-private-editable</span><span hidden>synthetic-private-hidden</span><aside>synthetic-private-recommendation</aside><button type="button">synthetic-private-button</button>';
+      document.querySelector('main').prepend(header); document.getElementById('syntheticName').value = 'synthetic-private-name';
+    });
+    // 每次重新打开均由后台签发权限，不能由测试伪造页面令牌。
+    async function open() {
+      await page.bringToFront(); const loaded = page.waitForEvent('framenavigated', { predicate: (next) => next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+      await worker.evaluate(async (url) => floatingPanel.open((await chrome.tabs.query({})).find((tab) => tab.url === url).id), page.url()); frame = await loaded;
+      await frame.locator('#jobForm').waitFor({ state: 'visible' }); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled);
+    }
+    // 只通过产品入口选择协议/模型并保存合成 Key，不直接修改后台配置对象。
+    async function configure(responses = false) {
+      await workspacePage(options, 'aiSettings'); await options.locator('#provider').fill(api.base + (responses ? '/' : '/v1')); await options.locator('#provider').press('Enter'); await options.evaluate(() => flushSaves());
+      if (responses) { await options.locator('#apiProtocol').selectOption('responses'); await options.evaluate(() => flushSaves()); }
+      await options.locator('#apiKey').fill('synthetic-job-ai-key'); await options.locator('#saveKey').click(); await options.evaluate(() => flushCredentials());
+      await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-job-ai'); await options.locator('#model').press('Tab'); await options.evaluate(() => flushSaves()); await page.bringToFront();
+    }
+    // 每次发送前都实际预览并勾选同意，不通过后台 RPC 跳过用户流程。
+    async function preview() { await frame.locator('#jobAI').click(); await frame.locator('#jobAIReview').waitFor({ state: 'visible' }); await frame.waitForFunction(() => !document.getElementById('jobAISend').disabled); }
+    // 等待发送入口恢复后再断言结果，避免把上一轮界面状态当成本次结果。
+    async function send() { await frame.locator('#jobAIConsent').check(); await frame.locator('#jobAISend').click(); await frame.locator('#jobAIReview').waitFor({ state: 'hidden' }); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled); }
+    // 合成响应的三项值都具有当前表头原文证据。
+    function reply(location = '合成乙城') { const evidence = '公司：合成岗位企业｜岗位：合成云端开发｜地点：合成乙城'; return JSON.stringify({ companyName: { value: '合成岗位企业', evidence }, jobTitle: { value: '合成云端开发', evidence }, location: { value: location, evidence: location === null ? null : evidence } }); }
+    await open();
+    await t.test('未配置 AI 可继续本地识别/手填，内容脚本不能借入口调用模型', async () => {
+      await frame.locator('#jobAI').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('模型')); await frame.locator('#jobLocation').fill('合成手填城市'); assert.equal(api.calls.length, 0);
+      const denied = await worker.evaluate(async (url) => { const tab = (await chrome.tabs.query({})).find((item) => item.url === url); const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: async () => chrome.runtime.sendMessage({ type: 'jobs:prepareAI' }) }); return result.result; }, page.url()); assert.equal(denied.ok, false);
+    });
+    await configure(); const before = (await rpc(options, 'localapply:read')).database; api.modelApi.chatContent = reply();
+    await t.test('预览无请求，文本排除个人表单及隐藏/推荐内容，取消或未勾选均不联网', async () => {
+      await preview(); const text = await frame.locator('#jobAIPayload').textContent(); assert.ok(text.includes('合成岗位企业')); assert.ok(!text.includes('synthetic-private')); assert.ok(!text.includes('<input')); assert.ok(!text.includes('/test-pages/phase5-job.html')); assert.equal(JSON.parse(text).siteOrigin, api.base);
+      assert.match(await frame.locator('#jobAIRecipient').textContent(), /synthetic-job-ai/); await frame.locator('#jobAISend').click(); assert.equal(api.calls.length, 0);
+      await frame.locator('#jobAICancel').click(); await frame.locator('#jobAIReview').waitFor({ state: 'hidden' }); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled); assert.equal(api.calls.length, 0);
+    });
+    await t.test('确认后自动回填公司/岗位/地点/当前链接，不写库或提交网页', async () => {
+      await preview(); await send(); assert.match(await frame.locator('#jobStatus').textContent(), /已填入岗位卡片/);
+      assert.equal(await frame.locator('#jobCompany').inputValue(), '合成岗位企业'); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成云端开发'); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成乙城'); assert.equal(await frame.locator('#jobUrl').inputValue(), api.base + '/test-pages/phase5-job.html');
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); assert.equal(await page.locator('#syntheticName').inputValue(), 'synthetic-private-name'); assert.equal(await page.evaluate(() => __stage5Submissions), 0);
+      const call = api.calls.find((item) => item.jobAI); assert.ok(call); assert.ok(!JSON.stringify(call.payload).includes('synthetic-private')); assert.match(call.system, /不可信数据/);
+      await frame.locator('#jobCompany').scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(root, 'job-ai-filled.png') });
+    });
+    await t.test('模型缺少地点保留原值，错误 JSON、恶意属性和限流失败均可恢复', async () => {
+      await frame.locator('#jobLocation').fill('合成保留城市'); api.modelApi.chatContent = reply(null); await preview(); await send(); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成保留城市');
+      for (const content of ['invalid json', JSON.stringify({ ...JSON.parse(reply()), script: 'globalThis.syntheticExecuted=true' })]) {
+        api.modelApi.chatContent = content; await preview(); await send(); assert.match(await frame.locator('#jobStatus').textContent(), /未完成/); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成保留城市');
+      }
+      api.modelApi.chatStatus = 429; await preview(); await send(); assert.match(await frame.locator('#jobStatus').textContent(), /429/); api.modelApi.chatStatus = 0; api.modelApi.chatContent = reply(); assert.equal(await page.evaluate(() => globalThis.syntheticExecuted), undefined);
+    });
+    await t.test('取消运行中任务或期间手动修改，不允许迟到响应覆盖输入', async () => {
+      api.modelApi.chatHold = true; let started = new Promise((resolve) => { api.modelApi.onChat = resolve; }); await preview(); await frame.locator('#jobAIConsent').check(); await frame.locator('#jobAISend').click(); await started;
+      await frame.locator('#jobAICancel').click(); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled); api.modelApi.releaseChat(); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成保留城市');
+      started = new Promise((resolve) => { api.modelApi.onChat = resolve; }); await preview(); await frame.locator('#jobAIConsent').check(); await frame.locator('#jobAISend').click(); await started;
+      await frame.locator('#jobTitle').fill('合成保留手改岗位'); api.modelApi.chatHold = false; api.modelApi.releaseChat(); await frame.locator('#jobAIReview').waitFor({ state: 'hidden' }); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成保留手改岗位'); assert.match(await frame.locator('#jobStatus').textContent(), /未覆盖/);
+    });
+    await t.test('关闭撤销预览，重开不能发送旧令牌，Responses 协议仍可识别', async () => {
+      await preview(); const stale = await frame.evaluate(() => sendMessage('jobs:prepareAI')); await frame.locator('#panelClose').click(); await open();
+      const denied = await frame.evaluate((token) => sendMessage('jobs:recognizeAI', { token, confirmed: true }), stale.token); assert.equal(denied.ok, false);
+      await configure(true); await preview(); await send(); assert.match(await frame.locator('#jobStatus').textContent(), /已填入岗位卡片/); assert.equal(api.calls.at(-1).protocol, 'responses'); assert.equal(api.calls.at(-1).store, false);
+    });
+    await t.test('用户核对并确认后才保存四项到已投职位，日志不保存岗位正文或 Key', async () => {
+      page.once('dialog', (dialog) => dialog.dismiss()); await frame.locator('#jobSave').click(); assert.equal((await rpc(options, 'localapply:read')).database.applications.length, 0);
+      page.once('dialog', (dialog) => dialog.accept()); await frame.locator('#jobSave').click(); await frame.waitForFunction(() => document.getElementById('jobStatus').textContent.includes('已保存'));
+      const saved = (await rpc(options, 'localapply:read')).database; assert.equal(saved.applications.length, 1); const record = saved.applications[0]; assert.equal(record.companyName, '合成岗位企业'); assert.equal(record.jobTitle, '合成云端开发'); assert.equal(record.location, '合成乙城'); assert.equal(record.jobUrl, api.base + '/test-pages/phase5-job.html'); assert.equal(record.status, 'saved'); assert.deepEqual(saved.fieldValues, before.fieldValues);
+      const logs = JSON.stringify(await rpc(options, 'diagnostics:read')); assert.ok(logs.includes('jobs.recognizeAI')); for (const secret of ['合成岗位企业', '合成云端开发', 'synthetic-job-ai-key', 'synthetic-private', api.base]) assert.ok(!logs.includes(secret));
+      assert.equal(await page.evaluate(() => __stage5Submissions), 0); assert.deepEqual(errors, []);
+    });
+  } finally { api.modelApi.releaseChat?.(); if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve)); await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 // 阶段五在两种真实存储入口验证申请管理、导出导入和整个浏览器重启。
 for (const withExtension of [true, false]) {
   test(`阶段五管理：${withExtension ? '扩展' : 'file://'}申请、筛选、看板、备份与重启`, { timeout: 120000 }, async (t) => {
@@ -2371,7 +2449,9 @@ async function serve() {
       const file = Array.isArray(content) && content.find((part) => part.type === 'input_file');
       const inputType = file ? file.filename.split('.').at(-1) : 'image';
       calls.push({ authorization: req.headers.authorization, model: request.model, probe, inputType, protocol: 'responses', pathname,
-        store: request.store, stream: request.stream, imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'input_image').length : 0 });
+        store: request.store, stream: request.stream, imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'input_image').length : 0,
+        // 仅合成岗位测试记录脱敏请求，生产诊断不保存模型上下文。
+        ...(request.instructions?.includes('你是招聘岗位信息提取器') ? { jobAI: true, payload: JSON.parse(content), system: request.instructions } : {}) });
       // 只对正式解析注入错误，验证用户可直接看到服务端拒绝且不会偷偷重试。
       if (!probe && modelApi.chatStatus) { res.writeHead(modelApi.chatStatus); res.end('{}'); return; }
       if (probe && inputType !== 'image') { res.writeHead(400); res.end('{}'); return; }
@@ -2396,7 +2476,9 @@ async function serve() {
       const file = Array.isArray(content) && content.find((part) => part.type === 'file')?.file;
       const inputType = file ? file.filename.split('.').at(-1) : 'image';
       calls.push({ authorization: req.headers.authorization, model: request.model, probe, inputType,
-        imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'image_url').length : 0, fileData: file?.file_data });
+        imageCount: Array.isArray(content) ? content.filter((part) => part.type === 'image_url').length : 0, fileData: file?.file_data,
+        // 岗位 AI 与文件/字段 Mock 分开断言，仍只使用隔离合成数据。
+        ...(request.messages?.[0]?.content?.includes('你是招聘岗位信息提取器') ? { jobAI: true, payload: JSON.parse(content), system: request.messages[0].content } : {}) });
       if (!probe) modelApi.lastResumeSystem = request.messages?.[0]?.content; // 仅在本地合成测试中检查发送的目录元数据。
       // 与 Responses 共用正式请求故障开关，保留可选诊断的独立行为。
       if (!probe && modelApi.chatStatus) { res.writeHead(modelApi.chatStatus); res.end('{}'); return; }

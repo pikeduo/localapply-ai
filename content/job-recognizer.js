@@ -72,6 +72,30 @@
       summary: feishu?.summary || pick('main [data-job-description],main [itemprop="description"],main .job-description,article .job-description', 6000) });
     return { candidate, documentId: global.LocalApplyPageScanner?.documentId || '', feedback: feedback(), recognized: !!(title && (company || structured)) };
   }
+  // 仅主动请求时收集岗位标题/表头等局部文本，排除个人表单、输入值、隐藏节点和推荐区域。
+  function aiContext() {
+    const snippets = []; const seen = new Set(); let budget = 6000;
+    // 可见文本逐节点读取，控件和脚本完全排除；不克隆整页或读取 innerHTML/value。
+    function add(source, element, literal) {
+      if (snippets.length >= 16 || budget <= 0 || element && !visible(element)) return;
+      let raw = literal || '';
+      if (element) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode() && raw.length < 1600) {
+          const parent = walker.currentNode.parentElement;
+          if (parent && visible(parent) && !parent.closest('script,style,textarea,input,select,option,button,label,[contenteditable],.resumeEditForm-item,[data-private],[data-resume-field]')) raw += ' ' + walker.currentNode.textContent;
+        }
+      }
+      const text = global.FieldMatchingEngine.redact(raw, Math.min(1200, budget));
+      if (!text || seen.has(text)) return; seen.add(text); budget -= text.length; snippets.push({ source, text });
+    }
+    add('pageTitle', null, document.title);
+    for (const element of [...document.querySelectorAll('.job-form__title,.jobDetail .job-header,.resumeEditForm-header,[data-job-header]')].slice(0, 8)) add('jobHeader', element);
+    for (const element of [...document.querySelectorAll('main h1,article h1,[data-job-title]')].slice(0, 8)) if (!element.closest('form')) add('heading', element);
+    for (const element of [...document.querySelectorAll('.topbar-site-title,[data-company],main .company-name,article .company-name')].slice(0, 8)) if (!element.closest('form')) add('siteBrand', element);
+    for (const element of [...document.querySelectorAll('main [data-job-location],main .job-location,article .job-location,[data-job-meta],.jobDetail .job-info')].slice(0, 8)) if (!element.closest('form')) add('jobMetadata', element);
+    return { documentId: global.LocalApplyPageScanner?.documentId || '', snippets };
+  }
   // 仅显式状态区中的成功提示可提出确认建议；失败提示优先，不搜索整页文字。
   function feedback() {
     const text = [...document.querySelectorAll('main [role="status"],main [role="alert"],[data-application-result],.application-success,.application-error')].slice(0, 30).filter(visible).map((element) => element.textContent.slice(0, 500)).join(' ');
@@ -98,5 +122,5 @@
   const observer = new MutationObserver((records) => { if (records.some((record) => !record.target.closest?.('[id^="wsa-"]')) && !feedbackTimer) feedbackTimer = setTimeout(() => { feedbackTimer = null; reportFeedback(); }, 250); });
   observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class', 'aria-hidden'] });
   // 后台检查统一经过 detector 的可信消息入口，本模块不额外注册响应监听器。
-  global.LocalApplyJobRecognizer = { inspect, feedback }; reportFeedback();
+  global.LocalApplyJobRecognizer = { inspect, aiContext, feedback }; reportFeedback();
 })(globalThis);

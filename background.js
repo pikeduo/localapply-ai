@@ -1,13 +1,13 @@
 // Service Worker：复用资料/AI 服务，编排右上角悬浮卡片及本地脱敏诊断。
 'use strict';
 
-importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/mapping-compat.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/field-suggestions.js', 'data/applications.js', 'data/local-store.js', 'data/rule-packages.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/record-coordinator.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js', 'data/job-tracking.js'); // 填写契约、岗位与字段学习复用唯一仓库，不读回密钥。
+importScripts('data/templates.js', 'data/providers.js', 'data/key-vault.js', 'data/resume.js', 'data/resume-catalog.js', 'data/field-matching.js', 'data/mapping-compat.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/field-suggestions.js', 'data/applications.js', 'data/local-store.js', 'data/rule-packages.js', 'data/model-capabilities.js', 'data/responses.js', 'data/ai-client.js', 'data/record-coordinator.js', 'data/field-learning.js', 'data/diagnostics.js', 'data/floating-panel.js', 'data/job-tracking.js', 'data/job-suggestions.js'); // 填写契约、岗位与字段学习复用唯一仓库，不读回密钥。
 
 const ROOT_KEY = 'wangshenAutofill';
 const repository = LocalApplyStore.createRepository(chrome.storage.local, { cache: true, changes: chrome.storage.onChanged });
 const diagnostics = LocalApplyDiagnostics.create(chrome.storage.local);
 const jobTracking = LocalApplyJobTracking.create(repository, chrome);
-const floatingPanel = LocalApplyFloatingPanel.create(chrome, diagnostics, (tabId) => fieldLearning.invalidate(tabId)); // 关闭卡片也中止本页 AI 和未确认候选。
+const floatingPanel = LocalApplyFloatingPanel.create(chrome, diagnostics, (tabId) => { fieldLearning.invalidate(tabId); jobSuggestions.invalidate(tabId); }); // 关闭卡片也中止本页 AI 和未确认候选。
 const presenceTimes = new Map();
 
 // ============ 初始数据（工厂在 data/templates.js） ============
@@ -36,6 +36,7 @@ async function notifySettings() {
 
 // 扩展和文件管理页共享 AI 管线，后台只注入本扩展的配置读取器。
 const aiClient = LocalApplyAI.createClient(() => repository.readAiSettings(), async (profileId) => LocalApplyResumeCatalog.catalog(await repository.read(), profileId)); // 只向解析器提供目标档案的字段元数据。
+const jobSuggestions = LocalApplyJobSuggestions.create(repository, aiClient, chrome); // 岗位识别复用加密配置与显式协议，不另存凭据。
 const fieldLearning = FieldLearning.create(repository, aiClient, chrome);
 // 解析视觉模型，保留原后台接口供消息路由和回归测试使用。
 function resolveVisionModel() { return aiClient.resolveVisionModel(); }
@@ -166,6 +167,12 @@ chrome.runtime.onMessage.addListener((msg, sender, respond) => {
       if (msg?.type === 'diagnostics:read') { sendResponse({ ok: true, ...await diagnostics.read(), databaseStorage: await repository.storageStatus() }); return; }
       // 岗位扫描始终绑定卡片所在标签，不接受调用方指定的其他页面。
       if (msg?.type === 'jobs:scan') { if (!panelSession) throw new Error('请从当前网页的悬浮卡片识别岗位'); sendResponse({ ok: true, ...await jobTracking.scan(panelSession.tabId) }); return; }
+      // AI 岗位入口只接受已授权卡片，发送须持有本页一次性预览令牌。
+      if (['jobs:prepareAI', 'jobs:recognizeAI', 'jobs:cancelAI'].includes(msg?.type)) {
+        if (!panelSession) throw new Error('请从当前网页的悬浮卡片识别岗位');
+        const result = msg.type === 'jobs:prepareAI' ? await jobSuggestions.prepare(panelSession) : msg.type === 'jobs:recognizeAI' ? await jobSuggestions.recognize(panelSession, msg) : jobSuggestions.invalidate(panelSession.tabId);
+        sendResponse({ ok: true, ...result }); return;
+      }
       // 保存成功后的确认提示只清理当前卡片所属标签，不改变已写入的申请。
       if (msg?.type === 'jobs:acknowledge') { if (!panelSession) throw new Error('悬浮会话无效'); await jobTracking.close(panelSession.tabId); await chrome.tabs.sendMessage(panelSession.tabId, { type: 'jobs:notice' }, { frameId: 0 }); sendResponse({ ok: true }); return; }
       if (msg?.type === 'diagnostics:clear') { if (msg.confirmed !== true) throw new Error('清理日志需要确认'); await diagnostics.clear(); sendResponse({ ok: true }); return; }
@@ -293,9 +300,9 @@ chrome.action?.onClicked?.addListener(async (tab) => {
 chrome.tabs?.onUpdated?.addListener(async (tabId, info) => {
   if (info.url || ['loading', 'complete'].includes(info.status)) {
     // 活动状态或子框架加载不能清空原页权限；真实导航仍由文档及URL双重校验拦截。
-    if (await floatingPanel.reconcile(tabId).catch(() => true) !== false) fieldLearning.invalidate(tabId);
+    if (await floatingPanel.reconcile(tabId).catch(() => true) !== false) { fieldLearning.invalidate(tabId); jobSuggestions.invalidate(tabId); }
   }
 });
 // 只释放已关闭标签的会话，不删除已确认的资料或映射。
-chrome.tabs?.onRemoved?.addListener((tabId) => { presenceTimes.delete(tabId); fieldLearning.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); jobTracking.close(tabId).catch(() => {}); });
+chrome.tabs?.onRemoved?.addListener((tabId) => { presenceTimes.delete(tabId); fieldLearning.invalidate(tabId); jobSuggestions.invalidate(tabId); floatingPanel.invalidate(tabId).catch(() => {}); jobTracking.close(tabId).catch(() => {}); });
 chrome.runtime.onStartup.addListener(() => {});

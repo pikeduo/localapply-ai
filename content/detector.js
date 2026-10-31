@@ -403,6 +403,10 @@
           case 'jobs:inspect':
             if (!globalThis.LocalApplyJobRecognizer) throw new Error('岗位识别尚未加载，请刷新网页');
             sendResponse({ ok: true, ...globalThis.LocalApplyJobRecognizer.inspect() }); return;
+          // AI 上下文仅由后台授权卡片请求，不接受网页提供正文或选择器。
+          case 'jobs:aiContext':
+            if (!globalThis.LocalApplyJobRecognizer) throw new Error('岗位识别尚未加载，请刷新网页');
+            sendResponse({ ok: true, ...globalThis.LocalApplyJobRecognizer.aiContext() }); return;
           // 清除已确认的成功提示，不向宿主传递任何申请记录。
           case 'jobs:notice':
             globalThis.WangshenFloatbar?.onJobFeedback('unknown', false); sendResponse({ ok: true }); return;
