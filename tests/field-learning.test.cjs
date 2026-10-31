@@ -1009,6 +1009,28 @@ test('扫描会话恢复：区分过期、导航与活动档案变化', async ()
   await assert.rejects(switched.send(previous,'session'),(error)=>{assert.match(error.message,/活动档案已变化/);assert.equal(error.code,undefined);return true;});
 });
 
+// 用户点击直接填写即授权本批覆盖，准备和执行仍绑定同一批次及当前网页快照。
+test('直接覆盖：原批次内准备并覆盖已有值，不改本地资料且拒绝插入其他批次', async () => {
+  const env=await fixture(); await env.setValue('builtin.name','合成直接覆盖姓名'); const field=env.field('姓名'); env.actual('合成网站解析姓名'); env.completion([{scanId:field.scanId,present:true}]);
+  let view=await env.scan(field); const before=await env.repo.read(); const {batchId}=await env.send(view,'beginFill',{confirmed:true});
+  await assert.rejects(env.send(view,'previewOverwrite',{bindings:[]}),/等待填写结束/);
+  await assert.rejects(env.send(view,'previewOverwrite',{bindings:[],batchId:'forged'}),/等待填写结束/);
+  const preview=await env.send(view,'previewOverwrite',{bindings:[],batchId});
+  view=await env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[field.scanId],confirmed:true,batchId});
+  view=await env.send(view,'fill',{scanId:field.scanId,overwriteToken:view.overwrite[0].token,confirmed:true,batchId});
+  assert.equal(view.rows[0].status,'success'); const write=env.calls.find((call)=>call.type==='learning:fill'); assert.equal(write.overwrite,true); assert.equal(write.expectedCurrent,'合成网站解析姓名'); assert.equal(write.value,'合成直接覆盖姓名');
+  await env.send(view,'endFill',{batchId}); assert.deepEqual(await env.repo.read(),before); assert.equal(env.aiCalls.length,0);
+});
+
+// 简化界面不放宽取消和导航保护，停止后的在途准备不能继续签发覆盖快照。
+test('直接覆盖：取消批次后不继续准备或写入，缺值项不生成覆盖', async () => {
+  const env=await fixture(); const name=env.field('姓名'); const email=env.field('邮箱'); await env.setValue('builtin.name','合成直接填写'); env.actual('合成网页原内容');
+  const view=await env.scan(name,email); const {batchId}=await env.send(view,'beginFill',{confirmed:true});
+  const preview=await env.send(view,'previewOverwrite',{bindings:[],batchId}); assert.deepEqual(Array.from(preview.changes,(row)=>row.scanId),[name.scanId]);
+  await env.send(view,'cancelFill',{batchId}); await assert.rejects(env.send(view,'confirmOverwrite',{token:preview.token,scanIds:[name.scanId],confirmed:true,batchId}),/取消|过期/);
+  assert.equal(env.calls.filter((call)=>call.type==='learning:fill').length,0);
+});
+
 // 无凭据时所有本地操作继续正常；活动档案改变后旧页面确认立即失效。
 test('无 API Key 可手动创建及填写，切换活动档案后拒绝旧会话', async () => {
   const env = await fixture(); await env.setValue('builtin.name', '合成姓名'); const field = env.field('姓名'); let view = await env.scan(field);

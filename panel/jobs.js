@@ -1,4 +1,4 @@
-// 岗位元数据优先本地识别，AI 须预览确认；回填卡片与保存记录保持独立。
+// 岗位元数据优先本地识别，点击AI立即发送局部元数据；回填卡片与保存记录保持独立。
 (function (global) {
   'use strict';
   const $ = (id) => document.getElementById(id); const A = global.LocalApplyApplications; let snapshot = null; let revision; let busy = false; let edited = false; let attempts = 0;
@@ -33,22 +33,20 @@
       status(snapshot.successSuggested ? '检测到用户提交后的成功反馈，请核对岗位并确认记录。' : snapshot.feedback === 'failed' ? '网页反馈投递失败，申请不会标记为已投递。' : snapshot.existing ? `已有第 ${snapshot.existing.round} 轮记录：${A.statusLabel(snapshot.existing.status)}，最近更新 ${new Date(snapshot.existing.updatedAt).toLocaleDateString('zh-CN')}。重复保存只补空白信息。` : snapshot.recognized ? '已自动识别当前岗位，可确认保存；缺少的信息可手动补全。' : '岗位信息不完整，正在等待页面加载；也可手动补全公司和职位后确认保存。');
     } catch (error) { status(error.message); } finally { setBusy(false); }
   }
-  // 主动预览接收方和脱敏岗位文本，不联网；凭据和个人简历不会进入预览。
+  // 点击岗位AI即准备脱敏元数据并发送，不再展示发送预览和同意勾选。
   async function prepareAI() {
     if (busy) return; const version = ++aiVersion; aiPreview = null; $('jobAIReview').hidden = true; $('jobAIPayload').textContent = ''; setBusy(true);
     try {
       const result = await sendMessage('jobs:prepareAI'); if (!result.ok) throw new Error(result.error);
       if (version !== aiVersion) return; aiPreview = result;
-      $('jobAIRecipient').textContent = `接收方：${result.recipient.name} · ${result.recipient.baseUrl} · ${result.recipient.model}（${result.recipient.protocol}）`;
-      $('jobAIPayload').textContent = JSON.stringify(result.payload, null, 2); $('jobAIConsent').checked = false; $('jobAIReview').hidden = false;
-      $('jobAIReview').scrollIntoView({ block: 'nearest' }); status('请核对接收方和发送内容，确认后使用 AI 识别当前岗位。');
+      status(`正在使用 ${result.recipient.name} 识别岗位…`); $('jobAICancel').hidden = false;
+      setBusy(false); await recognizeAI();
     } catch (error) { if (version === aiVersion) status(error.message); }
     finally { if (version === aiVersion) setBusy(false); }
   }
-  // 明确发送后将有原文依据的建议自动填入卡片；迟到结果不得覆盖期间的手动编辑。
+  // 有原文依据的建议自动填入卡片；期间手动编辑、取消及导航仍使迟到结果失效。
   async function recognizeAI() {
     if (busy || !aiPreview) return;
-    if (!$('jobAIConsent').checked) { status('请先勾选确认发送上述岗位文本。'); return; }
     const version = ++aiVersion; const edit = editVersion; const token = aiPreview.token; setBusy(true); status('AI 正在识别岗位信息…');
     try {
       const result = await sendMessage('jobs:recognizeAI', { token, confirmed: true }); if (!result.ok) throw new Error(result.error);
@@ -65,11 +63,11 @@
       const missing = [['公司', candidate.companyName], ['岗位', candidate.jobTitle], ['地点', candidate.location]].filter((item) => !item[1]).map((item) => item[0]);
       status('AI 识别结果已填入岗位卡片，请核对后确认保存。' + (missing.length ? ` ${missing.join('、')}缺少依据，请手动补全。` : '') + ' 未自动保存或投递。');
     } catch (error) { if (version === aiVersion) status('AI 识别未完成：' + error.message + '。已有内容已保留，可重试或手动补全。'); }
-    finally { if (version === aiVersion) { aiPreview = null; $('jobAIReview').hidden = true; $('jobAIPayload').textContent = ''; setBusy(false); } }
+    finally { if (version === aiVersion) { aiPreview = null; $('jobAIReview').hidden = true; $('jobAIPayload').textContent = ''; $('jobAICancel').hidden = true; setBusy(false); } }
   }
   // 取消立即丢弃界面预览并撤销后台请求；旧响应不能回填。
   async function cancelAI() {
-    ++aiVersion; aiPreview = null; $('jobAIReview').hidden = true; $('jobAIPayload').textContent = ''; setBusy(true);
+    ++aiVersion; aiPreview = null; $('jobAIReview').hidden = true; $('jobAIPayload').textContent = ''; $('jobAICancel').hidden = true; setBusy(true);
     try { await sendMessage('jobs:cancelAI'); status('已取消 AI 岗位识别，已有内容已保留。'); }
     finally { setBusy(false); }
   }

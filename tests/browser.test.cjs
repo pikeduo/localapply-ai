@@ -8,14 +8,14 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
-// AI只返回合成字段引用；通过真实卡片验证发送确认和建议采用均不可跳过。
-test('悬浮AI辅助填写：就近识别、建议确认、控件填写及缺值保护', { timeout: 90000 }, async (t) => {
+// AI只返回合成字段引用；真实卡片点击即发送并采用可靠来源，不再要求二次确认。
+test('悬浮AI辅助填写：点击发送、直接填写、取消与缺值保护', { timeout: 90000 }, async (t) => {
   const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'ai-assist-'));const api=await serve();let context;
   try {
     context=await launch(profile);context.setDefaultTimeout(10000);const {worker,extensionId}=await extension(context);
     const options=await context.newPage();await options.goto(`chrome-extension://${extensionId}/options/options.html`);await options.waitForFunction(()=>document.body.dataset.workspaceReady==='true');
     const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
-    for(const [fieldId,value] of [['builtin.phone','13800000000'],['builtin.gender','男']]) await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId,value}}});
+    for(const [fieldId,value] of [['builtin.phone','13800000000'],['builtin.gender','男'],['builtin.name','合成直接姓名']]) await rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId,value}}});
     await workspacePage(options,'aiSettings');await options.locator('#provider').fill(api.base+'/v1');await options.locator('#provider').press('Enter');await options.evaluate(()=>flushSaves());
     await options.locator('#apiKey').fill('synthetic-ai-assist-key');await options.locator('#saveKey').click();await options.evaluate(()=>flushCredentials());
     await options.locator('#manualModel').check();await options.locator('#model').fill('synthetic-ai-assist');await options.locator('#model').press('Tab');await options.evaluate(()=>flushSaves());
@@ -26,35 +26,42 @@ test('悬浮AI辅助填写：就近识别、建议确认、控件填写及缺值
     await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url());const frame=await loaded;await frame.locator('#profileSel option').first().waitFor({state:'attached'});
     const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
     const card=(label)=>frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:label})});
-    // 每次发送仍通过接收方/元数据确认，不让测试直接设置采用目标或调用付费模型。
-    async function identify(label){await card(label).locator('.smart-ai-start').click();await idle();await frame.locator('#smartAIConsent').check();await frame.locator('#smartAISend').click();await idle();assert.match(await frame.locator('#smartStatus').textContent(),/^AI 返回 [0-9]+ 条/,await card(label).textContent());}
+    // 真实按钮点击即发送和填写，测试不模拟额外确认，也不调用付费模型。
+    async function identify(label){await card(label).locator('.smart-ai-start').click();await idle();assert.match(await frame.locator('#smartStatus').textContent(),/^AI 返回 [0-9]+ 条/);}
     await frame.locator('#smartScan').click();await idle();const before=(await rpc(options,'localapply:read')).database;
-    await t.test('勾选仅建立清单，就近入口展开预览，取消不调用模型',async()=>{
+    let dialogs=0; page.on('dialog',async(dialog)=>{dialogs++;await dialog.dismiss();});
+    await t.test('单项填写直接覆盖，不显示差异确认或调用AI',async()=>{
+      await card('姓名').locator('.smart-manual').click();await page.locator('#syntheticName').fill('合成网站解析姓名');await card('姓名').getByRole('button',{name:'单项填写',exact:true}).click();await idle();
+      assert.equal(await page.locator('#syntheticName').inputValue(),'合成直接姓名');assert.equal(dialogs,0);assert.equal(api.calls.length,0);assert.deepEqual((await rpc(options,'localapply:read')).database,before);
+    });
+    await t.test('勾选只限定范围，点击立即发送，可停止且晚到结果不填写',async()=>{
       await card('便捷联系号码').locator('.smart-ai-check').check();assert.match(await frame.locator('#smartAI').textContent(),/（1）/);assert.equal(api.calls.filter((call)=>call.fieldAI).length,0);
-      await card('便捷联系号码').locator('.smart-ai-start').click();await idle();assert.equal(await frame.locator('#smartAIReview').isVisible(),true);
-      assert.ok(!(await frame.locator('#smartAIPayload').textContent()).includes('13800000000'));await frame.locator('#smartAICancel').click();await idle();assert.equal(api.calls.filter((call)=>call.fieldAI).length,0);
+      api.modelApi.fieldHold=true;const started=new Promise((resolve)=>{api.modelApi.onField=resolve;});await card('便捷联系号码').locator('.smart-ai-start').click();await started;
+      assert.equal(await frame.locator('#smartAIReview').isVisible(),false);await frame.locator('#smartAICancel').click();await idle();api.modelApi.releaseField();api.modelApi.fieldHold=false;
+      assert.equal(await page.locator('#assist-phone').inputValue(),'');assert.deepEqual((await rpc(options,'localapply:read')).database,before);
     });
-    await t.test('AI返回后仍不填写，取消采用无变化，确认后真实填写并验证',async()=>{
-      await identify('便捷联系号码');assert.equal(await page.locator('#assist-phone').inputValue(),'');assert.ok((await card('便捷联系号码').textContent()).includes('AI 建议：'));
-      page.once('dialog',(dialog)=>dialog.dismiss());await card('便捷联系号码').locator('.smart-apply-suggestion').click();await idle();assert.equal(await page.locator('#assist-phone').inputValue(),'');assert.deepEqual((await rpc(options,'localapply:read')).database,before);
-      await page.screenshot({path:path.join(root,'ai-assist-suggestion.png')});
-      page.once('dialog',(dialog)=>dialog.accept());await card('便捷联系号码').locator('.smart-apply-suggestion').click();await idle();assert.equal(await page.locator('#assist-phone').inputValue(),'13800000000');
+    await t.test('AI点击即填写文本和原生下拉，覆盖已有内容且无弹窗',async()=>{
+      await page.locator('#assist-phone').fill('13900000000');await identify('便捷联系号码');assert.equal(await page.locator('#assist-phone').inputValue(),'13800000000');
+      await identify('合成选项偏好');assert.equal(await page.locator('#assist-select').inputValue(),'M');assert.equal(dialogs,0);
       const view=await frame.evaluate(()=>sendMessage('learning:session',{sessionId:document.getElementById('tab-smart').dataset.sessionId}));assert.equal(view.rows.find((row)=>row.field.label==='便捷联系号码').status,'success');
+      await page.screenshot({path:path.join(root,'ai-assist-filled.png')});
     });
-    await t.test('已有资料建议复用原生下拉，缺值及新字段只提示手填',async()=>{
-      await identify('合成选项偏好');assert.equal(await card('合成选项偏好').locator('.smart-apply-suggestion').count(),1,await card('合成选项偏好').textContent());page.once('dialog',(dialog)=>dialog.accept());await card('合成选项偏好').locator('.smart-apply-suggestion').click();await idle();assert.equal(await page.locator('#assist-select').inputValue(),'M');
+    await t.test('缺值和新增定义仍不编造内容，不改个人资料、不提交、不泄漏',async()=>{
       await identify('合成缺资料代号');assert.ok((await card('合成缺资料代号').textContent()).includes('本地没有该字段的内容'));assert.equal(await card('合成缺资料代号').locator('.smart-apply-suggestion').count(),0);
       await identify('合成新字段代号');assert.equal(await card('合成新字段代号').locator('.smart-apply-suggestion').count(),0);assert.equal(await page.locator('#assist-missing').inputValue(),'');assert.equal(await page.locator('#assist-new').inputValue(),'');
       assert.equal(await frame.locator('.smart-source,.smart-editor').count(),0);assert.deepEqual((await rpc(options,'localapply:read')).database,before);
       assert.equal(await page.evaluate(()=>__stage5Submissions),0);const logs=JSON.stringify(await rpc(options,'diagnostics:read'));for(const secret of ['13800000000','synthetic-ai-assist-key'])assert.ok(!logs.includes(secret));
-      for(const request of api.calls.filter((call)=>call.fieldAI))assert.ok(!JSON.stringify(request).includes('13800000000'));
-      await page.screenshot({path:path.join(root,'ai-assist-filled.png')});
+      for(const request of api.calls.filter((call)=>call.fieldAI))assert.ok(!JSON.stringify(request).includes('13800000000'));assert.equal(dialogs,0);
+    });
+    await t.test('没有勾选时直接识别当前未知项，不再要求先选中或同意发送',async()=>{
+      await frame.locator('#smartAI').click();await idle();const labels=api.calls.at(-1).payload.fields.map((field)=>field.label);
+      assert.ok(labels.includes('合成缺资料代号'));assert.ok(labels.includes('合成新字段代号'));assert.ok(!labels.includes('便捷联系号码'));assert.equal(dialogs,0);assert.equal(await frame.locator('#smartAIReview').isVisible(),false);
     });
   } finally {if(context)await context.close();await new Promise((resolve)=>api.server.close(resolve));await fs.rm(profile,{recursive:true,force:true,maxRetries:3});}
 });
 
 // 真实React重复项目复现AI总引用首条的情况，实际填写必须遵从本地整条绑定。
-test('飞书AI建议填写：多段项目角色按当前记录落地且不覆盖', { timeout: 90000 }, async (t) => {
+test('飞书AI建议填写：多段项目角色按当前记录直接填写覆盖', { timeout: 90000 }, async (t) => {
   const root=path.join(ROOT,'.browser-tests'); await fs.mkdir(root,{recursive:true}); const profile=await fs.mkdtemp(path.join(root,'ai-project-role-')); const api=await serve(); let context;
   try {
     context=await launch(profile); context.setDefaultTimeout(10000); const {worker,extensionId}=await extension(context);
@@ -85,31 +92,23 @@ test('飞书AI建议填写：多段项目角色按当前记录落地且不覆盖
       const state=await page.evaluate(()=>__atsx); assert.equal(state.adds,3);
       for (let index=0;index<3;index++) { assert.equal(state[`project[${index}].name`],'合成项目名称'+index); assert.equal(state[`project[${index}].role`],''); }
     });
-    await t.test('AI建议不直接写入，确认后分别填写三条项目的React状态',async()=>{
-      for (const row of pending) await card(row.field.scanId).locator('.smart-ai-check').check();
-      await frame.locator('#smartAI').click(); await idle(); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await idle();
-      const suggested=(await view()).rows.filter((row)=>row.field.label==='项目角色'); assert.equal(new Set(suggested.map((row)=>row.suggestion?.sourceRef)).size,1); assert.ok(suggested.every((row)=>row.suggestion));
-      page.once('dialog',(dialog)=>dialog.dismiss()); await card(pending[0].field.scanId).locator('.smart-apply-suggestion').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'');
-      await page.screenshot({path:path.join(root,'ai-project-role-suggestions.png')});
-      for (let index=0;index<3;index++) {
-        let message=''; page.once('dialog',(dialog)=>{message=dialog.message(); return dialog.accept();});
-        await card(pending[index].field.scanId).locator('.smart-apply-suggestion').click(); await idle();
-        assert.ok(message.includes(roles[index]),message); assert.equal(await page.evaluate((index)=>__atsx[`project[${index}].role`],index),roles[index],await frame.locator('#smartStatus').textContent());
-        assert.equal((await view()).rows.find((row)=>row.field.scanId===pending[index].field.scanId).status,'success');
-      }
-      await page.locator('input[id="project[1].role"]').scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(root,'ai-project-role-filled.png')});
+    await t.test('点击AI后按当前三条记录自动填写React状态，无采用弹窗',async()=>{
+      for(const row of pending) await card(row.field.scanId).locator('.smart-ai-check').check();
+      let dialogs=0;page.on('dialog',async(dialog)=>{dialogs++;await dialog.dismiss();});await frame.locator('#smartAI').click();await idle();
+      for(let index=0;index<3;index++){assert.equal(await page.evaluate((index)=>__atsx['project['+index+'].role'],index),roles[index],await frame.locator('#smartStatus').textContent());assert.equal((await view()).rows.find((row)=>row.field.scanId===pending[index].field.scanId).status,'success');}
+      assert.equal(dialogs,0);await page.screenshot({path:path.join(root,'ai-project-role-filled.png')});
     });
-    await t.test('再次自动填保留网页已有内容，资料零修改且不提交不泄漏',async()=>{
-      await page.locator('input[id="project[1].role"]').fill('网页已改角色'); await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['project[1].role']),'网页已改角色');
-      assert.deepEqual((await rpc(options,'localapply:read')).database,before); assert.equal(await page.evaluate(()=>__atsx.saves+__atsx.submits),0); assert.equal(api.calls.filter((call)=>call.fieldAI).length,1);
-      const logs=JSON.stringify(await rpc(options,'diagnostics:read')); const sent=JSON.stringify(api.calls.filter((call)=>call.fieldAI));
-      for (const secret of [...roles,'synthetic-project-role-key']) { assert.ok(!logs.includes(secret)); if (secret!=='synthetic-project-role-key') assert.ok(!sent.includes(secret)); }
+    await t.test('再次自动填直接覆盖网页已有内容，资料零修改且不提交不泄漏',async()=>{
+      await page.locator('input[id="project[1].role"]').fill('网页已改角色');await frame.locator('#smartFillAll').click();await idle();assert.equal(await page.evaluate(()=>__atsx['project[1].role']),roles[1]);
+      assert.deepEqual((await rpc(options,'localapply:read')).database,before);assert.equal(await page.evaluate(()=>__atsx.saves+__atsx.submits),0);assert.equal(api.calls.filter((call)=>call.fieldAI).length,1);
+      const logs=JSON.stringify(await rpc(options,'diagnostics:read'));const sent=JSON.stringify(api.calls.filter((call)=>call.fieldAI));
+      for(const secret of [...roles,'synthetic-project-role-key']){assert.ok(!logs.includes(secret));if(secret!=='synthetic-project-role-key')assert.ok(!sent.includes(secret));}
     });
   } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
 });
 
 // 网站解析纠错只使用合成React页面，覆盖前必须核对字段及经历对应，不保存或提交。
-test('网页解析纠错覆盖：差异确认、既有控件与多段经历保护', {timeout:120000}, async(t)=> {
+test('网页解析纠错覆盖：一键覆盖、既有控件与多段经历保护', {timeout:120000}, async(t)=> {
   const root=path.join(ROOT,'.browser-tests'); await fs.mkdir(root,{recursive:true}); const profile=await fs.mkdtemp(path.join(root,'parsed-overwrite-')); const api=await serve(); let context;
   try {
     context=await launch(profile); context.setDefaultTimeout(10000); const {worker,extensionId}=await extension(context);
@@ -117,7 +116,7 @@ test('网页解析纠错覆盖：差异确认、既有控件与多段经历保�
     const profileId=(await rpc(options,'localapply:read')).database.activeProfileId;
     // 所有来源经后台规范命令创建，缺失的第二条项目描述故意留空。
     const set=async(key,value,entryId=null)=>rpc(options,'localapply:command',{request:{action:'setValue',payload:{profileId,fieldId:'builtin.'+key,entryId,value}}});
-    for(const [key,value] of [['name','合成纠错姓名'],['gender','男'],['politicalStatus','中共党员'],['birthDate','2000-02-15'],['school','合成硕士大学'],['degree','硕士'],['major','合成新专业'],['educationStartDate','2024-09'],['graduationDate','2026-06'],['projectName','合成项目一'],['projectRole','合成角色一'],['projectDescription','合成描述一'],['projectStartDate','2020-01'],['projectEndDate','2020-08']]) await set(key,value);
+    for(const [key,value] of [['name','合成纠错姓名'],['gender','男'],['politicalStatus','中共党员'],['birthDate','2000-02-15'],['school','合成硕士大学'],['degree','本科'],['major','合成新专业'],['educationStartDate','2024-09'],['graduationDate','2026-06'],['projectName','合成项目一'],['projectRole','合成角色一'],['projectDescription','合成描述一'],['projectStartDate','2020-01'],['projectEndDate','2020-08']]) await set(key,value);
     const entryId=(await rpc(options,'localapply:command',{request:{action:'createEntry',payload:{profileId,kind:'project',title:'合成项目二'}}})).result;
     for(const [key,value] of [['projectName','合成项目二'],['projectRole','合成角色二'],['projectStartDate','2021-01'],['projectEndDate','2021-08']]) await set(key,value,entryId);
     const before=(await rpc(options,'localapply:read')).database;
@@ -127,58 +126,38 @@ test('网页解析纠错覆盖：差异确认、既有控件与多段经历保�
     await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url()); const frame=await loaded; await frame.locator('#profileSel option').first().waitFor({state:'attached'});
     // 超时时保留合成页面的可见性及业务状态，区分标签暂停和业务错误，不记录会话令牌。
     const idle=async()=>{try{await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false',null,{timeout:60000});}catch(error){await fs.writeFile(path.join(root,'parsed-overwrite-timeout.json'),JSON.stringify({status:await frame.locator('#smartStatus').textContent(),panelHidden:await frame.evaluate(()=>document.hidden),pageHidden:await page.evaluate(()=>document.hidden),tabActive:await worker.evaluate(async(url)=>(await chrome.tabs.query({})).find((tab)=>tab.url===url)?.active,page.url()),diagnostics:await rpc(options,'diagnostics:read')},null,2));throw error;}};
-    const preview=async()=>{await frame.locator('#smartOverwritePreview').click(); await idle();};
-    await t.test('默认自动填写保留网站解析结果，取消差异预览也不修改',async()=>{
-      // 自动填写应在当前标签执行；显式建立前置状态，避免扩展初始化改变活动页造成等待。
-      await worker.evaluate(async(url)=>chrome.tabs.update((await chrome.tabs.query({})).find((tab)=>tab.url===url).id,{active:true}),page.url()); await page.bringToFront();
-      await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.locator('#parsed-name').inputValue(),'网站解析姓名'); assert.equal(await page.evaluate(()=>__atsx['project[0].name']),'网站解析内容 · project[0].name');
-      await frame.locator('#smartOverwriteOpen').click(); await idle(); assert.equal(await frame.locator('.smart-overwrite-record').count(),3); assert.deepEqual(await frame.locator('.smart-overwrite-record').evaluateAll((nodes)=>nodes.map((node)=>node.value)),['','','']);
-      await preview(); const changes=await frame.locator('.smart-overwrite-change').allTextContents(); assert.ok(changes.some((text)=>text.includes('网站解析姓名')&&text.includes('合成纠错姓名'))); assert.ok(!changes.some((text)=>text.includes('项目经历')));
-      await frame.locator('#smartOverwriteCancel').click(); await idle(); assert.equal(await page.locator('#parsed-name').inputValue(),'网站解析姓名'); assert.deepEqual((await rpc(options,'localapply:read')).database,before);
+    let dialogs=0;page.on('dialog',async(dialog)=>{dialogs++;await dialog.dismiss();});
+    await t.test('普通自动填写直接覆盖文本下拉单选日期及唯一教育，无差异确认',async()=>{
+      await worker.evaluate(async(url)=>chrome.tabs.update((await chrome.tabs.query({})).find((tab)=>tab.url===url).id,{active:true}),page.url());await page.bringToFront();
+      await frame.locator('#smartFillAll').click();await idle();assert.equal(await page.locator('#parsed-name').inputValue(),'合成纠错姓名');assert.equal(await page.locator('#parsed-gender').inputValue(),'M');assert.equal(await page.locator('input[name="politicalStatus"]:checked').inputValue(),'中共党员');assert.equal(await page.locator('#parsed-birth').inputValue(),'2000-02-15');
+      const state=await page.evaluate(()=>__atsx);assert.equal(state['education[0].school'],'合成硕士大学');assert.equal(state['education[0].degree'],'本科');assert.deepEqual(state['education[0].period'],['2024-09','2026-06']);
+      assert.equal(await frame.locator('#smartOverwriteReview').isVisible(),false);assert.equal(dialogs,0);assert.equal(await page.locator('#parsed-email').inputValue(),'synthetic@example.test');assert.equal(await page.locator('#parsed-unknown').inputValue(),'保留未知内容');
     });
-    await t.test('手动配对两条项目，缺失资料不覆盖，未确认及预览后改值均不能执行',async()=>{
-      await frame.locator('#smartOverwriteOpen').click(); await idle(); const selects=frame.locator('.smart-overwrite-record'); await selects.nth(0).selectOption('null'); await selects.nth(1).selectOption(JSON.stringify(entryId)); await selects.nth(2).selectOption('null'); await preview();
-      const changes=frame.locator('.smart-overwrite-change'); assert.equal(await changes.count(),18,JSON.stringify(await frame.evaluate(()=>sendMessage('learning:session',{sessionId:document.getElementById('tab-smart').dataset.sessionId})).then((view)=>view.rows.map((row)=>({label:row.field.label,group:row.field.group,type:row.field.type,target:row.target,status:row.status})))));
-      assert.ok(!(await changes.allTextContents()).some((text)=>text.includes('project[0].desc'))); await frame.locator('#smartOverwriteConfirm').click(); await idle(); assert.ok((await frame.locator('#smartStatus').textContent()).includes('确认'));
-      await page.locator('#parsed-name').fill('用户刚改的姓名'); await frame.locator('#smartOverwriteConsent').check(); await frame.locator('#smartOverwriteConfirm').click(); await idle(); assert.ok((await frame.locator('#smartStatus').textContent()).includes('网页内容在预览后已变化')); assert.equal(await page.locator('#parsed-gender').inputValue(),'F');
-      await preview(); await changes.filter({hasText:'用户刚改的姓名'}).locator('input').uncheck(); await frame.locator('#smartOverwriteConsent').check(); await page.screenshot({path:path.join(root,'parsed-overwrite-review.png')});
+    await t.test('只有歧义项目需要选择记录，选择后直接填写且缺值保留',async()=>{
+      await frame.locator('#smartOverwriteOpen').click();await idle();const selects=frame.locator('.smart-overwrite-record');assert.equal(await selects.count(),3);
+      await selects.nth(0).selectOption('null');await selects.nth(1).selectOption(JSON.stringify(entryId));await selects.nth(2).selectOption('null');
+      assert.equal(await frame.locator('#smartOverwritePreview').isVisible(),false);assert.equal(await frame.locator('#smartOverwriteConsent').isVisible(),false);
+      await frame.locator('#smartOverwriteConfirm').click();await idle();const state=await page.evaluate(()=>__atsx);
+      for(const [index,name,role,start,end] of [[0,'合成项目二','合成角色二','2021-01','2021-08'],[1,'合成项目一','合成角色一','2020-01','2020-08']]){assert.equal(state['project['+index+'].name'],name);assert.equal(state['project['+index+'].role'],role);assert.deepEqual(state['project['+index+'].period'],[start,end]);}
+      assert.equal(state['project[0].desc'],'网站解析内容 · project[0].desc');assert.equal(state['project[1].desc'],'合成描述一');assert.equal(state.adds+state.saves+state.submits,0);assert.equal(dialogs,0);
     });
-    await t.test('确认后覆盖下拉单选日期和React经历，未选及缺值保留且零保存提交',async()=>{
-      await frame.locator('#smartOverwriteConfirm').click(); await idle();
-      // 留存既有白名单诊断以定位失败阶段，产物只来自隔离合成测试。
-      await fs.writeFile(path.join(root,'parsed-overwrite-diagnostics.json'),JSON.stringify(await rpc(options,'diagnostics:read'),null,2));
-      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 17 个字段，失败\/不支持 0，需确认 0/);
-      assert.equal(await page.locator('#parsed-name').inputValue(),'用户刚改的姓名'); assert.equal(await page.locator('#parsed-gender').inputValue(),'M'); assert.equal(await page.locator('input[name="politicalStatus"]:checked').inputValue(),'中共党员'); assert.equal(await page.locator('#parsed-birth').inputValue(),'2000-02-15');
-      const state=await page.evaluate(()=>__atsx); assert.equal(state['education[0].school'],'合成硕士大学'); assert.equal(state['education[0].degree'],'硕士'); assert.deepEqual(state['education[0].period'],['2024-09','2026-06']);
-      for(const [index,name,role,start,end] of [[0,'合成项目二','合成角色二','2021-01','2021-08'],[1,'合成项目一','合成角色一','2020-01','2020-08']]) { assert.equal(state[`project[${index}].name`],name); assert.equal(state[`project[${index}].role`],role); assert.deepEqual(state[`project[${index}].period`],[start,end]); }
-      assert.equal(state['project[0].desc'],'网站解析内容 · project[0].desc'); assert.equal(state['project[1].desc'],'合成描述一'); assert.equal(await page.locator('#parsed-email').inputValue(),'synthetic@example.test'); assert.equal(await page.locator('#parsed-unknown').inputValue(),'保留未知内容'); assert.equal(state.adds+state.saves+state.submits,0);
-      assert.deepEqual((await rpc(options,'localapply:read')).database,before); assert.equal(api.calls.length,0); const logs=JSON.stringify(await rpc(options,'diagnostics:read')); for(const secret of ['网站解析姓名','合成纠错姓名','合成项目一','用户刚改的姓名','synthetic@example.test']) assert.ok(!logs.includes(secret));
-      await page.locator('input[id="project[0].name"]').scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(root,'parsed-overwrite-filled.png')});
+    await t.test('起止年月整体前移和后移都自动排序，不要求核对差异',async()=>{
+      for(const [start,end] of [['2010-01','2012-02'],['2030-01','2032-02']]){await set('educationStartDate',start);await set('graduationDate',end);await frame.locator('#smartFillAll').click();await idle();assert.deepEqual(await page.evaluate(()=>__atsx['education[0].period']),[start,end]);assert.match(await frame.locator('#smartStatus').textContent(),/失败\/不支持 0/);}
     });
-    await t.test('年月范围整体前移先写开始，未勾选字段不获得额外覆盖',async()=>{
-      await set('educationStartDate','2010-01'); await set('graduationDate','2012-02');
-      await frame.locator('#smartScan').click(); await idle(); await frame.locator('#smartOverwriteOpen').click(); await idle();
-      await frame.locator('.smart-overwrite-record').nth(0).selectOption('null'); await preview();
-      const changes=frame.locator('.smart-overwrite-change'); for(const input of await changes.locator('input').all())await input.uncheck();
-      await changes.filter({hasText:'网页教育背景第1条 · 开始日期'}).locator('input').check(); await changes.filter({hasText:'网页教育背景第1条 · 结束日期'}).locator('input').check();
-      await frame.locator('#smartOverwriteConsent').check(); await frame.locator('#smartOverwriteConfirm').click(); await idle();
-      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 2 个字段，失败\/不支持 0，需确认 0/);
-      assert.deepEqual(await page.evaluate(()=>__atsx['education[0].period']),['2010-01','2012-02']); assert.equal(await page.locator('#parsed-name').inputValue(),'用户刚改的姓名');
-      assert.equal(await page.evaluate(()=>__atsx['project[0].name']),'合成项目二');
+    await t.test('点击后网页并发改值仍停止旧快照，不误写其他字段',async()=>{
+      await set('name','合成下一次姓名');await frame.evaluate(()=>{const original=sendMessage;globalThis.__restoreDirectRequest=()=>{sendMessage=original;globalThis.__releaseDirectPreview?.();};sendMessage=async(...args)=>{const result=await original(...args);if(args[0]==='learning:previewOverwrite'){globalThis.__directPreviewHeld=true;await new Promise((resolve)=>{globalThis.__releaseDirectPreview=resolve;});}return result;};});
+      try{await frame.locator('#smartFillAll').click();await frame.waitForFunction(()=>globalThis.__directPreviewHeld);await page.locator('#parsed-name').fill('合成操作期间手改姓名');await frame.evaluate(()=>__releaseDirectPreview());await idle();assert.equal(await page.locator('#parsed-name').inputValue(),'合成操作期间手改姓名');assert.match(await frame.locator('#smartStatus').textContent(),/网页内容在预览后已变化/);}finally{await frame.evaluate(()=>__restoreDirectRequest());}
     });
-    await t.test('单独覆盖会导致范围无效时保留网页，不额外写入未选结束日期',async()=>{
-      await set('educationStartDate','2015-01'); await set('graduationDate','2016-02');
-      await frame.locator('#smartScan').click(); await idle(); await frame.locator('#smartOverwriteOpen').click(); await idle(); await frame.locator('.smart-overwrite-record').nth(0).selectOption('null'); await preview();
-      const changes=frame.locator('.smart-overwrite-change'); for(const input of await changes.locator('input').all())await input.uncheck(); await changes.filter({hasText:'网页教育背景第1条 · 开始日期'}).locator('input').check();
-      await frame.locator('#smartOverwriteConsent').check(); await frame.locator('#smartOverwriteConfirm').click(); await idle();
-      assert.deepEqual(await page.evaluate(()=>__atsx['education[0].period']),['2010-01','2012-02']); assert.match(await frame.locator('#smartStatus').textContent(),/失败\/不支持 1/);
-      assert.equal(await page.evaluate(()=>__atsx.adds+__atsx.saves+__atsx.submits),0); assert.equal(api.calls.length,0);
+    await t.test('再次点击按最新资料直接覆盖，不改本地资料、不提交、不泄漏',async()=>{
+      await frame.locator('#smartFillAll').click();await idle();assert.equal(await page.locator('#parsed-name').inputValue(),'合成下一次姓名');const state=await page.evaluate(()=>__atsx);assert.equal(state.adds+state.saves+state.submits,0);assert.equal(api.calls.length,0);assert.equal(dialogs,0);
+      const saved=(await rpc(options,'localapply:read')).database;assert.deepEqual(saved.mappingRules,before.mappingRules);assert.equal(saved.fieldValues.find((row)=>row.fieldId==='builtin.name').value,'合成下一次姓名');
+      const logs=await rpc(options,'diagnostics:read');for(const secret of ['网站解析姓名','合成下一次姓名','synthetic@example.test'])assert.ok(!JSON.stringify(logs).includes(secret));await fs.writeFile(path.join(root,'direct-actions-diagnostics.json'),JSON.stringify(logs,null,2));await page.screenshot({path:path.join(root,'direct-actions-filled.png')});
     });
   } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
 });
 
-// 复现网站上传后只解析部分React字段：先明确配对，再按勾选补填空白，已有内容始终受保护。
-test('网站上传后补填：零写入说明、经历配对和空白字段确认填写', {timeout:90000}, async(t)=> {
+// 复现网站上传后只解析部分React字段：仅歧义经历需配对，选择后直接补填和覆盖。
+test('网站上传后补填：零写入说明、经历配对和直接填写', {timeout:90000}, async(t)=> {
   const root=path.join(ROOT,'.browser-tests'); await fs.mkdir(root,{recursive:true}); const profile=await fs.mkdtemp(path.join(root,'parsed-gaps-')); const api=await serve(); let context;
   try {
     context=await launch(profile); context.setDefaultTimeout(10000); const {worker,extensionId}=await extension(context);
@@ -193,28 +172,21 @@ test('网站上传后补填：零写入说明、经历配对和空白字段确�
     // 每步等待真实业务屏障，不注入填写值或跳过后台确认。
     const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
     await t.test('默认零写入说明配对原因，已识别职责不误送AI',async()=>{
-      await frame.locator('#smartFillAll').click(); await idle(); const status=await frame.locator('#smartStatus').textContent(); assert.match(status,/本次未写入字段/); assert.match(status,/已识别字段需先配对经历/);
+      await frame.locator('#smartFillAll').click(); await idle(); const status=await frame.locator('#smartStatus').textContent(); assert.match(status,/本次未写入字段/); assert.match(status,/字段尚不能确定对应哪段经历/);
       const card=frame.locator('.smart-row').filter({has:frame.locator('h4',{hasText:'职责'})}).first(); assert.equal(await card.locator('.smart-ai-start').count(),0); await card.locator('.smart-pair-record').waitFor();
-      await frame.locator('#smartAI').click(); await idle(); assert.match(await frame.locator('#smartStatus').textContent(),/请先勾选/);
+      await frame.locator('#smartAI').click(); await idle(); assert.match(await frame.locator('#smartStatus').textContent(),/没有可供 AI 识别的未知字段/);
       const logs=await rpc(options,'diagnostics:read'); assert.equal(logs.rows.filter((row)=>row.operation==='learning.prepareAI').length,0); const preparation=logs.rows.findLast((row)=>row.operation==='learning.prepareRecords'); assert.equal(preparation.recordBindingRequired,10); assert.ok(preparation.webOccupied>0); // 两条项目各五个已知字段，待配对数量也包含本地缺值项。
       assert.equal(await page.evaluate(()=>__atsx['project[0].role']),''); await card.locator('.smart-pair-record').click(); await idle();
     });
-    await t.test('反向配对预览包含空白项，取消零写入，确认仅填写勾选项',async()=>{
-      const selects=frame.locator('.smart-overwrite-record'); assert.equal(await selects.count(),2); await selects.nth(0).selectOption(JSON.stringify(entryId)); await selects.nth(1).selectOption('null');
-      await frame.locator('#smartOverwritePreview').click(); await idle(); const changes=frame.locator('.smart-overwrite-change'); assert.equal(await changes.count(),4); assert.equal(await changes.filter({hasText:'补填空白'}).count(),2);
-      await frame.locator('#smartOverwriteCancel').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'');
-      await frame.locator('#smartOverwriteOpen').click(); await idle(); await selects.nth(0).selectOption(JSON.stringify(entryId)); await selects.nth(1).selectOption('null'); await frame.locator('#smartOverwritePreview').click(); await idle();
-      for(const input of await changes.locator('input').all()) await input.uncheck(); await changes.filter({hasText:'网页项目经历第1条 · 职责'}).locator('input').check();
-      await frame.locator('#smartOverwriteConsent').check(); await page.screenshot({path:path.join(root,'parsed-gaps-review.png')}); await frame.locator('#smartOverwriteConfirm').click(); await idle();
-      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 1 个字段，失败\/不支持 0/); assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'合成补填角色二'); assert.equal(await page.evaluate(()=>__atsx['project[1].role']),'');
-      for(const index of [0,1]) assert.equal(await page.evaluate((index)=>__atsx[`project[${index}].name`],index),'网站解析内容 · project['+index+'].name');
+    await t.test('选择两条项目的对应关系后立即补填和覆盖，无差异确认',async()=>{
+      const selects=frame.locator('.smart-overwrite-record');assert.equal(await selects.count(),2);await selects.nth(0).selectOption(JSON.stringify(entryId));await selects.nth(1).selectOption('null');
+      assert.equal(await frame.locator('#smartOverwritePreview').isVisible(),false);await frame.locator('#smartOverwriteCancel').click();await idle();assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'');
+      await frame.locator('#smartOverwriteOpen').click();await idle();await selects.nth(0).selectOption(JSON.stringify(entryId));await selects.nth(1).selectOption('null');await frame.locator('#smartOverwriteConfirm').click();await idle();
+      assert.equal(await page.evaluate(()=>__atsx['project[0].role']),'合成补填角色二');assert.equal(await page.evaluate(()=>__atsx['project[1].role']),'合成补填角色一');assert.equal(await page.evaluate(()=>__atsx['project[0].name']),'合成补填项目二');
     });
-    await t.test('再次普通自动填写只补另一条空白，不猜配不覆盖不提交，日志无原值',async()=>{
-      await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['project[1].role']),'合成补填角色一'); assert.equal(await page.evaluate(()=>__atsx['project[0].name']),'网站解析内容 · project[0].name');
-      assert.equal(await page.evaluate(()=>__atsx.adds+__atsx.saves+__atsx.submits),0); assert.deepEqual((await rpc(options,'localapply:read')).database,before); assert.equal(api.calls.length,0);
-      const logs=await rpc(options,'diagnostics:read'); await fs.writeFile(path.join(root,'parsed-gaps-diagnostics.json'),JSON.stringify(logs,null,2));
-      for(const secret of ['合成补填角色一','合成补填角色二','网站解析内容']) assert.ok(!JSON.stringify(logs).includes(secret));
-      await page.locator('input[id="project[0].name"]').scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(root,'parsed-gaps-filled.png')});
+    await t.test('再次填写不追加记录或提交，日志无原值且个人资料不变',async()=>{
+      await frame.locator('#smartFillAll').click();await idle();assert.equal(await page.evaluate(()=>__atsx['project[1].name']),'合成补填项目一');assert.equal(await page.evaluate(()=>__atsx.adds+__atsx.saves+__atsx.submits),0);assert.deepEqual((await rpc(options,'localapply:read')).database,before);assert.equal(api.calls.length,0);
+      const logs=await rpc(options,'diagnostics:read');for(const secret of ['合成补填角色一','合成补填角色二','网站解析内容'])assert.ok(!JSON.stringify(logs).includes(secret));await fs.writeFile(path.join(root,'parsed-gaps-diagnostics.json'),JSON.stringify(logs,null,2));
     });
   } finally { if(context)await context.close(); await new Promise((resolve)=>api.server.close(resolve)); await fs.rm(profile,{recursive:true,force:true,maxRetries:3}); }
 });
@@ -243,21 +215,20 @@ test('自动经历配对：单条补填、乱序项目和局部歧义的React回
       await fs.writeFile(path.join(root,'auto-pair-'+caseId+'.json'),JSON.stringify({status:await frame.locator('#smartStatus').textContent(),view:await rpc(options,'learning:session',{sessionId}),state:await page.evaluate(()=>__atsx)},null,2));
       return {page,frame};
     }
-    await t.test('单条教育与两条反向项目直接补齐五项，保留网页学历学校和日期',async()=>{
+    await t.test('单条教育与两条反向项目直接填写六项，覆盖学校并保持相同日期',async()=>{
       const {page,frame}=await scenario(); const state=await page.evaluate(()=>__atsx);
-      assert.equal(state['education[0].fieldOfStudy'],'合成自动专业'); assert.equal(state['education[0].schoolText'],'网站解析内容 · education[0].schoolText'); assert.equal(state['education[0].degree'],'本科'); assert.deepEqual(state['education[0].period'],['2018-09','2019-06']);
+      assert.equal(state['education[0].fieldOfStudy'],'合成自动专业'); assert.equal(state['education[0].schoolText'],'合成本科大学'); assert.equal(state['education[0].degree'],'本科'); assert.deepEqual(state['education[0].period'],['2018-09','2019-06']);
       for(const [index,role,description] of [[0,'合成自动角色二','合成自动描述二'],[1,'合成自动角色一','合成自动描述一']]) {assert.equal(state[`project[${index}].role`],role); assert.equal(state[`project[${index}].desc`],description);}
-      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 5 个字段，失败\/不支持 0，需确认 0/); assert.equal(await frame.locator('.smart-pair-record').count(),0); assert.equal(await frame.locator('#smartOverwriteReview').isVisible(),false); assert.equal(state.adds+state.saves+state.submits,0);
+      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 6 个字段，失败\/不支持 0，需确认 0/); assert.equal(await frame.locator('.smart-pair-record').count(),0); assert.equal(await frame.locator('#smartOverwriteReview').isVisible(),false); assert.equal(state.adds+state.saves+state.submits,0);
       await page.screenshot({path:path.join(root,'auto-pair-filled.png')});
     });
     await t.test('同模块中一条不明确时，只保护该条，其他记录仍自动补齐',async()=>{
       const {page,frame}=await scenario(true); const state=await page.evaluate(()=>__atsx); assert.equal(state['project[0].role'],'合成自动角色二'); assert.equal(state['project[0].desc'],'合成自动描述二'); assert.equal(state['project[1].role'],''); assert.equal(state['project[1].desc'],'');
-      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 3 个字段，失败\/不支持 0/); assert.ok(await frame.locator('.smart-pair-record').count()>0); assert.equal(state.adds+state.saves+state.submits,0);
+      assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 4 个字段，失败\/不支持 0/); assert.ok(await frame.locator('.smart-pair-record').count()>0); assert.equal(state.adds+state.saves+state.submits,0);
     });
-    await t.test('确认纠正同一来源学校后，普通填写仍能补齐其他空白',async()=>{
+    await t.test('直接纠正同一来源学校后，普通填写仍能补齐其他空白',async()=>{
       const {page,frame}=await scenario(false,'confirmed'); const idle=()=>frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
-      await frame.locator('#smartOverwriteOpen').click(); await idle(); await frame.locator('#smartOverwritePreview').click(); await idle(); assert.equal(await frame.locator('.smart-overwrite-change').count(),1);
-      await frame.locator('#smartOverwriteConsent').check(); await frame.locator('#smartOverwriteConfirm').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['education[0].schoolText']),'合成本科大学');
+      assert.equal(await page.evaluate(()=>__atsx['education[0].schoolText']),'合成本科大学');
       await page.locator('input[id="education[0].fieldOfStudy"]').fill(''); await frame.locator('#smartFillAll').click(); await idle(); assert.equal(await page.evaluate(()=>__atsx['education[0].fieldOfStudy']),'合成自动专业');
       assert.match(await frame.locator('#smartStatus').textContent(),/本次成功填入 1 个字段，失败\/不支持 0/); assert.equal(await page.evaluate(()=>__atsx.adds+__atsx.saves+__atsx.submits),0); assert.deepEqual((await rpc(options,'localapply:read')).database,before);
     });
@@ -308,7 +279,7 @@ test('卡片切页恢复：重复填写、编辑、折叠关闭与过期续期',
       const row=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'合成切页备注'})}); await row.locator('.smart-check').check();
       // 在后台丢失前保留真实覆盖预览；恢复标记须废弃该确认，但不能改掉网页内容。
       await page.locator('#syntheticName').fill('合成网页已有姓名'); await frame.locator('#smartOverwriteOpen').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
-      await frame.locator('#smartOverwritePreview').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false'); await frame.locator('#smartOverwriteConsent').check();
+      await frame.evaluate(()=>sendMessage('learning:previewOverwrite',{sessionId:document.getElementById('tab-smart').dataset.sessionId,bindings:[]}));
       const session=await frame.locator('#tab-smart').getAttribute('data-session-id'); const list=await frame.locator('.smart-row').allTextContents();
       // 只记录命令名，确认轮询没有触发重扫、模型调用或网页写入，也不能续卡片令牌。
       await frame.evaluate(() => { const original=sendMessage; globalThis.__returnRequests=[]; sendMessage=async(...args)=>{__returnRequests.push(args[0]); return original(...args);}; });
@@ -369,8 +340,11 @@ test('待处理字段集中学习：原控件手填、统一确认与重启记�
       await worker.evaluate(async (url) => floatingPanel.open((await chrome.tabs.query({})).find((tab) => tab.url === url).id), page.url()); frame = await loaded; await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
       await frame.locator('#smartScan').click(); await idle();
     };
-    // 忙碌屏障结束后再断言状态，不以按钮点击完成代替后台落盘。
-    const idle = () => frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
+    // 等待真实业务屏障；超时只保存合成测试状态及白名单诊断，便于区分初始化与业务失败。
+    const idle = async () => {
+      try { await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false'); }
+      catch (error) { await fs.writeFile(path.join(root,'pending-learning-timeout.json'),JSON.stringify({status:await frame.locator('#smartStatus').textContent(),busy:await frame.locator('#tab-smart').getAttribute('aria-busy'),diagnostics:await rpc(options,'diagnostics:read')},null,2));throw error; }
+    };
     const card = (label) => frame.locator('.smart-row').filter({ has: frame.locator('h4').filter({ hasText: label }) });
     const labels = ['合成手填备注','合成手填方向','合成手填班次','合成手填标记','合成手填月份','合成手填数量','合成手填说明'];
     await open(); const initial = (await rpc(options, 'localapply:read')).database;
@@ -892,9 +866,9 @@ test('分层第十步：双入口批次停止、连接关闭及页面生命周�
     await t.test('停止按钮中止当前候选等待和后续姓名，保留搜索文字但不记成功',async()=>{
       await start();await frame.locator('#smartStopFill').click();await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('已停止填写'));await page.waitForTimeout(800);assert.equal(await page.evaluate(()=>__sessionClicks),0);assert.equal(await page.locator('#session-name').inputValue(),'');assert.equal((await rpc(options,'localapply:read')).database.mappingRules.length,0);
     });
-    await t.test('新批次可继续，记忆写入不错误取消下一项，当前网页非空值保留',async()=>{
+    await t.test('新批次先完成覆盖再保存记忆，不使后续快照过期，再次点击直接覆盖',async()=>{
       await page.evaluate(()=>__sessionReset());await frame.locator('#smartRememberAfter').check();await frame.locator('#smartFillAll').click();await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('填写完成：')&&document.getElementById('smartStopFill').hidden);assert.equal(await page.locator('#session-gender').getAttribute('data-value'),'M');assert.equal(await page.locator('#session-name').inputValue(),'合成批次姓名');assert.ok((await rpc(options,'localapply:read')).database.mappingRules.length>=2);
-      await page.locator('#session-name').fill('网页原有姓名');await frame.locator('#smartFillAll').click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='true');await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')!=='true');assert.equal(await page.locator('#session-name').inputValue(),'网页原有姓名');
+      await page.locator('#session-name').fill('网页原有姓名');await frame.locator('#smartFillAll').click();await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='true');await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')!=='true');assert.equal(await page.locator('#session-name').inputValue(),'合成批次姓名');
     });
     await t.test('关闭卡片触发后台取消，候选晚到不点选，重新打开可重新授权',async()=>{
       await page.evaluate(()=>{__sessionReset();window.__sessionHold=true;});const clicks=await page.evaluate(()=>__sessionClicks);await start();const detached=page.waitForEvent('framedetached',{predicate:(next)=>next===frame});await frame.locator('#panelClose').click();await detached;await page.evaluate(()=>__sessionRelease?.());await page.waitForTimeout(150);const after=await page.evaluate(()=>__sessionClicks);const name=await page.locator('#session-name').inputValue();await open();assert.equal(after,clicks);assert.equal(name,'');
@@ -1602,7 +1576,7 @@ test('分层第一步：字段语义与控件描述独立', { timeout: 60000 }, 
 });
 
 // 岗位 AI 走真实卡片、加密配置和 loopback Mock，绝不操作线上招聘表单。
-test('AI岗位识别：发送确认、证据回填、取消与本地保存', { timeout: 120000 }, async (t) => {
+test('AI岗位识别：点击发送、证据回填、取消与本地保存', { timeout: 120000 }, async (t) => {
   const root = path.join(ROOT, '.browser-tests'); await fs.mkdir(root, { recursive: true }); const profile = await fs.mkdtemp(path.join(root, 'job-ai-')); const api = await serve(); let context; let frame; const errors = [];
   try {
     context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
@@ -1627,10 +1601,8 @@ test('AI岗位识别：发送确认、证据回填、取消与本地保存', { t
       await options.locator('#apiKey').fill('synthetic-job-ai-key'); await options.locator('#saveKey').click(); await options.evaluate(() => flushCredentials());
       await options.locator('#manualModel').check(); await options.locator('#model').fill('synthetic-job-ai'); await options.locator('#model').press('Tab'); await options.evaluate(() => flushSaves()); await page.bringToFront();
     }
-    // 每次发送前都实际预览并勾选同意，不通过后台 RPC 跳过用户流程。
-    async function preview() { await frame.locator('#jobAI').click(); await frame.locator('#jobAIReview').waitFor({ state: 'visible' }); await frame.waitForFunction(() => !document.getElementById('jobAISend').disabled); }
-    // 等待发送入口恢复后再断言结果，避免把上一轮界面状态当成本次结果。
-    async function send() { await frame.locator('#jobAIConsent').check(); await frame.locator('#jobAISend').click(); await frame.locator('#jobAIReview').waitFor({ state: 'hidden' }); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled); }
+    // 从真实按钮发起识别并等待结束，不再预览、勾选或二次发送。
+    async function recognize() { await frame.locator('#jobAI').click(); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled); }
     // 合成响应的三项值都具有当前表头原文证据。
     function reply(location = '合成乙城') { const evidence = '公司：合成岗位企业｜岗位：合成云端开发｜地点：合成乙城'; return JSON.stringify({ companyName: { value: '合成岗位企业', evidence }, jobTitle: { value: '合成云端开发', evidence }, location: { value: location, evidence: location === null ? null : evidence } }); }
     await open();
@@ -1639,35 +1611,34 @@ test('AI岗位识别：发送确认、证据回填、取消与本地保存', { t
       const denied = await worker.evaluate(async (url) => { const tab = (await chrome.tabs.query({})).find((item) => item.url === url); const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: async () => chrome.runtime.sendMessage({ type: 'jobs:prepareAI' }) }); return result.result; }, page.url()); assert.equal(denied.ok, false);
     });
     await configure(); const before = (await rpc(options, 'localapply:read')).database; api.modelApi.chatContent = reply();
-    await t.test('预览无请求，文本排除个人表单及隐藏/推荐内容，取消或未勾选均不联网', async () => {
-      await preview(); const text = await frame.locator('#jobAIPayload').textContent(); assert.ok(text.includes('合成岗位企业')); assert.ok(!text.includes('synthetic-private')); assert.ok(!text.includes('<input')); assert.ok(!text.includes('/test-pages/phase5-job.html')); assert.equal(JSON.parse(text).siteOrigin, api.base);
-      assert.match(await frame.locator('#jobAIRecipient').textContent(), /synthetic-job-ai/); await frame.locator('#jobAISend').click(); assert.equal(api.calls.length, 0);
-      await frame.locator('#jobAICancel').click(); await frame.locator('#jobAIReview').waitFor({ state: 'hidden' }); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled); assert.equal(api.calls.length, 0);
+    await t.test('点击立即发送，文本仍排除个人表单及隐藏/推荐内容，不展示同意界面', async () => {
+      await recognize(); const call = api.calls.find((item) => item.jobAI); const text = JSON.stringify(call.payload); assert.ok(text.includes('合成岗位企业')); assert.ok(!text.includes('synthetic-private')); assert.ok(!text.includes('<input')); assert.ok(!text.includes('/test-pages/phase5-job.html')); assert.equal(call.payload.siteOrigin, api.base);
+      assert.equal(call.model, 'synthetic-job-ai'); assert.equal(api.calls.length, 1); assert.equal(await frame.locator('#jobAIReview').isVisible(), false);
     });
-    await t.test('确认后自动回填公司/岗位/地点/当前链接，不写库或提交网页', async () => {
-      await preview(); await send(); assert.match(await frame.locator('#jobStatus').textContent(), /已填入岗位卡片/);
+    await t.test('点击后自动回填公司/岗位/地点/当前链接，不写库或提交网页', async () => {
+      await recognize(); assert.match(await frame.locator('#jobStatus').textContent(), /已填入岗位卡片/);
       assert.equal(await frame.locator('#jobCompany').inputValue(), '合成岗位企业'); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成云端开发'); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成乙城'); assert.equal(await frame.locator('#jobUrl').inputValue(), api.base + '/test-pages/phase5-job.html');
       assert.deepEqual((await rpc(options, 'localapply:read')).database, before); assert.equal(await page.locator('#syntheticName').inputValue(), 'synthetic-private-name'); assert.equal(await page.evaluate(() => __stage5Submissions), 0);
       const call = api.calls.find((item) => item.jobAI); assert.ok(call); assert.ok(!JSON.stringify(call.payload).includes('synthetic-private')); assert.match(call.system, /不可信数据/);
       await frame.locator('#jobCompany').scrollIntoViewIfNeeded(); await page.screenshot({ path: path.join(root, 'job-ai-filled.png') });
     });
     await t.test('模型缺少地点保留原值，错误 JSON、恶意属性和限流失败均可恢复', async () => {
-      await frame.locator('#jobLocation').fill('合成保留城市'); api.modelApi.chatContent = reply(null); await preview(); await send(); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成保留城市');
+      await frame.locator('#jobLocation').fill('合成保留城市'); api.modelApi.chatContent = reply(null); await recognize(); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成保留城市');
       for (const content of ['invalid json', JSON.stringify({ ...JSON.parse(reply()), script: 'globalThis.syntheticExecuted=true' })]) {
-        api.modelApi.chatContent = content; await preview(); await send(); assert.match(await frame.locator('#jobStatus').textContent(), /未完成/); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成保留城市');
+        api.modelApi.chatContent = content; await recognize(); assert.match(await frame.locator('#jobStatus').textContent(), /未完成/); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成保留城市');
       }
-      api.modelApi.chatStatus = 429; await preview(); await send(); assert.match(await frame.locator('#jobStatus').textContent(), /429/); api.modelApi.chatStatus = 0; api.modelApi.chatContent = reply(); assert.equal(await page.evaluate(() => globalThis.syntheticExecuted), undefined);
+      api.modelApi.chatStatus = 429; await recognize(); assert.match(await frame.locator('#jobStatus').textContent(), /429/); api.modelApi.chatStatus = 0; api.modelApi.chatContent = reply(); assert.equal(await page.evaluate(() => globalThis.syntheticExecuted), undefined);
     });
     await t.test('取消运行中任务或期间手动修改，不允许迟到响应覆盖输入', async () => {
-      api.modelApi.chatHold = true; let started = new Promise((resolve) => { api.modelApi.onChat = resolve; }); await preview(); await frame.locator('#jobAIConsent').check(); await frame.locator('#jobAISend').click(); await started;
+      api.modelApi.chatHold = true; let started = new Promise((resolve) => { api.modelApi.onChat = resolve; }); await frame.locator('#jobAI').click(); await started;
       await frame.locator('#jobAICancel').click(); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled); api.modelApi.releaseChat(); assert.equal(await frame.locator('#jobLocation').inputValue(), '合成保留城市');
-      started = new Promise((resolve) => { api.modelApi.onChat = resolve; }); await preview(); await frame.locator('#jobAIConsent').check(); await frame.locator('#jobAISend').click(); await started;
-      await frame.locator('#jobTitle').fill('合成保留手改岗位'); api.modelApi.chatHold = false; api.modelApi.releaseChat(); await frame.locator('#jobAIReview').waitFor({ state: 'hidden' }); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成保留手改岗位'); assert.match(await frame.locator('#jobStatus').textContent(), /未覆盖/);
+      started = new Promise((resolve) => { api.modelApi.onChat = resolve; }); await frame.locator('#jobAI').click(); await started;
+      await frame.locator('#jobTitle').fill('合成保留手改岗位'); api.modelApi.chatHold = false; api.modelApi.releaseChat(); await frame.waitForFunction(() => !document.getElementById('jobAI').disabled); assert.equal(await frame.locator('#jobTitle').inputValue(), '合成保留手改岗位'); assert.match(await frame.locator('#jobStatus').textContent(), /未覆盖/);
     });
-    await t.test('关闭撤销预览，重开不能发送旧令牌，Responses 协议仍可识别', async () => {
-      await preview(); const stale = await frame.evaluate(() => sendMessage('jobs:prepareAI')); await frame.locator('#panelClose').click(); await open();
+    await t.test('关闭撤销旧准备令牌，重开不能重放，Responses 协议仍可识别', async () => {
+      const stale = await frame.evaluate(() => sendMessage('jobs:prepareAI')); await frame.locator('#panelClose').click(); await open();
       const denied = await frame.evaluate((token) => sendMessage('jobs:recognizeAI', { token, confirmed: true }), stale.token); assert.equal(denied.ok, false);
-      await configure(true); await preview(); await send(); assert.match(await frame.locator('#jobStatus').textContent(), /已填入岗位卡片/); assert.equal(api.calls.at(-1).protocol, 'responses'); assert.equal(api.calls.at(-1).store, false);
+      await configure(true); await recognize(); assert.match(await frame.locator('#jobStatus').textContent(), /已填入岗位卡片/); assert.equal(api.calls.at(-1).protocol, 'responses'); assert.equal(api.calls.at(-1).store, false);
     });
     await t.test('用户核对并确认后才保存四项到已投职位，日志不保存岗位正文或 Key', async () => {
       page.once('dialog', (dialog) => dialog.dismiss()); await frame.locator('#jobSave').click(); assert.equal((await rpc(options, 'localapply:read')).database.applications.length, 0);
@@ -2509,12 +2480,12 @@ test('新版阶段三：日期电话、覆盖确认、手填学习与选择性 A
       assert.equal((await fill('资格附加说明')).status,'success'); assert.equal(await page.locator('#unknown').inputValue(),'合成手填新增资料'); assert.equal(api.calls.length,0);
     });
     let frame;
-    await t.test('卡片保留网页已有内容，移除覆盖与资料编辑入口', async () => {
+    await t.test('卡片直接覆盖网页已有内容，不展示差异确认或资料编辑器', async () => {
       await page.locator('#wsa-floatbar-host').waitFor(); const loaded = page.waitForEvent('framenavigated',{predicate:(item)=>item.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)}); await page.locator('#wsa-floatbar-host').click(); frame = await loaded;
-      // 新界面只处理手填和集中学习；网页非空保护继续由原引擎执行。
+      // 点击直接覆盖使用既有管线，资料编辑和手填学习仍独立处理。
       await frame.locator('#profileSel option').first().waitFor({state:'attached'}); await page.locator('#name').fill(''); await frame.locator('#smartScan').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false' && !!document.getElementById('tab-smart').dataset.sessionId);
       await page.locator('#name').fill('合成卡片冲突'); await frame.locator('#smartFillAll').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
-      assert.equal(await page.locator('#name').inputValue(),'合成卡片冲突'); assert.equal(await frame.locator('.smart-overwrite,.smart-source,.smart-editor').count(),0);
+      assert.equal(await page.locator('#name').inputValue(),'合成复合姓名'); assert.equal(await frame.locator('.smart-overwrite,.smart-source,.smart-editor').count(),0);
       assert.ok((await frame.locator('#smartExcluded').textContent()).includes('同步更新在线简历')); await page.screenshot({path:path.join(testRoot,'stage3-v2-composites.png'),fullPage:false});
     });
     await t.test('AI 仅发送所选未知字段，取消中止请求并可再次使用', async () => {
@@ -2524,18 +2495,17 @@ test('新版阶段三：日期电话、覆盖确认、手填学习与选择性 A
       // 无选择时验证后台拒绝且零请求；界面错误可被正常轮询刷新，不依赖短暂样式断言。
       const noSelection = await frame.evaluate(() => sendMessage('learning:prepareAI', { sessionId: document.getElementById('tab-smart').dataset.sessionId, scanIds: [] })); assert.equal(noSelection.ok, false); assert.equal(api.calls.length,0);
       const card = frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'合成候选补充偏好'})});
-      await card.locator('.smart-ai-check').check(); await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'});
-      const payload = JSON.parse(await frame.locator('#smartAIPayload').textContent()); assert.deepEqual(payload.fields.map((field)=>field.label),['合成候选补充偏好']); assert.ok(!JSON.stringify(payload).includes('合成手填新增资料'));
-      api.modelApi.fieldHold = true; const started = new Promise((resolve)=>{api.modelApi.onField=resolve;}); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await started;
-      await frame.locator('#smartAICancel').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false'); assert.ok((await frame.locator('#smartStatus').textContent()).includes('取消'));
-      api.modelApi.releaseField(); api.modelApi.fieldHold = false; await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'}); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('AI 返回 0'));
+      api.modelApi.fieldHold = true; const started = new Promise((resolve)=>{api.modelApi.onField=resolve;}); await card.locator('.smart-ai-check').check(); await frame.locator('#smartAI').click(); await started;
+      const payload = api.calls.at(-1).payload; assert.deepEqual(payload.fields.map((field)=>field.label),['合成候选补充偏好']); assert.ok(!JSON.stringify(payload).includes('合成手填新增资料')); assert.equal(await frame.locator('#smartAIReview').isVisible(),false);
+      await frame.locator('#smartAICancel').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false'); assert.ok((await frame.locator('#smartStatus').textContent()).includes('停止'));
+      api.modelApi.releaseField(); api.modelApi.fieldHold = false; await frame.locator('#smartAI').click(); await frame.waitForFunction(()=>document.getElementById('smartStatus').textContent.includes('AI 返回 0'));
       assert.equal(await page.locator('#other-unknown').inputValue(),''); assert.equal(await page.evaluate(()=>__submitCount),0);
     });
     await t.test('AI 待人工选择及忽略建议不自动采用，用户确认后才移入忽略列表', async () => {
       const card=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'合成候选补充偏好'})});
       for (const action of ['needs_user_choice','skip_non_resume_control']) {
         api.modelApi.fieldReply=(payload)=>JSON.stringify({suggestions:[{scanId:payload.fields[0].scanId,existingFieldId:null,definition:null,sourceRef:null,confidence:0.1,action}]});
-        await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'}); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
+        await frame.locator('#smartAI').click(); await frame.waitForFunction(()=>document.getElementById('tab-smart').getAttribute('aria-busy')==='false');
         assert.equal(await card.count(),1); assert.equal(await page.locator('#other-unknown').inputValue(),'');
         if(action==='needs_user_choice') { assert.ok((await card.textContent()).includes('AI 无法确定')); assert.equal(await card.locator('.smart-apply-suggestion').count(),0); }
       }
@@ -2543,8 +2513,7 @@ test('新版阶段三：日期电话、覆盖确认、手填学习与选择性 A
     });
     await t.test('页面导航释放运行中的 AI 和未确认候选，不产生迟到保存', async () => {
       await frame.locator('#smartExcluded summary').click(); await frame.getByRole('button',{name:'恢复此字段',exact:true}).click();
-      const card=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'合成候选补充偏好'})}); await card.locator('.smart-ai-check').check(); await frame.locator('#smartAI').click(); await frame.locator('#smartAIReview').waitFor({state:'visible'});
-      api.modelApi.fieldHold=true; const started=new Promise((resolve)=>{api.modelApi.onField=resolve;}); await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click(); await started;
+      const card=frame.locator('.smart-row').filter({has:frame.locator('h4').filter({hasText:'合成候选补充偏好'})}); api.modelApi.fieldHold=true; const started=new Promise((resolve)=>{api.modelApi.onField=resolve;}); await card.locator('.smart-ai-check').check(); await frame.locator('#smartAI').click(); await started;
       const oldSession=await frame.locator('#tab-smart').getAttribute('data-session-id'); const before=(await rpc(options,'localapply:read')).database.revision; await page.reload();
       const old=await options.evaluate((sessionId)=>chrome.runtime.sendMessage({type:'learning:session',sessionId}),oldSession); assert.equal(old.ok,false); api.modelApi.releaseField(); api.modelApi.fieldHold=false; assert.equal((await rpc(options,'localapply:read')).database.revision,before);
     });
@@ -3740,12 +3709,10 @@ test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { 
       // Mock 只返回已发送的字段和来源引用，不能生成个人实际值。
       api.modelApi.fieldReply = (payload) => JSON.stringify({ suggestions: [{ scanId: payload.fields.find((field) => field.label === '便捷联系号码').scanId, existingFieldId: 'builtin.phone', definition: null, sourceRef: payload.sources.find((source) => source.fieldId === 'builtin.phone' && source.hasValue).ref, confidence: 0.99 }] });
       await frame.locator('#autoTab').click(); await frame.locator('.smart-row').filter({ has: frame.locator('h4').filter({ hasText: '便捷联系号码' }) }).locator('.smart-ai-check').check(); await frame.locator('#smartAI').click();
-      await frame.waitForFunction(() => !document.getElementById('smartAIReview').hidden || document.getElementById('smartStatus').className === 'err');
-      assert.equal(await frame.locator('#smartAIReview').isVisible(), true, await frame.locator('#smartStatus').textContent());
-      assert.equal(api.calls.length, 0); assert.equal(await page.locator('#preferred-contact').inputValue(), '');
-      await frame.locator('#smartAIConsent').check(); await frame.locator('#smartAISend').click();
       await frame.waitForFunction(() => document.getElementById('smartStatus').textContent.includes('AI 返回 1'));
-      assert.equal(await page.locator('#preferred-contact').inputValue(), '');
+      assert.equal(await frame.locator('#smartAIReview').isVisible(), false); assert.equal(api.calls.length, 1); assert.equal(await page.locator('#preferred-contact').inputValue(), '13800000000');
+      // 重新清空并刷新后，继续验证独立的网页手填学习，不靠AI请求自动保存资料。
+      await page.locator('#preferred-contact').fill(''); await frame.locator('#smartRefresh').click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');
       const card = frame.locator('.smart-row').filter({ has: frame.locator('h4').filter({ hasText: '便捷联系号码' }) });
       await card.locator('.smart-manual').click(); await page.locator('#preferred-contact').fill('13800000000'); await card.locator('.smart-check').check(); await frame.locator('#smartLearnPreview').click(); await frame.locator('#smartLearnReview').waitFor({ state: 'visible' }); await frame.locator('#smartLearnConsent').check(); await frame.locator('#smartLearnCommit').click();
       await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false');

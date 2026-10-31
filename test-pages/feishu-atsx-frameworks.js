@@ -7,7 +7,7 @@ globalThis.__atsx = { adds: 0, choices: 0, saves: 0, submits: 0, dates: 0 };
 
 // 标签说明不进入字段名，故意保留外壳和输入重复 ID 的真实页面结构。
 function Field({ id, name, children }) { return h('div', { className: 'atsx-row atsx-form-item' }, h('div', { className: 'atsx-form-item-label' }, h('label', { htmlFor: id }, h('div', { className: 'customResumeForm-fieldName' }, name)), h('span', null, '合成说明不属于标签')), h('div', { className: 'atsx-form-item-control-wrapper' + (mode === 'invalid-date' && name === '起止时间' ? ' has-error' : '') }, children)); }
-// 查询与选中状态独立；解析模式带已有选择，用于验证确认后的覆盖仍真正点选候选。
+// 查询与选中状态独立；解析模式同时提供正式选中证据，查询词不能冒充已选值。
 function Choice({ id, name, values, combo = false }) {
   const initial=mode==='parsed'?values[0]:'';
   const [query, setQuery] = useState(combo?initial:''); const [value, setValue] = useState(initial); const [open, setOpen] = useState(false); const [ready, setReady] = useState(false);
@@ -19,7 +19,7 @@ function Choice({ id, name, values, combo = false }) {
   return h(Field, { id, name }, h('div', { id, className: 'atsx-select atsx-select-enabled' + (combo ? ' atsx-select-combobox' : '') },
     h('div', { className: 'atsx-select-selection atsx-select-selection--single', role: 'combobox', tabIndex: combo ? undefined : 0, 'aria-controls': key, 'aria-expanded': open,
       onClick: () => { setOpen(true); if (!combo) setReady(true); } },
-    h('div', { className: 'atsx-select-selection__rendered' }, !combo && value && h('div', { className: 'atsx-select-selection-selected-value' }, value),
+    h('div', { className: 'atsx-select-selection__rendered' }, (!combo || mode === 'parsed' && query === value) && value && h('div', { className: 'atsx-select-selection-selected-value' }, value),
       h('div', { className: 'atsx-select-search atsx-select-search--inline', hidden: !combo && !open }, h('input', { id, className: 'atsx-select-search__field', value: query, onChange: (event) => search(event.target.value), onBlur: () => { if (combo && mode !== 'query-only') setQuery(value); } }))))),
     createPortal(h('div', { id: key, className: 'atsx-select-dropdown', hidden: !open }, h('ul', { role: 'listbox', 'aria-busy': !ready }, ready && values.filter((text) => !combo || text.includes(query)).flatMap((text) => (mode === 'duplicate' ? [0, 1] : [0]).map((variant) => h('li', { key: text + variant, className: 'atsx-select-dropdown-menu-item', role: 'option', 'aria-selected': value === text, onMouseDown: (event) => event.preventDefault(), onClick: () => choose(text) }, text))))), document.body));
 }

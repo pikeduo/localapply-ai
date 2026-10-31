@@ -354,8 +354,9 @@
       if (msg.type === 'learning:cancelOverwrite') { item.overwritePreview = null; return { cancelled:true }; }
       check(item.revision === db.revision, '资料已变化，请重新扫描并预览');
       if (['learning:overwriteContext','learning:previewOverwrite','learning:confirmOverwrite'].includes(msg.type)) {
-        check(!item.batch && !item.jobs?.size, '请先等待填写结束');
-        const task=jobFor(item,db);
+        // 直接填写在原批次内准备覆盖快照；旧校对入口仍不得插入其他正在执行的批次。
+        check(!item.jobs?.size && (!item.batch || typeof msg.batchId === 'string' && item.batch.id === msg.batchId), '请先等待填写结束');
+        const task=jobFor(item,db,msg.batchId);
         try {
           await refresh(item,db); task.check();
           if(msg.type==='learning:overwriteContext') { item.overwritePreview=null; return { records:overwriteRecords(item,db) }; }
