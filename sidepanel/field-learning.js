@@ -59,7 +59,7 @@
   // 悬浮处理区保留原控件手填，并为AI提供就近入口；不重新引入本地来源选择或资料编辑器。
   function pendingActions(card, row) {
     const scanId = row.field.scanId;
-    card.append(node('p', webValues.has(scanId) ? '网页内容：' + webDisplay(row, webValues.get(scanId)) : '网页内容：尚未读取', 'smart-web-value'));
+    card.append(node('p', webValues.has(scanId) ? '网页内容：' + webDisplay(row, webValues.get(scanId)) : row.webOccupied || row.webFilled ? '网页已有内容，点击“查看网页内容”可读取。' : '网页内容：尚未读取', 'smart-web-value'));
     if (row.target && row.value !== null && row.value !== '' && !row.recordBindingRequired && row.status !== 'unsupported') card.append(button('单项填写', async () => prepareFill([scanId]), 'btn smart-fill-one'));
     card.append(button('手动填写（网页原控件）', async () => { manualFields.add(scanId); cancelLearningPreview(); await request('focusField', { scanId }); $('smartStatus').textContent = '已定位网页原控件，请在网页填写；完成后勾选并统一更新。'; }, 'btn smart-manual'),
       button('查看网页内容', async () => { const result = await request('readField', { scanId }); webValues.set(scanId, result.value); manualFields.add(scanId); cancelLearningPreview(); render(); }, 'btn ghost smart-read-web'),
@@ -80,10 +80,18 @@
   function unfinished(row) { return !row.ignored && row.status !== 'success' && (!row.webFilled || row.conflict || ['failed', 'unsupported'].includes(row.status)); }
   // 用户正在手填或勾选待学习的行即使网页已填也保留，避免失去确认入口。
   function pendingVisible(row) { return !row.ignored && (unfinished(row) || learningSelected.has(row.field.scanId) || manualFields.has(row.field.scanId)); }
+  // 已有内容与控件选中验证分开提示，不能把搜索词当成功，也不能把来源未配对说成网页为空。
+  function pendingState(row) {
+    if (!row.conflict && !['failed', 'unsupported'].includes(row.status)) {
+      if (row.webFilled) return { label: '网页已填写', reason: '网页填写状态已确认；需要记住此字段时，勾选后统一保存。' };
+      if (row.webOccupied) return { label: '网页已有内容 · 待核验', reason: '已检测到网页内容，尚未确认控件的有效选中状态，请核对网页原控件。' + (row.recordBindingRequired || row.field.kind && !row.target ? ' 若需再次自动填写，请先确定对应哪段经历。' : '') };
+    }
+    return { label: row.status === 'needs_confirmation' ? '待处理' : labels[row.status], reason: row.reason.replace('未知字段，请手动选择或主动使用 AI', '本地未识别此字段，可手动填写或使用 AI').replace('存在多段经历，请明确选择来源', '存在多段经历，暂不能确定对应记录，请选择对应经历后填写').replace('填写前仍需确认', '可直接填写') };
+  }
   // 明确说明已有内容和来源配对的保护，避免将零写入误报为扫描失败或建议无谓调用AI。
   function fillGuidance() {
     if (!directFill || !current) return '';
-    const pairing = current.rows.filter((row) => !row.ignored && row.recordBindingRequired).length;
+    const pairing = current.rows.filter((row) => unfinished(row) && row.recordBindingRequired).length;
     return pairing ? ` ${pairing} 个字段尚不能确定对应哪段经历，请选择对应经历后填写。` : '';
   }
   // 仅卡片的会话缺失可主动恢复；导航、档案变化及其他业务错误仍按原保护拒绝。
@@ -241,7 +249,7 @@
   async function prepareFill(ids, includeDynamic = false) {
     fillIds = ids.filter((id) => current.rows.some((row) => row.field.scanId === id && row.target && row.value !== null && row.value !== ''));
     if (!fillIds.length) {
-      if (directFill) { $('smartStatus').textContent = `填写完成：本次成功填入 0 个字段，剩余 ${current.rows.filter(unfinished).length} 个未完成；请为待处理项选择来源或补充资料。`; return; }
+      if (directFill) { $('smartStatus').textContent = `填写完成：本次成功填入 0 个字段，剩余 ${current.rows.filter(unfinished).length} 个待处理；请核对已有内容，或为缺值项选择来源及补充资料。`; return; }
       throw new Error('没有可填写的已选字段，请先选择来源或补充资料');
     }
     if (directFill) { await fillSelected([...fillIds], $('smartRememberAfter').checked, includeDynamic, new Map(), { overwriteExisting: true }); return; }
@@ -257,13 +265,13 @@
     excluded.replaceChildren(); excluded.hidden = !current;
     if (!current) { if ($('smartMetrics')) $('smartMetrics').replaceChildren(); if (directFill) { $('smartMatchedHeading').hidden = true; $('smartUnknownHeading').hidden = true; } return; }
     if ($('smartMetrics')) {
-      const metrics = directFill ? [['成功填入', current.rows.filter((row) => row.status === 'success').length], ['网页已有', current.rows.filter((row) => row.webFilled && row.status !== 'success' && !row.conflict).length], ['未完成', current.rows.filter(unfinished).length], ['缺资料', current.rows.filter((row) => unfinished(row) && row.status === 'missing_value').length]] : [['可填写', current.rows.filter((row) => row.status === 'matched').length], ['待处理', current.rows.filter((row) => row.status === 'needs_confirmation').length], ['缺资料', current.rows.filter((row) => row.status === 'missing_value').length], ['已排除', current.excluded?.length || 0]];
+      const metrics = directFill ? [['成功填入', current.rows.filter((row) => row.status === 'success').length], ['网页已填', current.rows.filter((row) => row.webFilled && row.status !== 'success' && !row.conflict).length], ['待处理', current.rows.filter(unfinished).length], ['已有内容待核验', current.rows.filter((row) => unfinished(row) && row.webOccupied && !row.webFilled).length], ['缺资料', current.rows.filter((row) => unfinished(row) && !row.webOccupied && row.status === 'missing_value').length]] : [['可填写', current.rows.filter((row) => row.status === 'matched').length], ['待处理', current.rows.filter((row) => row.status === 'needs_confirmation').length], ['缺资料', current.rows.filter((row) => row.status === 'missing_value').length], ['已排除', current.excluded?.length || 0]];
       $('smartMetrics').replaceChildren(...metrics.map(([label, count]) => node('span', `${label} ${count}`, 'metric')));
     }
     $('smartMatched').hidden = !!$('smartOnlyUnknown')?.checked;
     excluded.append(node('summary', `已排除控件 ${current.excluded?.length || 0} 项 / 本次忽略 ${current.rows.filter((row) => row.ignored).length} 项`));
     for (const item of current.excluded || []) excluded.append(node('p', `${item.label} · ${item.category} · ${item.reason}`));
-    $('smartStatus').textContent = directFill ? `扫描 ${current.rows.length} 个字段，成功填入 ${current.rows.filter((row) => row.status === 'success').length} 个，剩余 ${current.rows.filter(unfinished).length} 个未完成。${current.notice || ''}${fillGuidance()}` : `${current.origin} · 扫描 ${current.rows.length} 个字段；可填写 ${current.rows.filter((row) => row.status === 'matched').length}，待处理 ${current.rows.filter((row) => !row.target && !row.ignored).length}，缺资料 ${current.rows.filter((row) => row.status === 'missing_value').length}；资料版本 ${current.revision} ${current.notice || ''}`; $('smartStatus').className = 'muted';
+    $('smartStatus').textContent = directFill ? `扫描 ${current.rows.length} 个字段，成功填入 ${current.rows.filter((row) => row.status === 'success').length} 个，剩余 ${current.rows.filter(unfinished).length} 个待处理。${current.notice || ''}${fillGuidance()}` : `${current.origin} · 扫描 ${current.rows.length} 个字段；可填写 ${current.rows.filter((row) => row.status === 'matched').length}，待处理 ${current.rows.filter((row) => !row.target && !row.ignored).length}，缺资料 ${current.rows.filter((row) => row.status === 'missing_value').length}；资料版本 ${current.revision} ${current.notice || ''}`; $('smartStatus').className = 'muted';
     if (directFill) {
       $('smartMatchedHeading').hidden = $('smartOnlyUnknown').checked || !current.rows.some((row) => pendingVisible(row) && row.source !== 'unknown');
       $('smartUnknownHeading').hidden = !current.rows.some((row) => pendingVisible(row) && row.source === 'unknown');
@@ -272,9 +280,10 @@
       if (directFill && !row.ignored && !pendingVisible(row)) continue;
       if (row.ignored) { const ignored = node('p', row.field.label + ' · 本次已忽略'); ignored.append(button('恢复此字段', async () => update(await request('ignore', { scanId: row.field.scanId, ignored: false })))); excluded.append(ignored); continue; }
       const card = node('article', '', 'card smart-row'); card.dataset.scanId = row.field.scanId; card.dataset.status = row.status;
-      const title = node('h4', row.field.label + ' · ' + (directFill && row.status === 'needs_confirmation' ? '待处理' : labels[row.status])); const check = node('input'); check.type = 'checkbox'; check.className = 'smart-check'; check.setAttribute('aria-label', '选择填写' + row.field.label); check.checked = selected.has(row.field.scanId); check.disabled = !row.target || ['unsupported','missing_value'].includes(row.status);
+      const state = directFill ? pendingState(row) : { label: labels[row.status], reason: row.reason };
+      const title = node('h4', row.field.label + ' · ' + state.label); const check = node('input'); check.type = 'checkbox'; check.className = 'smart-check'; check.setAttribute('aria-label', '选择填写' + row.field.label); check.checked = selected.has(row.field.scanId); check.disabled = !row.target || ['unsupported','missing_value'].includes(row.status);
       if (directFill) { check.setAttribute('aria-label', '添加并记住字段：' + row.field.label); check.checked = learningSelected.has(row.field.scanId); check.disabled = busy; }
-      check.addEventListener('change', () => { const selection = directFill ? learningSelected : selected; check.checked ? selection.add(row.field.scanId) : selection.delete(row.field.scanId); if (directFill) cancelLearningPreview(); }); const heading = node('div', '', 'smart-row-heading'); heading.append(check, title); card.append(heading, node('p', [row.field.group, row.field.type, directFill ? row.reason.replace('未知字段，请手动选择或主动使用 AI', '本地未识别此字段，可手动填写或使用 AI').replace('存在多段经历，请明确选择来源', '存在多段经历，暂不能确定对应记录，请在网页手动填写').replace('填写前仍需确认', '可直接填写') : row.reason].filter(Boolean).join(' · '), 'muted'));
+      check.addEventListener('change', () => { const selection = directFill ? learningSelected : selected; check.checked ? selection.add(row.field.scanId) : selection.delete(row.field.scanId); if (directFill) cancelLearningPreview(); }); const heading = node('div', '', 'smart-row-heading'); heading.append(check, title); card.append(heading, node('p', [row.field.group, row.field.type, state.reason].filter(Boolean).join(' · '), 'muted'));
       // 固定原因和扫描序号可与导出日志对照，不显示候选内容或网页实际值。
       if (row.diagnostic?.message && row.status !== 'success') {
         card.append(node('p', `诊断 #${row.diagnostic.fieldNumber}：${row.diagnostic.message}`, 'muted'));
@@ -524,7 +533,7 @@
     if(started!==generation)return;
     if(outcome?.cancelled&&current){try{update(await request('session'));}catch{}}
     if (directFill) pending = current.rows.filter((row) => unfinished(row) && row.status === 'needs_confirmation').length;
-    $('smartStatus').textContent=`${outcome?.cancelled?'已停止填写':success||failed?'填写完成':'本次未写入字段'}：本次成功填入 ${success} 个字段，失败/不支持 ${failed}，需确认 ${pending}${directFill?`，剩余 ${current.rows.filter(unfinished).length} 个未完成`:''}。未提交申请。${current.notice||''}${fillGuidance()}`;
+    $('smartStatus').textContent=`${outcome?.cancelled?'已停止填写':success||failed?'填写完成':'本次未写入字段'}：本次成功填入 ${success} 个字段，失败/不支持 ${failed}，需确认 ${pending}${directFill?`，剩余 ${current.rows.filter(unfinished).length} 个待处理`:''}。未提交申请。${current.notice||''}${fillGuidance()}`;
   }
   $('smartFillConfirm')?.addEventListener('click', () => task(async () => {
     if (!$('smartFillConsent').checked) throw new Error('请先核对填写预览并勾选确认');
@@ -568,7 +577,8 @@
     const id = current.sessionId; const startedActivity = activity; polling = true;
     try {
       const view = await request('session', {}, false);
-      if (current?.sessionId === id && startedActivity === activity && !busy && !document.querySelector('.smart-editor[open]') && (view.revision !== current.revision || JSON.stringify(view.rows.map((row) => [row.field, directFill && row.webFilled, row.status])) !== JSON.stringify(current.rows.map((row) => [row.field, directFill && row.webFilled, row.status])))) update(view);
+      // 有内容但尚未选中的输入也须刷新提示，不能只观察已完成标记。
+      if (current?.sessionId === id && startedActivity === activity && !busy && !document.querySelector('.smart-editor[open]') && (view.revision !== current.revision || JSON.stringify(view.rows.map((row) => [row.field, directFill && row.webFilled, directFill && row.webOccupied, row.status])) !== JSON.stringify(current.rows.map((row) => [row.field, directFill && row.webFilled, directFill && row.webOccupied, row.status])))) update(view);
     } catch (error) { if (current?.sessionId === id && startedActivity === activity && !busy) { if (canReconnect(error)) retainResults(); else { $('smartStatus').textContent = error.message; $('smartStatus').className = 'err'; } } }
     finally { polling = false; }
   }, 2000);
