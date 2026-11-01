@@ -36,6 +36,8 @@
       for (const key of ['durationMs','count','success','failed','unsupported','needsConfirmation','recordBindingRequired','webOccupied','unknown']) if (Number.isFinite(detail[key]) && detail[key] >= 0) row[key] = Math.min(Math.round(detail[key]), 10000000);
       if (['application','login','other'].includes(detail.kind)) row.kind = detail.kind;
       if (detail.error) Object.assign(row, errorInfo(detail.error));
+      // 飞书专项沿用本地日志，只保存固定原因与计数，不保存 Schema 正文和企业作用域。
+      if (operation.startsWith('learning.') && detail.schema) { const schema = global.LocalApplyFeishuSchema?.diagnostic(detail.schema); if (schema) row.schema = schema; }
       if (operation === 'learning.fill') { const fill = fillInfo(detail.fill); if (fill) row.fill = fill; }
       const job = pending.then(async () => { const data = await storage.get(KEY); const cutoff = Date.now() - 7 * 86400000;
         const rows = Array.isArray(data[KEY]) ? data[KEY].filter((item) => Date.parse(item.at) >= cutoff).slice(-(MAX_ROWS - 1)) : [];

@@ -1,0 +1,2041 @@
+{
+  "tenant_info": {
+    "tenant_id_md5": "c8b35ee74d63a0008fa8859630bcce47",
+    "tenant_name": "沐瞳科技"
+  },
+  "website_info": {
+    "id": "7371003171236383027",
+    "path": "campus",
+    "name": {
+      "zh_cn": "校招官网（新版）",
+      "en_us": null,
+      "i18n": "校招官网（新版）"
+    },
+    "resume_form_config": [
+      {
+        "name": "resume_attachment",
+        "required": true,
+        "fields": [
+          {
+            "name": "resume_attachment",
+            "required": false,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "basic_info",
+        "required": true,
+        "fields": [
+          {
+            "name": "name",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "mobile",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "email",
+            "required": true,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "education",
+        "required": true,
+        "fields": [
+          {
+            "name": "school",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "degree",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "major",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "time_period",
+            "required": true,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "career",
+        "required": false,
+        "fields": [
+          {
+            "name": "company",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "position",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "time_period",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "desc",
+            "required": false,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "internship",
+        "required": false,
+        "fields": [
+          {
+            "name": "company",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "position",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "time_period",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "desc",
+            "required": false,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "project",
+        "required": false,
+        "fields": [
+          {
+            "name": "name",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "role",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "time_period",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "link",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "desc",
+            "required": false,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "works",
+        "required": false,
+        "fields": [
+          {
+            "name": "link",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "attachment",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "desc",
+            "required": false,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "award",
+        "required": false,
+        "fields": [
+          {
+            "name": "name",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "time",
+            "required": false,
+            "fields": []
+          },
+          {
+            "name": "desc",
+            "required": false,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "language",
+        "required": false,
+        "fields": [
+          {
+            "name": "language",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "proficiency",
+            "required": true,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "self_evaluation",
+        "required": false,
+        "fields": [
+          {
+            "name": "self_evaluation",
+            "required": false,
+            "fields": []
+          }
+        ]
+      },
+      {
+        "name": "sns",
+        "required": false,
+        "fields": [
+          {
+            "name": "platform",
+            "required": true,
+            "fields": []
+          },
+          {
+            "name": "link",
+            "required": true,
+            "fields": []
+          }
+        ]
+      }
+    ],
+    "resume_form_schema": {
+      "version": 5,
+      "id": "7371005075927517478",
+      "scenario_list": [
+        8
+      ],
+      "object_list": [
+        {
+          "id": "6948400932971727111",
+          "attributes": {
+            "required": true,
+            "repeatable": false,
+            "visible": true,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 13000,
+            "field_type": {
+              "name": "attachment_resume_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "简历",
+              "en_us": "Resume"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400932972103943",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400932971727111",
+                "field_type": {
+                  "name": "attachment_resume",
+                  "type": "attachment",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "简历附件",
+                  "en_us": "Attachment"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400919621617957",
+          "attributes": {
+            "required": true,
+            "repeatable": false,
+            "visible": true,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 1000,
+            "field_type": {
+              "name": "basic_info",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "基本信息",
+              "en_us": "Basic Information"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400919621929253",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "name",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "姓名",
+                  "en_us": "Name"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400919622240549",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "mobile",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "手机号码",
+                  "en_us": "Mobile"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400930987493645",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 3000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "email",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "邮箱",
+                  "en_us": "Email"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400930988116237",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 5000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "experience_years",
+                  "type": "number",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "工作年限",
+                  "en_us": "Experience"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400930988427533",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 6000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "age",
+                  "type": "number",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "年龄",
+                  "en_us": "Age"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400930988837133",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 7000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "gender",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "性别",
+                  "en_us": "Gender"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931570551071",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 8000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "nationality",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "国籍（地区）",
+                  "en_us": "Nationality(region)"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931570862367",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 9000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "current_city",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "所在地点",
+                  "en_us": "Current location"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931571173663",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 10000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "hometown_city",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "家乡",
+                  "en_us": "Hometown"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400930987804941",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 4000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "identification",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "个人证件",
+                  "en_us": "Identification"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931571484959",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 11000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "preferred_city_list",
+                  "type": "multi_select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "期望工作地点",
+                  "en_us": "Preferred work location"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400933337762078",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": true,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 12000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "birthday",
+                  "type": "date_select",
+                  "settings": {
+                    "date_precision": 2,
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "出生日期",
+                  "en_us": "Date of birth"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400933508712711",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": true,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 13000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "marital_status",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": [
+                      {
+                        "name": {
+                          "zh_cn": "已婚",
+                          "en_us": "Married"
+                        },
+                        "value": "1",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "未婚",
+                          "en_us": "Single"
+                        },
+                        "value": "2",
+                        "active_status": 1
+                      }
+                    ]
+                  }
+                },
+                "name": {
+                  "zh_cn": "婚姻状况",
+                  "en_us": "Marital status"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400933509024007",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": true,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 15000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "name": "current_home_address",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "请精确到门牌号",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "家庭住址",
+                  "en_us": "Home address"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "7123089650394384644",
+              "attributes": {
+                "required": true,
+                "repeatable": true,
+                "visible": true,
+                "is_customized": true,
+                "is_predefined": false,
+                "active_status": 1,
+                "order": 17000,
+                "parent": "6948400919621617957",
+                "field_type": {
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": [
+                      {
+                        "name": {
+                          "zh_cn": "沐瞳校招官网"
+                        },
+                        "value": "1",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "沐瞳微信公众号"
+                        },
+                        "value": "2",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "应届生求职网"
+                        },
+                        "value": "3",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "牛客网"
+                        },
+                        "value": "4",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "BOSS直聘"
+                        },
+                        "value": "5",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "脉脉"
+                        },
+                        "value": "6",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "51job"
+                        },
+                        "value": "7",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "实习僧"
+                        },
+                        "value": "8",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "老师推荐"
+                        },
+                        "value": "9",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "求职机构推荐"
+                        },
+                        "value": "10",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "内部推荐"
+                        },
+                        "value": "11",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "校招官网/微信公众号"
+                        },
+                        "value": "12",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "沐瞳微信公众号"
+                        },
+                        "value": "13",
+                        "active_status": 2
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "内部推荐"
+                        },
+                        "value": "14",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "校园大使"
+                        },
+                        "value": "15",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "游鲨游戏圈"
+                        },
+                        "value": "16",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "学校老师推荐"
+                        },
+                        "value": "17",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "学校社团推荐"
+                        },
+                        "value": "18",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "校园就业网/BBS/公众号"
+                        },
+                        "value": "19",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "校内线下广告"
+                        },
+                        "value": "20",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "小红书"
+                        },
+                        "value": "21",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "牛客网"
+                        },
+                        "value": "22",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "其他招聘网站"
+                        },
+                        "value": "23",
+                        "active_status": 1
+                      },
+                      {
+                        "name": {
+                          "zh_cn": "Gameoffer"
+                        },
+                        "value": "24",
+                        "active_status": 1
+                      }
+                    ]
+                  }
+                },
+                "name": {
+                  "zh_cn": "获取职位信息的渠道"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400931571796255",
+          "attributes": {
+            "required": true,
+            "repeatable": true,
+            "visible": true,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 2000,
+            "field_type": {
+              "name": "education_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "教育经历",
+              "en_us": "Education"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400931759212837",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400931571796255",
+                "field_type": {
+                  "name": "school",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "学校名称",
+                  "en_us": "School name"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931759524133",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400931571796255",
+                "field_type": {
+                  "name": "degree",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "学历",
+                  "en_us": "Degree"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931760458021",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 5000,
+                "parent": "6948400931571796255",
+                "field_type": {
+                  "name": "field_of_study",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "专业",
+                  "en_us": "Field of study"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931760146725",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 4000,
+                "parent": "6948400931571796255",
+                "field_type": {
+                  "name": "start_end_time",
+                  "type": "date_range",
+                  "settings": {
+                    "date_precision": 2,
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "起止时间",
+                  "en_us": "Start & end date"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931759835429",
+              "attributes": {
+                "required": true,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 3000,
+                "parent": "6948400931571796255",
+                "field_type": {
+                  "name": "education_type",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "学历类型",
+                  "en_us": "Education Type"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931760769317",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 6000,
+                "parent": "6948400931571796255",
+                "field_type": {
+                  "name": "academic_ranking",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "成绩排名",
+                  "en_us": "Grades ranking"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400931767830797",
+          "attributes": {
+            "required": false,
+            "repeatable": true,
+            "visible": false,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 3000,
+            "field_type": {
+              "name": "career_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "工作经历",
+              "en_us": "Work Experience"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400931768142093",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400931767830797",
+                "field_type": {
+                  "name": "company",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "公司名称",
+                  "en_us": "Company name"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931768453389",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 3000,
+                "parent": "6948400931767830797",
+                "field_type": {
+                  "name": "title",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "职位名称",
+                  "en_us": "Title"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931768764685",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400931767830797",
+                "field_type": {
+                  "name": "start_end_time",
+                  "type": "date_range",
+                  "settings": {
+                    "date_precision": 2,
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "起止时间",
+                  "en_us": "Start & end date"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400931769075981",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 4000,
+                "parent": "6948400931767830797",
+                "field_type": {
+                  "name": "desc",
+                  "type": "long_text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "描述",
+                  "en_us": "Description"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400932162013477",
+          "attributes": {
+            "required": false,
+            "repeatable": true,
+            "visible": true,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 4000,
+            "field_type": {
+              "name": "internship_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "实习经历",
+              "en_us": "Internship Experience"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400932162324773",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400932162013477",
+                "field_type": {
+                  "name": "company",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "公司名称",
+                  "en_us": "Company name"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932162636069",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 3000,
+                "parent": "6948400932162013477",
+                "field_type": {
+                  "name": "title",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "职位名称",
+                  "en_us": "Title"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932162947365",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400932162013477",
+                "field_type": {
+                  "name": "start_end_time",
+                  "type": "date_range",
+                  "settings": {
+                    "date_precision": 2,
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "起止时间",
+                  "en_us": "Start & end date"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932163258661",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 4000,
+                "parent": "6948400932162013477",
+                "field_type": {
+                  "name": "desc",
+                  "type": "long_text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "描述",
+                  "en_us": "Description"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400932166125837",
+          "attributes": {
+            "required": false,
+            "repeatable": true,
+            "visible": true,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 5000,
+            "field_type": {
+              "name": "project_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "项目经历",
+              "en_us": "Project Experience"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400932166437133",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400932166125837",
+                "field_type": {
+                  "name": "name",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "项目名称",
+                  "en_us": "Project name"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932166748429",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 3000,
+                "parent": "6948400932166125837",
+                "field_type": {
+                  "name": "role",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "项目角色",
+                  "en_us": "Title"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932167371021",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400932166125837",
+                "field_type": {
+                  "name": "start_end_time",
+                  "type": "date_range",
+                  "settings": {
+                    "date_precision": 2,
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "起止时间",
+                  "en_us": "Start & end date"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932167059725",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 4000,
+                "parent": "6948400932166125837",
+                "field_type": {
+                  "name": "link",
+                  "type": "link",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "项目链接",
+                  "en_us": "Project URL"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932547725582",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 5000,
+                "parent": "6948400932166125837",
+                "field_type": {
+                  "name": "desc",
+                  "type": "long_text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "描述",
+                  "en_us": "Description"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400932548036878",
+          "attributes": {
+            "required": false,
+            "repeatable": true,
+            "visible": true,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 6000,
+            "field_type": {
+              "name": "works_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "作品",
+              "en_us": "Work Samples"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400932548659470",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400932548036878",
+                "field_type": {
+                  "name": "link",
+                  "type": "link",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "作品链接",
+                  "en_us": "URL"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932548348174",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400932548036878",
+                "field_type": {
+                  "name": "attachment",
+                  "type": "attachment",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "作品附件",
+                  "en_us": "Attachment"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932548970766",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 3000,
+                "parent": "6948400932548036878",
+                "field_type": {
+                  "name": "desc",
+                  "type": "long_text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "描述",
+                  "en_us": "Description"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400932549282062",
+          "attributes": {
+            "required": false,
+            "repeatable": true,
+            "visible": true,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 7000,
+            "field_type": {
+              "name": "award_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "获奖",
+              "en_us": "Honor and Awards"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400932749281549",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400932549282062",
+                "field_type": {
+                  "name": "name",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "获奖名称",
+                  "en_us": "Title"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932749592845",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400932549282062",
+                "field_type": {
+                  "name": "date",
+                  "type": "date_select",
+                  "settings": {
+                    "date_precision": 1,
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "获奖时间",
+                  "en_us": "Date"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932749904141",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 3000,
+                "parent": "6948400932549282062",
+                "field_type": {
+                  "name": "desc",
+                  "type": "long_text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "描述",
+                  "en_us": "Description"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400932750215437",
+          "attributes": {
+            "required": false,
+            "repeatable": true,
+            "visible": true,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 10000,
+            "field_type": {
+              "name": "language_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "语言能力",
+              "en_us": "Language Skills"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400932750526733",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400932750215437",
+                "field_type": {
+                  "name": "language",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "语言",
+                  "en_us": "Language"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932967303432",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400932750215437",
+                "field_type": {
+                  "name": "proficiency",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "精通程度",
+                  "en_us": "Proficiency"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400932967614728",
+          "attributes": {
+            "required": false,
+            "repeatable": false,
+            "visible": true,
+            "is_customized": true,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 11000,
+            "field_type": {
+              "name": "self_evaluation",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "自我评价",
+              "en_us": "Self Introduction"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400932967926024",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": true,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400932967614728",
+                "field_type": {
+                  "name": "self_evaluation",
+                  "type": "long_text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "自我评价",
+                  "en_us": "Self Introduction"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6948400932968237320",
+          "attributes": {
+            "required": false,
+            "repeatable": true,
+            "visible": false,
+            "is_customized": false,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 12000,
+            "field_type": {
+              "name": "sns_list",
+              "type": "group"
+            },
+            "name": {
+              "zh_cn": "社交账号",
+              "en_us": "SNS"
+            }
+          },
+          "children": [
+            {
+              "id": "6948400932971415815",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "6948400932968237320",
+                "field_type": {
+                  "name": "sns_type",
+                  "type": "select",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "社交平台",
+                  "en_us": "Social media"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6948400932968548616",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": false,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 2000,
+                "parent": "6948400932968237320",
+                "field_type": {
+                  "name": "link",
+                  "type": "text",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "URL / ID",
+                  "en_us": "URL / ID"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "6963920671412177189",
+          "attributes": {
+            "required": false,
+            "repeatable": true,
+            "visible": true,
+            "is_customized": true,
+            "is_predefined": false,
+            "active_status": 1,
+            "order": 16000,
+            "field_type": {
+              "type": "group",
+              "settings": {
+                "i18n_placeholder": "",
+                "options": []
+              }
+            },
+            "name": {
+              "zh_cn": "求职意向"
+            }
+          },
+          "children": [
+            {
+              "id": "6963920671412488485",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": true,
+                "is_predefined": false,
+                "active_status": 1,
+                "order": 16000,
+                "parent": "6963920671412177189",
+                "field_type": {
+                  "type": "text"
+                },
+                "name": {
+                  "zh_cn": "当前薪资（每月固定部分+浮动部分）"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6963920671412799781",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": true,
+                "is_predefined": false,
+                "active_status": 1,
+                "order": 16000,
+                "parent": "6963920671412177189",
+                "field_type": {
+                  "type": "text"
+                },
+                "name": {
+                  "zh_cn": "期望薪资（月收入+年收入）"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6963920671413111077",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": true,
+                "is_predefined": false,
+                "active_status": 1,
+                "order": 16000,
+                "parent": "6963920671412177189",
+                "field_type": {
+                  "type": "date_range",
+                  "settings": {
+                    "date_precision": 1,
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "最快到岗时间"
+                }
+              },
+              "children": []
+            },
+            {
+              "id": "6963921442195409166",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": true,
+                "is_customized": true,
+                "is_predefined": false,
+                "active_status": 1,
+                "order": 17000,
+                "parent": "6963920671412177189",
+                "field_type": {
+                  "type": "text"
+                },
+                "name": {
+                  "zh_cn": "最快入职时间"
+                }
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "7309840366681114919",
+          "attributes": {
+            "required": true,
+            "repeatable": false,
+            "visible": false,
+            "is_customized": true,
+            "is_predefined": true,
+            "active_status": 1,
+            "order": 5100,
+            "field_type": {
+              "name": "person_image",
+              "type": "group",
+              "settings": {
+                "i18n_placeholder": "",
+                "options": []
+              }
+            },
+            "name": {
+              "zh_cn": "个人形象",
+              "en_us": "Profile photo"
+            }
+          },
+          "children": [
+            {
+              "id": "7309840369364142348",
+              "attributes": {
+                "required": false,
+                "repeatable": false,
+                "visible": false,
+                "is_customized": true,
+                "is_predefined": true,
+                "active_status": 1,
+                "order": 1000,
+                "parent": "7309840366681114919",
+                "field_type": {
+                  "name": "person_picture",
+                  "type": "image",
+                  "settings": {
+                    "i18n_placeholder": "",
+                    "options": []
+                  }
+                },
+                "name": {
+                  "zh_cn": "个人照片",
+                  "en_us": "Profile image"
+                }
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

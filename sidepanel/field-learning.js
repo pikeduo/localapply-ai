@@ -27,8 +27,8 @@
     const labelOf = (item) => { const options = row.field.options.filter((option) => option.value === String(item)); return options.length === 1 ? options[0].text : item; };
     return display(Array.isArray(value) ? value.map(labelOf) : labelOf(value));
   }
-  // 只有语义未确定的字段可送AI；经历未配对须由用户确认，不让模型代替配对。
-  function canAskAI(row) { return !row.target && !row.recordBindingRequired && !row.ignored && row.status !== 'unsupported'; }
+  // AI不能绕过明确的Schema关联冲突或经历配对；这些项保留网页手动操作入口。
+  function canAskAI(row) { return !row.target && !row.recordBindingRequired && !['hidden', 'ambiguous', 'control_conflict'].includes(row.field.feishu?.state) && !row.ignored && row.status !== 'unsupported'; }
   // 固定批量入口展示本次范围及数量，超过单次上限时明确说明，旧侧栏保持原界面。
   function syncAISelection() {
     if (!directFill) return;

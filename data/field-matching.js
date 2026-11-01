@@ -50,13 +50,18 @@
 
   // 仅允许经过白名单和脱敏的扫描元数据跨消息边界，绝不接受 value/html 属性。
   function validateField(field) {
-    const allowed = ['scanId', 'semanticId', 'label', 'name', 'type', 'placeholder', 'options', 'group', 'kind', 'degree', 'index', 'layout'];
+    const allowed = ['scanId', 'semanticId', 'label', 'name', 'type', 'placeholder', 'options', 'group', 'kind', 'degree', 'index', 'layout', 'feishu'];
     if (!field || Object.keys(field).some((key) => !allowed.includes(key)) || typeof field.scanId !== 'string'
       || !/^scan\.[\w.-]{1,100}$/.test(field.scanId) || !types.includes(field.type)) throw new Error('扫描字段格式错误');
     for (const key of ['label', 'name', 'placeholder', 'group']) {
       if (typeof field[key] !== 'string' || field[key] !== redact(field[key])) throw new Error('扫描元数据未脱敏或超限');
     }
     if (field.layout !== undefined && !layouts.includes(field.layout)) throw new Error('扫描复合结构格式错误');
+    // 飞书证据只在本次扫描使用，不能携带任意目标、HTML、个人值或改变旧指纹。
+    if (field.feishu !== undefined) {
+      if (!global.LocalApplyFeishuSchema) throw new Error('飞书扫描契约未加载，请刷新页面');
+      global.LocalApplyFeishuSchema.validateEvidence(field.feishu);
+    }
     if (field.semanticId !== semanticId(field) || JSON.stringify(features(field)) !== JSON.stringify({ label: field.label, type: field.type, group: field.group, kind: field.kind, degree: field.degree, index: field.index, ...(field.layout ? { layout: field.layout } : {}) })) throw new Error('扫描语义指纹错误');
     if (!Array.isArray(field.options) || field.options.length > 100 || field.options.some((option) => !option || Object.keys(option).sort().join() !== 'text,value'
       || typeof option.text !== 'string' || typeof option.value !== 'string' || option.text !== redact(option.text) || option.value !== redact(option.value))) throw new Error('扫描选项格式错误');
@@ -133,6 +138,16 @@
 
   // 精确命中必须先消除模块歧义；多目标不能借旧词典回退静默选中，旧指纹算法保持不变。
   function definitionFor(db, field) {
+    // 仅唯一关联的标准代码可推荐已有公共定义；自定义和冲突不借旧别名猜值。
+    if (field.feishu) {
+      const evidence = global.LocalApplyFeishuSchema.validateEvidence(field.feishu);
+      if (evidence.state !== 'linked') return null;
+      const kind = global.LocalApplyFeishuSchema.kinds[evidence.groupCode] || '';
+      if ((field.kind || '') !== kind) return null;
+      const fieldId = global.LocalApplyFeishuSchema.target(evidence.groupCode, evidence.fieldCode, evidence.part);
+      const definition = db.publicFieldIds.includes(fieldId) && db.fieldDefinitions.find((row) => row.fieldId === fieldId);
+      return definition ? { definition, reason: '飞书标准模块与字段代码唯一关联' } : null;
+    }
     const normalize = global.WangshenTemplates.normalizeLabel;
     const norm = normalize(field.label);
     // 申请人字段不从家庭成员取值，明确经历模块也不能套用其他模块的同名字段。
@@ -177,10 +192,15 @@
       const semantic = semanticDescriptor(field); const control = controlDescriptor(field);
       const base = { field, semantic, control, target: null, candidates: [], status: 'needs_confirmation', reason: '未知字段，请手动选择或主动使用 AI', source: 'unknown' };
       if (restricted(semantic)) return { ...base, status: 'unsupported', reason: '认证或同意条款不自动处理' };
-      if (/家庭|紧急|联系人|家属/.test(semantic.group + semantic.label)) return { ...base, reason: '联系人与申请人语义不同，请人工选择' };
+      if (/家庭|紧急|联系人|家属/.test(semantic.group + semantic.label) && !(field.feishu?.state === 'linked' && field.feishu.groupCode === 'basic_info' && field.feishu.fieldCode === 'current_home_address')) return { ...base, reason: '联系人与申请人语义不同，请人工选择' };
+      // 这类元数据已明确存在冲突或企业私有含义，保留手选，不继承旧成功状态。
+      if (field.feishu && field.feishu.state !== 'linked') {
+        const reason = { custom: '企业自定义字段，请在本页确认含义和内容', hidden: 'Schema 配置隐藏但网页显示，请人工确认', ambiguous: 'Schema 与网页控件关联不唯一，请人工确认', control_conflict: 'Schema 类型与网页控件不一致，请人工确认', unsupported: '此飞书字段尚无明确本地对应，请人工确认' }[field.feishu.state];
+        return { ...base, reason };
+      }
       const saved = memory(db, profileId, origin, field, fields, bindings);
       if (saved) return { ...base, ...saved, status: saved.target && saved.confirmed ? hasValue(valueOf(db, profileId, saved.target)?.value) ? 'matched' : 'missing_value' : 'needs_confirmation', source: 'memory' };
-      const found = definitionFor(db, semantic);
+      const found = definitionFor(db, field);
       if (!found) {
         const historyCandidates = global.LocalApplyMappingCompat?.suggest?.(db, profileId, origin, field, fields, bindings) || [];
         return historyCandidates.length ? { ...base, historyCandidates, reason: '其他网站有同语义历史来源，仅供选择；当前网站和控件尚未验证' } : base;
@@ -190,7 +210,7 @@
       const target = candidates[0];
       const privateSuggestion = !db.publicFieldIds.includes(found.definition.fieldId);
       const languageChoice = /语言能力/.test(semantic.group) && !/英语/.test(semantic.label);
-      return { ...base, target, candidates, source: privateSuggestion || languageChoice ? 'definition-suggestion' : 'local',
+      return { ...base, target, candidates, source: privateSuggestion || languageChoice ? 'definition-suggestion' : field.feishu ? 'schema' : 'local',
         reason: languageChoice ? '网页语种未明确，请先选择对应语种的本地来源；不将英语水平套用到其他语言' : privateSuggestion ? '私有字段的通用语义建议，请确认当前网站含义' : found.reason,
         status: hasValue(valueOf(db, profileId, target)?.value) ? privateSuggestion || languageChoice ? 'needs_confirmation' : 'matched' : 'missing_value' };
     });

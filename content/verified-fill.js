@@ -57,7 +57,7 @@
   // 记录会使计划失效的局部结构和候选状态；不收集整个页面 HTML 或其他字段值。
   function structure(item) {
     const type = controlOf(item).type;
-    return JSON.stringify({ field: global.FieldMatchingEngine.features(item.field), control: controlOf(item),
+    return JSON.stringify({ field: global.FieldMatchingEngine.features(item.field), control: controlOf(item), feishu: item.field.feishu || null,
       attributes: ['type', 'readonly', 'contenteditable', 'role', 'min', 'max', 'placeholder', 'aria-controls', 'aria-owns', 'aria-disabled', 'aria-readonly', 'aria-autocomplete', 'aria-haspopup', 'multiple', 'name', 'form'].map((name) => item.el.getAttribute(name)),
       candidates: ['select', 'radio', 'checkbox'].includes(type) ? global.LocalApplyNativeChoices.snapshot(item).rows?.map(({ node, ...row }) => row) || [] : [] });
   }

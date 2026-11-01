@@ -11,7 +11,7 @@ const ROOT = path.resolve(__dirname, '..');
 async function fixture() {
   const disk = {}; const calls = []; let fields = []; let url = 'https://jobs.example.test/apply'; let actual = ''; let failFill = false; let fillGate = null; let fillDiagnostic; let failVerify = false; let completion = []; let recordBlocks = []; let onAdd = () => {}; let fillContractVersion = 1;let fillSessionVersion=1;
   const context = vm.createContext({ crypto: require('node:crypto').webcrypto, TextEncoder, TextDecoder, Uint8Array, URL, Date, setTimeout, clearTimeout, AbortController, btoa, atob });
-  for (const file of ['templates','providers','key-vault','resume','field-matching','mapping-compat','fill-contract','fill-result','field-suggestions','applications','local-store','record-coordinator','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
+  for (const file of ['templates','providers','key-vault','resume','feishu-schema','field-matching','mapping-compat','fill-contract','fill-result','field-suggestions','applications','local-store','record-coordinator','field-learning','diagnostics']) vm.runInContext(fs.readFileSync(path.join(ROOT, 'data', file + '.js'), 'utf8'), context);
   const storage = { get: async (names) => structuredClone(Object.fromEntries((Array.isArray(names) ? names : [names]).map((name) => [name, disk[name]]))), set: async (values) => Object.assign(disk, structuredClone(values)), setAccessLevel: async () => {} };
   const repo = context.LocalApplyStore.createRepository(storage); const initial = await repo.readLegacy(); const configured = structuredClone(initial);
   configured.settings.model = 'synthetic-field-model'; await repo.saveLegacy(initial, configured);
@@ -668,6 +668,22 @@ test('分层第一步：扫描封套与 AI 元数据白名单保持原样', asyn
   const preview = await env.send(view, 'prepareAI'); assert.deepEqual(preview.payload.fields[0], field);
   assert.equal(preview.payload.fields[0].semantic, undefined); assert.equal(preview.payload.fields[0].control, undefined); assert.equal(env.aiCalls.length, 0);
   for (const extra of [{ semantic: view.rows[0].semantic }, { control: view.rows[0].control }, { value: '禁止传出值' }]) await assert.rejects(env.scan({ ...field, ...extra }), /扫描字段格式/);
+});
+
+// 企业配置证据只供本地匹配；主动 AI 的发送格式与个人备份仍维持既有边界。
+test('飞书 Schema：自定义候选不继承标准值，AI不发送企业作用域或Schema代码', async () => {
+  const env = await fixture(); await env.setValue('builtin.name', '合成隐私姓名');
+  const field = env.field('合成企业自定义项', { feishu: { version: 1, scope: 'fs.0123456789abcdef', key: 'fs.abcdef0123456789', groupCode: 'basic_info', fieldCode: '', state: 'custom', part: 'value' } });
+  const before = await env.repo.read(); const view = await env.scan(field); assert.equal(view.rows[0].target, null);
+  const preview = await env.send(view, 'prepareAI'); const sent = JSON.stringify(preview.payload);
+  for (const forbidden of ['feishu', 'fs.0123456789abcdef', 'basic_info', '合成隐私姓名']) assert.ok(!sent.includes(forbidden));
+  assert.equal(preview.payload.fields[0].label, field.label); assert.equal(env.aiCalls.length, 0);
+  assert.deepEqual(await env.repo.read(), before);
+  for (const state of ['hidden', 'ambiguous', 'control_conflict']) {
+    const blocked = env.field('合成冲突字段', { feishu: { ...field.feishu, state } });
+    const scan = await env.scan(blocked); await assert.rejects(env.send(scan, 'prepareAI'), /AI不能绕过此冲突/);
+  }
+  assert.equal(env.aiCalls.length, 0);
 });
 
 test('已有标准字段本地直接匹配，不调用 AI；0 和 false 不是空值', async () => {

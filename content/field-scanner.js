@@ -5,8 +5,9 @@
   const M = global.FieldMatchingEngine;
   const A = global.LocalApplyFieldAdapters;
   const documentId = crypto.randomUUID();
-  const nodeIds = new WeakMap();
+  let nodeIds = new WeakMap(); let schemaStamp = '';
   const registry = new Map();
+  const schemaLinks = new WeakMap();
   let granted = false; let currentUrl = ''; let lastSignature = ''; let timer;
 
   // 过滤认证及未激活步骤，不读取它们的值；ARIA 隐藏、inert 与禁用分组同样禁止扫描。
@@ -95,6 +96,9 @@
   function scan(authorize = false) {
     if (authorize) { granted = true; currentUrl = location.href; }
     if (!granted || location.href !== currentUrl) { granted = false; throw new Error('请先主动授权扫描当前招聘页面'); }
+    // 配置/路由/脚本载体变化时轮换本页句柄，使后台旧意图和私有计划不能沿用新 Schema。
+    const schema = global.LocalApplyFeishuSchemaBridge?.readCurrentPageSchema();
+    if (schema && schema.stamp !== schemaStamp) { nodeIds = new WeakMap(); schemaStamp = schema.stamp; }
     const all = controls().slice(0, 500); const excluded = [];
     const found = all.filter((el) => {
       const reason = A.exclusion(el, label(el));
@@ -129,7 +133,15 @@
     fields.forEach((field) => { const count = counts.get(field.semanticId) || 0; counts.set(field.semanticId, count + 1); if (count) field.index += count; field.semanticId = M.semanticId(field); });
     const login = !!document.querySelector('input[type="password"],input[autocomplete="one-time-code"],input[id*="captcha" i],input[name*="captcha" i],input[placeholder*="验证码"]') && fields.length <= 3 && !fields.some((field) => field.kind);
     if (login) { fields.length = 0; registry.clear(); }
-    return { documentId, origin: location.origin, fields, excluded, authorized: true, notice: login ? '登录/验证页面不执行智能填表，请进入招聘申请页' : '' };
+    // 只有当前可见扫描项参与 Schema 关联，不从配置创建控件或按字段顺序配对经历。
+    const schemaDiagnostic = schema && global.LocalApplyFeishuSchemaBridge.associate(schema, [...registry.values()]);
+    // 同一脚本下的模块/标签冲突也必须废弃旧句柄，不能让旧成功或旧意图跨关联变化复用。
+    for (const item of [...registry.values()]) {
+      const link = JSON.stringify(item.field.feishu || null); const previous = schemaLinks.get(item.el);
+      if (previous !== undefined && previous !== link) { registry.delete(item.field.scanId); nodeIds.delete(item.el); item.field.scanId = id(item.el); registry.set(item.field.scanId, item); }
+      schemaLinks.set(item.el, link);
+    }
+    return { documentId, origin: location.origin, fields, excluded, authorized: true, ...(schemaDiagnostic && schemaDiagnostic.status !== 'not_applicable' ? { schemaDiagnostic } : {}), notice: login ? '登录/验证页面不执行智能填表，请进入招聘申请页' : '' };
   }
 
   // 每次值操作前重新核对授权、语义和节点引用，动态替换控件必须重新扫描确认。
@@ -198,10 +210,11 @@
   // 重复模块只投影已扫描的字段引用，不输出节点、按钮或个人字段值。
   function recordBlocks() {
     if (!granted || currentUrl !== location.href) throw new Error('请先主动扫描当前招聘页面');
+    const schema = global.LocalApplyFeishuSchemaBridge?.readCurrentPageSchema();
     return recordStructures().flatMap(({ block, kind, records, add }) => {
       // 已有超多记录仍可扫描单项，只停止自动增补，不能让整页扫描报错。
       if (records.length > 20) return [];
-      return [{ blockId: id(block), kind, canAdd: add.length === 1, records: records.map((node) => ({ recordId: id(node), scanIds: [...registry.values()].filter((item) => node.contains(item.el)).map((item) => item.field.scanId) })) }];
+      return [{ blockId: id(block), kind, canAdd: add.length === 1 && (!schema || global.LocalApplyFeishuSchemaBridge.canAdd(block, kind, schema)), records: records.map((node) => ({ recordId: id(node), scanIds: [...registry.values()].filter((item) => node.contains(item.el)).map((item) => item.field.scanId) })) }];
     });
   }
 
@@ -209,6 +222,7 @@
   async function addRecord(blockId, expectedDocument, { signal } = {}) {
     if(signal?.aborted)throw new Error('已取消添加记录');
     if (!granted || currentUrl !== location.href || documentId !== expectedDocument) throw new Error('页面已变化，请重新扫描');
+    if (global.LocalApplyFeishuSchemaBridge && global.LocalApplyFeishuSchemaBridge.readCurrentPageSchema().stamp !== schemaStamp) throw new Error('飞书配置已变化，请重新扫描');
     const structure = recordStructures().find(({ block }) => nodeIds.get(block) === blockId); const block = structure?.block;
     const group = recordBlocks().find((item) => item.blockId === blockId);
     if (!block || !group?.canAdd || group.records.length >= 20) throw new Error('该模块不能安全添加记录或已达到上限');
@@ -219,6 +233,7 @@
       await new Promise((resolve) => setTimeout(resolve, 50));
       if(signal?.aborted)throw new Error('已取消添加记录');
       if (!granted || documentId!==expectedDocument || !block.isConnected || currentUrl !== location.href) throw new Error('添加时页面结构已变化，请重新扫描');
+      if (global.LocalApplyFeishuSchemaBridge && global.LocalApplyFeishuSchemaBridge.readCurrentPageSchema().stamp !== schemaStamp) throw new Error('添加时飞书配置已变化，已停止');
       const latest = recordStructures().find((item) => item.block === block); const count = latest?.records.length;
       if (!latest || structure.records.some((record) => !latest.records.includes(record))) break;
       if (count === group.records.length + 1) return;

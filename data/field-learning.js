@@ -46,7 +46,7 @@
       try { response = await browser.tabs.sendMessage(tabId, message); }
       catch (error) {
         if (!inject) throw new Error('页面未连接，请重新授权扫描');
-        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/field-matching.js', 'data/value-resolver.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/applications.js', 'content/atsx-controls.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/fill-session.js', 'content/detector.js', 'content/filler.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'] });
+        await browser.scripting.executeScript({ target: { tabId }, files: ['data/templates.js', 'data/feishu-schema.js', 'data/field-matching.js', 'data/value-resolver.js', 'data/fill-contract.js', 'data/fill-result.js', 'data/applications.js', 'content/atsx-controls.js', 'content/feishu-schema.js', 'content/field-adapters.js', 'content/field-scanner.js', 'content/fill-session.js', 'content/detector.js', 'content/filler.js', 'content/controls/verification.js', 'content/controls/text.js', 'content/controls/native.js', 'content/controls/date-phone.js', 'content/controls/dropdown.js', 'content/controls/address.js', 'content/controls/registry.js', 'content/verified-fill.js', 'content/page-presence.js', 'content/job-recognizer.js', 'content/floatbar.js'] });
         response = await browser.tabs.sendMessage(tabId, message);
       }
       check(response?.ok, response?.error || '页面操作失败'); return response;
@@ -122,7 +122,7 @@
         rows: item.rows.map((row) => ({ ...row, value: row.target ? M.valueOf(db, item.profileId, row.target)?.value ?? null : null })),
         sources: item.sources, entries: db.entries.filter((entry) => entry.profileId === item.profileId).map(({ entryId, kind, order }) => ({ entryId, kind, order })),
         definitions: db.fieldDefinitions.filter((def) => item.sources.some((source) => source.fieldId === def.fieldId)),
-        excluded: item.excluded || [], canUndo: !!undo };
+        excluded: item.excluded || [], ...(item.schemaDiagnostic ? { schemaDiagnostic: item.schemaDiagnostic } : {}), canUndo: !!undo };
     }
     // 完成/占用只接受当前项布尔标记；兼容旧快照，但禁止将实际值或矛盾标记带入会话。
     function completion(item, snapshot) {
@@ -155,6 +155,7 @@
       const response = await pageMessage(item.tabId, { type: 'learning:scan', authorize: false });
       check(response.snapshot.documentId === item.documentId, '页面已刷新，请重新授权扫描');
       response.snapshot.fields.forEach(M.validateField);
+      item.schemaDiagnostic = global.LocalApplyFeishuSchema?.diagnostic(response.snapshot.schemaDiagnostic) || null;
       // 新增记录会改变字段集合；保留稳定字段的人工来源与验证，仅清除依赖旧扫描的 AI 建议和确认令牌。
       if (JSON.stringify(response.snapshot.fields) !== JSON.stringify(item.fields)) { item.rows.forEach((row) => { delete row.suggestion; }); item.aiPreview = null; item.valuePreview = null; }
       rebuild(item, db, response.snapshot.fields); completion(item, response.snapshot);
@@ -322,7 +323,8 @@
         snapshot.fields.forEach(M.validateField);
         const item = { sessionId: crypto.randomUUID(), createdAt: Date.now(), tabId: msg.tabId, url: tab.url, origin: snapshot.origin,
           fillSessionVersion:snapshot.fillSessionVersion,
-          documentId: snapshot.documentId, fillContractVersion: snapshot.fillContractVersion, profileId, fields: snapshot.fields, excluded: snapshot.excluded || [], notice: snapshot.notice || '' };
+          documentId: snapshot.documentId, fillContractVersion: snapshot.fillContractVersion, profileId, fields: snapshot.fields, excluded: snapshot.excluded || [], notice: snapshot.notice || '',
+          schemaDiagnostic: global.LocalApplyFeishuSchema?.diagnostic(snapshot.schemaDiagnostic) || null };
         rebuild(item, db); completion(item, snapshot); sessions.set(item.sessionId, item); return view(item, db);
       }
       if (msg.type === 'learning:rules') { const db = await repository.read(); return { rules: db.mappingRules, scopes:global.LocalApplyMappingCompat?.scopes(db) || [], definitions: db.fieldDefinitions, profiles: db.profiles, entries: db.entries, revision: db.revision, canUndo: !!undo }; }
@@ -448,7 +450,8 @@
       if (msg.type === 'learning:prepareRecords') { check(msg.confirmed === true, '补充网页经历需要用户主动操作');const task=jobFor(item,db,msg.batchId);try{task.check();return await prepareRecords(item,db,task);}finally{task.done();} }
       if (msg.type === 'learning:prepareAI') {
         check(Array.isArray(msg.scanIds) && msg.scanIds.length > 0 && msg.scanIds.length <= 20 && new Set(msg.scanIds).size === msg.scanIds.length, '请勾选 1–20 个需要 AI 识别的未知字段');
-        const fields = msg.scanIds.map((scanId) => { const row = rowOf(item, scanId); check(!row.recordBindingRequired, '字段含义已识别，请先在“覆盖网页已填内容”中配对经历，AI不能代替来源确认'); check(!row.target && !row.ignored && row.status !== 'unsupported', '只能选择未忽略的未知字段使用 AI'); return row.field; });
+        // 配置作用域和企业字段代码仅用于本地证据，AI 仍只收既有脱敏元数据。
+        const fields = msg.scanIds.map((scanId) => { const row = rowOf(item, scanId); check(!row.recordBindingRequired, '字段含义已识别，请先在“覆盖网页已填内容”中配对经历，AI不能代替来源确认'); check(!['hidden', 'ambiguous', 'control_conflict'].includes(row.field.feishu?.state), '飞书配置与控件关联尚未确认，请在网页手动操作；AI不能绕过此冲突'); check(!row.target && !row.ignored && row.status !== 'unsupported', '只能选择未忽略的未知字段使用 AI'); if (!row.field.feishu) return row.field; const { feishu, ...metadata } = row.field; return metadata; });
         const settings = await repository.readAiSettings(); const provider = global.LocalApplyProviders.resolve(settings);
         check(settings.model, '请先配置模型；不配置 AI 仍可手动匹配');
         // 只在用户主动预览时按上下文分配目录预算，省略范围必须可见，不改变本地匹配。
