@@ -29,11 +29,13 @@
   }
   // 只有语义未确定的字段可送AI；经历未配对须由用户确认，不让模型代替配对。
   function canAskAI(row) { return !row.target && !row.recordBindingRequired && !row.ignored && row.status !== 'unsupported'; }
-  // 勾选可限定本次AI范围；没有勾选时按钮直接处理当前未知项，不再要求二次同意。
+  // 固定批量入口展示本次范围及数量，超过单次上限时明确说明，旧侧栏保持原界面。
   function syncAISelection() {
     if (!directFill) return;
-    const count = current?.rows.filter((row) => canAskAI(row) && aiSelected.has(row.field.scanId)).length || 0;
-    $('smartAI').textContent = count ? `AI 识别并填写已勾选字段（${count}）` : 'AI 识别并填写（可选）';
+    const eligible = current?.rows.filter(canAskAI) || []; const selectedCount = eligible.filter((row) => aiSelected.has(row.field.scanId)).length;
+    const total = selectedCount || eligible.length; const count = Math.min(total, 20);
+    $('smartAI').textContent = selectedCount ? `AI 批量识别已勾选字段（${count}）` : current ? `AI 批量识别${total > 20 ? '未知字段' : '全部未知字段'}（${count}）` : 'AI 批量识别并填写';
+    if ($('smartAIHint')) $('smartAIHint').textContent = (selectedCount ? '本次仅识别 AI 勾选项。' : '无需逐项点击；默认识别全部未知字段，勾选后仅识别已选项。') + (total > 20 ? ` 本批处理前 20 项，共 ${total} 项。` : ' 每批最多 20 项。') + ' 有本地资料时自动填写。';
   }
   // 建议缺值或来源不唯一时说明原因；可用建议直接进入原填写管线，不弹出采用确认。
   function pendingSuggestion(card, row) {
@@ -67,8 +69,8 @@
     if (row.recordBindingRequired) card.append(button('选择对应经历', async () => openOverwrite(), 'btn ghost smart-pair-record'));
     if (canAskAI(row)) {
       const label = node('label'); const input = node('input'); input.type = 'checkbox'; input.className = 'smart-ai-check'; input.checked = aiSelected.has(scanId);
-      input.addEventListener('change', () => { input.checked ? aiSelected.add(scanId) : aiSelected.delete(scanId); syncAISelection(); }); label.append(input, document.createTextNode(' 加入本次 AI 识别范围')); card.append(label);
-      card.append(button('AI 识别此字段', async () => { aiSelected.add(scanId); input.checked = true; syncAISelection(); await prepareAI([scanId]); }, 'btn ghost smart-ai-start'));
+      input.addEventListener('change', () => { input.checked ? aiSelected.add(scanId) : aiSelected.delete(scanId); syncAISelection(); }); label.append(input, document.createTextNode(' 加入顶部批量 AI 识别')); card.append(label);
+      card.append(button('仅 AI 识别此字段', async () => { aiSelected.add(scanId); input.checked = true; syncAISelection(); await prepareAI([scanId]); }, 'btn ghost smart-ai-start'));
     }
     pendingSuggestion(card, row);
   }
@@ -113,6 +115,7 @@
     busy = true;
     $('tab-smart').setAttribute('aria-busy', 'true');
     $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = true; });
+    if (directFill) $('smartAI').disabled = true; // 固定批量按钮位于字段滚动区外，同样遵守任务忙碌状态。
     if (directFill) $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = true; });
     try { return await operation(); }
     catch (error) {
@@ -125,7 +128,7 @@
         if (started === generation) { $('smartStatus').textContent = error.message; $('smartStatus').className = error.code === 'stale_field' ? 'muted' : 'err'; if (directFill) $('smartStatus').scrollIntoView({ block: 'center' }); }
       }
     }
-    finally { busy = false; $('tab-smart').setAttribute('aria-busy', 'false'); $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = button.id === 'smartUndo' ? !rulesView?.canUndo : false; }); if (directFill) $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = false; }); }
+    finally { busy = false; $('tab-smart').setAttribute('aria-busy', 'false'); $('tab-smart').querySelectorAll('button').forEach((button) => { button.disabled = button.id === 'smartUndo' ? !rulesView?.canUndo : false; }); if (directFill) { $('smartAI').disabled = false; $('tab-smart').querySelectorAll('.smart-check').forEach((input) => { input.disabled = false; }); } }
   }
   // 所有业务仍经后台校验；区分旧后台误分派和单项扫描失效，恢复不转移旧字段许可。
   async function request(type, payload = {}, allowReconnect = true) {

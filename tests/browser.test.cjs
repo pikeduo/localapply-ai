@@ -30,15 +30,28 @@ test('悬浮AI辅助填写：点击发送、直接填写、取消与缺值保护
     async function identify(label){await card(label).locator('.smart-ai-start').click();await idle();assert.match(await frame.locator('#smartStatus').textContent(),/^AI 返回 [0-9]+ 条/);}
     await frame.locator('#smartScan').click();await idle();const before=(await rpc(options,'localapply:read')).database;
     let dialogs=0; page.on('dialog',async(dialog)=>{dialogs++;await dialog.dismiss();});
+    // 固定入口须在长列表滚动时仍可见，切换到简历或日志后不占用对应视图。
+    await t.test('批量AI主按钮固定显示全部数量，说明范围且滚动后仍可见',async()=>{
+      // 四个新增字段加原表单的“测试反馈”共五项；已填未知项不在列表显示，但仍属于后台可识别范围。
+      const count=5; assert.equal(await frame.locator('.smart-ai-check').count(),4);
+      assert.equal(await frame.locator('#smartAI').textContent(),`AI 批量识别全部未知字段（${count}）`);assert.match(await frame.locator('#smartAIHint').textContent(),/无需逐项点击/);assert.doesNotMatch(await frame.locator('#smartAI').getAttribute('class'),/ghost/);
+      const top=await frame.locator('#smartAI').evaluate((element)=>element.getBoundingClientRect().top);await frame.locator('#panelScroll').evaluate((element)=>{element.scrollTop=element.scrollHeight;});
+      assert.equal(await frame.locator('#smartAI').evaluate((element)=>element.getBoundingClientRect().top),top);assert.equal(await frame.locator('#smartAI').isVisible(),true);
+      await page.setViewportSize({width:375,height:700});assert.equal(await frame.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth),true);await page.screenshot({path:path.join(root,'ai-batch-toolbar.png')});await page.setViewportSize({width:1280,height:900});
+      await frame.locator('#resumeTab').click();assert.equal(await frame.locator('#smartAIBatch').isVisible(),false);await frame.locator('#logsTab').click();assert.equal(await frame.locator('#smartAIBatch').isVisible(),false);await frame.locator('#autoTab').click();assert.equal(await frame.locator('#smartAIBatch').isVisible(),true);
+      await frame.locator('#panelScroll').evaluate((element)=>{element.scrollTop=0;});assert.equal(api.calls.length,0);
+    });
     await t.test('单项填写直接覆盖，不显示差异确认或调用AI',async()=>{
       await card('姓名').locator('.smart-manual').click();await page.locator('#syntheticName').fill('合成网站解析姓名');await card('姓名').getByRole('button',{name:'单项填写',exact:true}).click();await idle();
       assert.equal(await page.locator('#syntheticName').inputValue(),'合成直接姓名');assert.equal(dialogs,0);assert.equal(api.calls.length,0);assert.deepEqual((await rpc(options,'localapply:read')).database,before);
     });
     await t.test('勾选只限定范围，点击立即发送，可停止且晚到结果不填写',async()=>{
-      await card('便捷联系号码').locator('.smart-ai-check').check();assert.match(await frame.locator('#smartAI').textContent(),/（1）/);assert.equal(api.calls.filter((call)=>call.fieldAI).length,0);
-      api.modelApi.fieldHold=true;const started=new Promise((resolve)=>{api.modelApi.onField=resolve;});await card('便捷联系号码').locator('.smart-ai-start').click();await started;
+      await card('便捷联系号码').locator('.smart-ai-check').check();await card('合成选项偏好').locator('.smart-ai-check').check();assert.equal(await frame.locator('#smartAI').textContent(),'AI 批量识别已勾选字段（2）');assert.equal(api.calls.filter((call)=>call.fieldAI).length,0);
+      api.modelApi.fieldHold=true;const started=new Promise((resolve)=>{api.modelApi.onField=resolve;});await frame.locator('#smartAI').click();await started;
+      assert.equal(await frame.locator('#smartAI').isDisabled(),true);assert.deepEqual(api.calls.filter((call)=>call.fieldAI).at(-1).payload.fields.map((field)=>field.label).sort(),['便捷联系号码','合成选项偏好'].sort());
       assert.equal(await frame.locator('#smartAIReview').isVisible(),false);await frame.locator('#smartAICancel').click();await idle();api.modelApi.releaseField();api.modelApi.fieldHold=false;
       assert.equal(await page.locator('#assist-phone').inputValue(),'');assert.deepEqual((await rpc(options,'localapply:read')).database,before);
+      await card('便捷联系号码').locator('.smart-ai-check').uncheck();await card('合成选项偏好').locator('.smart-ai-check').uncheck();assert.equal(await frame.locator('#smartAI').isDisabled(),false);assert.match(await frame.locator('#smartAI').textContent(),/全部未知字段/);
     });
     await t.test('AI点击即填写文本和原生下拉，覆盖已有内容且无弹窗',async()=>{
       await page.locator('#assist-phone').fill('13900000000');await identify('便捷联系号码');assert.equal(await page.locator('#assist-phone').inputValue(),'13800000000');
