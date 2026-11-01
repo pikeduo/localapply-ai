@@ -68,15 +68,18 @@
     if (shown) await refresh(); scroll.scrollTop = scrollPositions.get(view) || 0;
   }
   // 折叠保留整个 iframe 会话及未确认草稿，恢复后不重新发模型请求。
-  async function minimize() { const next = !collapsed; const result = await sendMessage('panel:layout', { collapsed: next }); if (!result.ok) throw new Error(result.error); collapsed = next; document.body.classList.toggle('collapsed', collapsed); $('panelMinimize').textContent = collapsed ? '+' : '−'; $('panelMinimize').setAttribute('aria-label', collapsed ? '展开卡片' : '折叠卡片'); $('panelMinimize').setAttribute('aria-expanded', String(!collapsed)); }
-  // 标题拖动使用真实指针和屏幕坐标，布局命令经后台校验；串行合并移动避免消息堆积。
+  async function minimize() { const next = !collapsed; const result = await sendMessage('panel:layout', { collapsed: next }); if (!result.ok) throw new Error(result.error); collapsed = next; document.body.classList.toggle('collapsed', collapsed); $('panelMinimize').textContent = collapsed ? '+' : '−'; $('panelMinimize').setAttribute('aria-label', collapsed ? '展开卡片' : '折叠卡片'); $('panelMinimize').setAttribute('aria-expanded', String(!collapsed)); $('panelDrag').title = collapsed ? '点击展开卡片，按住可拖动' : '拖动标题栏移动卡片'; }
+  // 折叠标题可直接点击展开；真实指针超过阈值才拖动，布局命令串行合并并经后台校验。
   function initDrag() {
-    let pointer; let last; let pending = { dx: 0, dy: 0 }; let sending = false;
+    let pointer; let start; let last; let moved = false; let pending = { dx: 0, dy: 0 }; let sending = false;
     // 后台忙碌期间累计位移，仅发送数字，不传递网页结构或私人值。
     async function drain() { if (sending) return; sending = true; try { while (pending.dx || pending.dy) { const move = { dx: Math.max(-2000, Math.min(2000, pending.dx)), dy: Math.max(-2000, Math.min(2000, pending.dy)) }; pending.dx -= move.dx; pending.dy -= move.dy; const result = await sendMessage('panel:layout', move); if (!result.ok) { pending = { dx: 0, dy: 0 }; throw new Error(result.error); } } } catch (error) { await report(error); } finally { sending = false; } }
-    $('panelDrag').addEventListener('pointerdown', (event) => { if (!event.isTrusted || event.button !== 0 || event.target.closest('button')) return; pointer = event.pointerId; last = { x: event.screenX, y: event.screenY }; $('panelDrag').setPointerCapture(pointer); });
-    $('panelDrag').addEventListener('pointermove', (event) => { if (pointer !== event.pointerId || !last) return; pending.dx += event.screenX - last.x; pending.dy += event.screenY - last.y; last = { x: event.screenX, y: event.screenY }; drain(); });
-    $('panelDrag').addEventListener('pointerup', () => { pointer = last = null; }); $('panelDrag').addEventListener('lostpointercapture', () => { pointer = last = null; });
+    // 阻止标题图片的原生拖拽和文字选择，避免浏览器取消本次指针捕获。
+    $('panelDrag').addEventListener('pointerdown', (event) => { if (!event.isTrusted || event.button !== 0 || event.target.closest('button')) return; event.preventDefault(); pointer = event.pointerId; start = last = { x: event.screenX, y: event.screenY }; moved = false; $('panelDrag').setPointerCapture(pointer); });
+    $('panelDrag').addEventListener('pointermove', (event) => { if (pointer !== event.pointerId || !last) return; if (!moved && Math.hypot(event.screenX - start.x, event.screenY - start.y) < 5) return; moved = true; pending.dx += event.screenX - last.x; pending.dy += event.screenY - last.y; last = { x: event.screenX, y: event.screenY }; drain(); });
+    $('panelDrag').addEventListener('pointerup', () => { pointer = start = last = null; }); $('panelDrag').addEventListener('lostpointercapture', () => { pointer = start = last = null; });
+    // 拖动产生的 click 不展开，操作按钮自行处理，避免“+”冒泡后再次折叠。
+    $('panelDrag').addEventListener('click', (event) => { if (!event.isTrusted || event.target.closest('button') || moved || !collapsed) return; minimize().catch(report); });
   }
   for (const view of ['auto', 'resume', 'logs']) $(view + 'Tab').addEventListener('click', () => tab(view).catch(report));
   // 三个标签遵循循环方向键与 Home/End 导航，不依赖鼠标或页面滚动位置。

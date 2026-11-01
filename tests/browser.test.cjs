@@ -809,6 +809,27 @@ test('卡片导航与小球：固定导航、实时日志、收起拖动及重�
       await frame.locator('#autoTab').click(); assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), session); assert.equal(await frame.locator('#panelScroll').evaluate((element) => element.scrollTop), scroll);
       await frame.locator('#autoTab').focus(); await page.keyboard.press('End'); assert.equal(await frame.locator('#logsTab').getAttribute('aria-selected'), 'true'); await page.keyboard.press('Home'); assert.equal(await frame.locator('#autoTab').getAttribute('aria-selected'), 'true');
     });
+    // 使用真实鼠标覆盖品牌、空白和拖动，不依靠脚本派发事件模拟用户点击。
+    await t.test('－ 最小化后点击标题或空白直接展开，拖动不误展开且保留扫描会话', async () => {
+      const session = await frame.locator('#tab-smart').getAttribute('data-session-id'); const token = new URL(frame.url()).searchParams.get('token');
+      const rows = await frame.locator('.smart-row').count();
+      await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => document.body.classList.contains('collapsed'));
+      await frame.locator('.panel-brand').click(); await frame.waitForFunction(() => !document.body.classList.contains('collapsed'));
+      await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => document.body.classList.contains('collapsed'));
+      await frame.locator('#panelDrag').click({ position: { x: 140, y: 8 } }); await frame.waitForFunction(() => !document.body.classList.contains('collapsed'));
+      await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => document.body.classList.contains('collapsed'));
+      const before = await page.locator('#wsa-floatbar-host').boundingBox(); const header = await frame.locator('#panelDrag').boundingBox();
+      await page.mouse.move(header.x + 30, header.y + 25); await page.mouse.down(); await page.mouse.move(header.x - 50, header.y + 70, { steps: 8 }); await page.mouse.up();
+      await page.waitForFunction((left) => document.getElementById('wsa-floatbar-host').getBoundingClientRect().left < left - 50, before.x);
+      assert.equal(await frame.locator('body').evaluate((element) => element.classList.contains('collapsed')), true);
+      await frame.locator('.panel-brand').click(); await frame.waitForFunction(() => !document.body.classList.contains('collapsed'));
+      // 原“+”入口仍只展开一次，标题点击在展开状态不会反向折叠。
+      await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => document.body.classList.contains('collapsed'));
+      await frame.locator('#panelMinimize').click(); await frame.waitForFunction(() => !document.body.classList.contains('collapsed'));
+      await frame.locator('.panel-brand').click(); assert.equal(await frame.locator('body').evaluate((element) => element.classList.contains('collapsed')), false);
+      assert.equal(await frame.locator('#tab-smart').getAttribute('data-session-id'), session); assert.equal(new URL(frame.url()).searchParams.get('token'), token); assert.equal(await frame.locator('.smart-row').count(), rows);
+      await page.screenshot({ path: path.join(root, 'panel-minimize-click.png') });
+    });
     await t.test('日志打开即读取，新增记录自动显示且实际保存在 chrome.storage.local', async () => {
       await frame.locator('#logsTab').click(); await frame.waitForFunction(() => document.getElementById('logsOutput').textContent.includes('panel.open'));
       await rpc(options, 'diagnostics:uiError', { error: 'synthetic-private-error-value' });
