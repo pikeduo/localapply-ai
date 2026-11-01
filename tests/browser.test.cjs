@@ -1756,6 +1756,58 @@ for (const withExtension of [true, false]) {
   });
 }
 
+// 通过本机网站的真实 favicon 缓存验证旧记录显示，不依赖企业网站或第三方图标服务。
+test('已投职位图标：浏览器图标、失败兜底与旧记录兼容', { timeout: 60000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'application-icons-')); const requests = [];
+  const logo = await fs.readFile(path.join(ROOT, 'icons/icon48.png'));
+  const server = http.createServer((request, response) => {
+    requests.push(request.url);
+    if (request.url === '/company.png' || request.url === '/favicon.ico') { response.writeHead(200, { 'Content-Type': 'image/png' }); response.end(logo); return; }
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); response.end('<!doctype html><html><head><title>合成岗位</title><link rel="icon" type="image/png" href="/company.png"></head><body><h1>合成岗位图标测试</h1></body></html>');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); const base = 'http://127.0.0.1:' + server.address().port; let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const page = await context.newPage(); const url = `chrome-extension://${extensionId}/options/options.html#applications`;
+    await page.goto(url); await page.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const source = await context.newPage(); await source.goto(base + '/jobs/synthetic-icon');
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, source.url());
+    await page.waitForFunction(async ({ tabId, logoUrl }) => (await chrome.tabs.get(tabId)).favIconUrl === logoUrl, { tabId, logoUrl: base + '/company.png' });
+    await source.close();
+    // 普通 v5 岗位只保存原有属性，旧记录无需再次访问网站或新增图标字段。
+    const ids = await page.evaluate(async (jobUrl) => {
+      const revision = (await dataRequest('localapply:read')).database.revision;
+      const saved = await dataCommand('saveApplication', { newRound: false, confirmed: true, record: { companyName: '合成图标公司', jobTitle: '合成开发岗位', jobUrl } }, revision);
+      const noUrl = await dataCommand('saveApplication', { newRound: false, confirmed: true, record: { companyName: '无链接公司', jobTitle: '合成待补充岗位' } }, saved.revision);
+      return [saved.result.applicationId, noUrl.result.applicationId];
+    }, base + '/jobs/synthetic-icon');
+    const before = (await rpc(page, 'localapply:read')).database; const requestCount = requests.length;
+    const record = page.locator(`.application-record[data-application-id="${ids[0]}"]`); const noUrl = page.locator(`.application-record[data-application-id="${ids[1]}"]`);
+    await page.locator('#appDataTools > summary').click(); await page.locator('#appRefresh').click(); await page.locator('#appDataTools > summary').click();
+    await t.test('已有记录直接显示缓存图标，不修改Schema或请求外部图片', async () => {
+      await record.locator('.application-company-icon').waitFor({ state: 'visible' });
+      assert.ok(await record.locator('img').evaluate((image) => image.complete && image.naturalWidth > 0));
+      const iconUrl = new URL(await record.locator('img').getAttribute('src'));
+      assert.equal(iconUrl.protocol, 'chrome-extension:'); assert.equal(iconUrl.host, extensionId); assert.equal(iconUrl.pathname, '/_favicon/'); assert.equal(iconUrl.searchParams.get('pageUrl'), base + '/jobs/synthetic-icon');
+      assert.equal(before.schemaVersion, 5); assert.deepEqual((await rpc(page, 'localapply:read')).database, before); assert.equal(requests.length, requestCount);
+      assert.equal(await noUrl.locator('img').count(), 0); assert.equal(await noUrl.locator('.application-company-mark').textContent(), '无');
+      await page.screenshot({ path: path.join(testRoot, 'applications-company-icons.png'), fullPage: true });
+    });
+    await t.test('图标加载失败恢复公司首字，刷新后可重新显示图标', async () => {
+      await record.locator('img').evaluate((image) => { image.src = chrome.runtime.getURL('icons/synthetic-missing.png'); });
+      await record.locator('img').waitFor({ state: 'detached' });
+      assert.equal(await record.locator('.application-company-mark > span').isVisible(), true); assert.equal(await record.locator('.application-company-mark').textContent(), '合');
+      await page.locator('#appDataTools > summary').click(); await page.locator('#appRefresh').click(); await page.locator('#appDataTools > summary').click(); await record.locator('.application-company-icon').waitFor({ state: 'visible' });
+      await page.reload(); await record.locator('.application-company-icon').waitFor({ state: 'visible' });
+      assert.deepEqual((await rpc(page, 'localapply:read')).database, before); assert.equal(requests.length, requestCount);
+    });
+  } finally {
+    if (context) await context.close(); await new Promise((resolve) => server.close(resolve));
+    await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
 // 参考看板布局使用合成岗位验证范围、菜单和抽屉，不执行参考 HTML 或请求企业图片。
 for (const withExtension of [true, false]) {
   test(`已投职位工作台：${withExtension ? '扩展' : 'file://'}范围、导出选择、抽屉和响应布局`, { timeout: 90000 }, async (t) => {

@@ -47,6 +47,10 @@ body:has([data-workspace-page="applications"]:not([hidden])) .wrap { max-width: 
 .application-record:hover { border-color: var(--line-strong); box-shadow: 0 5px 16px #10243812; }
 .application-card-main { display: flex; align-items: flex-start; gap: 10px; }
 .application-company-mark { display: grid; place-items: center; flex: 0 0 38px; width: 38px; height: 38px; border-radius: 10px; color: var(--brand); background: var(--brand-weak); font-size: 18px; font-weight: 650; }
+/* 图标保持原比例，白底兼容深色标志；加载完成前保留首字，避免卡片出现空白或破图。 */
+.application-company-mark.has-icon { background: #fff; box-shadow: inset 0 0 0 1px var(--line); }
+.application-company-icon { display: block; width: 28px; height: 28px; object-fit: contain; }
+.application-company-mark > [hidden] { display: none; }
 .application-open { flex: 1; min-width: 0; border: 0; padding: 0; background: none; color: var(--ink); text-align: left; cursor: pointer; font: inherit; }
 .application-open strong, .application-open span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .application-open strong { font-size: 14px; line-height: 1.5; margin-bottom: 4px; }

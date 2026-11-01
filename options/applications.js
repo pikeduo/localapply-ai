@@ -28,13 +28,27 @@
   }
   // 批量导出只使用当前筛选结果中显式勾选的项；未选择时导出当前筛选结果。
   function exportRows() { const visible = rows(); return selected.size ? visible.filter((row) => selected.has(row.applicationId)) : visible; }
-  // 卡片优先展示职位、公司和日期，企业标记仅用本地首字，不请求外部标志或图片。
+  // 优先读取浏览器本地缓存的网站图标；文件页、无链接或加载失败时保留公司首字，不请求第三方图标服务。
+  function companyMark(record) {
+    const mark = node('span', '', 'application-company-mark'); mark.setAttribute('aria-hidden', 'true');
+    const fallback = node('span', Array.from(record.companyName.trim())[0] || '企'); mark.append(fallback);
+    if (location.protocol !== 'chrome-extension:' || !global.chrome?.runtime?.id || !record.jobUrl) return mark;
+    try {
+      const url = new URL(chrome.runtime.getURL('_favicon/')); url.searchParams.set('pageUrl', A.cleanUrl(record.jobUrl)); url.searchParams.set('size', '64');
+      const image = node('img', '', 'application-company-icon'); image.alt = ''; image.hidden = true; image.referrerPolicy = 'no-referrer';
+      image.addEventListener('load', () => { if (image.naturalWidth) { image.hidden = false; fallback.hidden = true; mark.classList.add('has-icon'); } }, { once: true });
+      image.addEventListener('error', () => { image.remove(); fallback.hidden = false; mark.classList.remove('has-icon'); }, { once: true });
+      mark.append(image); image.src = url.href;
+    } catch { /* 无效地址或不可用的浏览器图标服务不影响岗位列表。 */ }
+    return mark;
+  }
+  // 卡片优先展示职位、公司和日期，网站图标仅用于视觉标记，不修改本地岗位数据。
   function card(record) {
     const box = node('article', '', 'application-record'); box.dataset.applicationId = record.applicationId;
     const check = node('input', '', 'application-export-check'); check.type = 'checkbox'; check.checked = selected.has(record.applicationId); check.setAttribute('aria-label', '选择导出 · ' + record.companyName + ' · ' + record.jobTitle); check.title = '选择此职位用于导出';
     check.addEventListener('change', () => { if (check.checked) selected.add(record.applicationId); else selected.delete(record.applicationId); invalidateExport(); });
     const open = node('button', '', 'application-open'); open.type = 'button'; open.append(node('strong', record.jobTitle), node('span', record.companyName)); open.addEventListener('click', () => openEditor(record.applicationId).catch((error) => message(error.message, true)));
-    const mark = node('span', Array.from(record.companyName.trim())[0] || '企', 'application-company-mark'); mark.setAttribute('aria-hidden', 'true');
+    const mark = companyMark(record);
     const top = node('div', '', 'application-card-main'); top.append(mark, open, check);
     const footer = node('div', '', 'application-card-footer'); footer.append(node('span', (record.appliedAt ? '投递于 ' : '保存于 ') + new Date(record.appliedAt || record.createdAt).toLocaleDateString('zh-CN')), node('span', '第 ' + record.round + ' 轮'));
     box.append(top, node('span', A.statusLabel(record.status), 'application-status'), node('p', [record.location || '地点待补充', record.jobSource, record.employmentType].filter(Boolean).join(' · '), 'application-card-meta'), footer);

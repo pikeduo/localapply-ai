@@ -29,6 +29,7 @@
   "permissions": [
     "storage",
     "tabs",
+    "favicon",
     "downloads",
     "scripting"
   ],
