@@ -3669,6 +3669,68 @@ test('无扩展的 file:// 模式：持久化、模型、PDF、备份和并发�
   }
 });
 
+// 在真实扩展隔离环境复现标题/泛词/跨表单误报；全部页面及资料均为本地合成内容。
+test('简历页检测：普通页面不误报、明确申请表与动态组件仍可识别', { timeout: 60000 }, async (t) => {
+  const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(testRoot, 'presence-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`);
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/login-mock.html');
+    const tabId = await worker.evaluate(async (url) => (await chrome.tabs.query({})).find((tab) => tab.url === url).id, page.url());
+    // 仅替换测试页面正文并安装读取探针，保留内容脚本的观察器和封闭提示组件。
+    async function render(title, html) {
+      await page.evaluate(({ title, html }) => {
+        document.title = title; document.body.innerHTML = html; window.__presenceValueReads = 0;
+        for (const element of document.querySelectorAll('input,textarea,select')) Object.defineProperty(element, 'value', { get() { window.__presenceValueReads++; return '禁止读取的合成值'; } });
+      }, { title, html });
+      // 通过隔离世界执行正式检测函数；动态显隐另外验证观察器自动触发，不依赖手动调用。
+      return worker.evaluate(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: () => LocalApplyPagePresence.inspect() }))[0].result, tabId);
+    }
+    const cases = [
+      ['招聘标题中的普通控件', '招聘简历资讯 · Career', '<h1>招聘简历资讯</h1><form><input aria-label="主题"><input aria-label="备注"><textarea aria-label="内容"></textarea></form>', 'other', 3],
+      ['招聘站联系表单', 'Company Careers', '<h1>Careers</h1><form><h2>联系我们</h2><input aria-label="姓名"><input type="email" aria-label="邮箱"><textarea aria-label="留言"></textarea></form>', 'other', 3],
+      ['简历教程中的联系表单', '如何填写简历', '<h1>如何填写简历</h1><form><input aria-label="姓名"><input type="tel" aria-label="联系电话"><input type="email" aria-label="邮箱"></form>', 'other', 3],
+      ['项目管理字段', '项目管理', '<form><input aria-label="项目编号"><input aria-label="项目负责人"><input aria-label="项目进度"></form>', 'other', 3],
+      ['普通个人设置', '个人设置', '<form><h2>个人资料</h2><input aria-label="姓名"><input type="tel"><input type="email"><input aria-label="出生日期"></form>', 'other', 4],
+      ['分散在不同表单的字段', '用户中心', '<form><input aria-label="毕业院校"></form><form><input aria-label="专业"></form><form><input aria-label="联系电话"></form>', 'other', 3],
+      ['同类字段不能重复凑数', '用户中心', '<form><input aria-label="本科毕业院校"><input aria-label="硕士毕业院校"><input aria-label="博士毕业院校"></form>', 'other', 3],
+      ['嵌套控件不能重复凑数', '职位申请', '<form><h2>职位申请</h2><input aria-label="姓名"><div role="combobox" aria-label="联系电话"><input aria-label="联系电话"></div></form>', 'other', 2],
+      ['基本联系方式申请表', '企业招聘', '<form><h2>应聘登记</h2><input aria-label="姓名"><input type="tel"><input type="email"></form>', 'application', 3],
+      ['明确投递按钮的简短表单', '企业招聘', '<form><input aria-label="姓名"><input type="tel"><input type="email"><button type="submit">提交申请</button></form>', 'application', 3],
+      ['无招聘标题的简历字段', '用户中心', '<form><input aria-label="本科毕业院校"><input aria-label="硕士专业"><input aria-label="联系电话"></form>', 'application', 3],
+      ['无原生form的教育模块', '用户中心', '<section><h2>教育经历</h2><input aria-label="学校名称"><input aria-label="学历"><input aria-label="专业"></section>', 'application', 3],
+      ['匿名ARIA外壳保留内部标签', '用户中心', '<form><div role="combobox"><input aria-label="学校名称"></div><div role="combobox"><input aria-label="学历"></div><input aria-label="专业"></form>', 'application', 3],
+      ['分组标题不覆盖字段标签', '用户中心', '<fieldset><legend>毕业院校</legend><label>学校名称<input></label><label>专业<input></label><label>联系电话<input></label></fieldset>', 'application', 3]
+    ];
+    for (const [name, title, html, kind, count] of cases) await t.test(name, async () => {
+      assert.deepEqual(await render(title, html), { kind, count });
+      assert.equal(await page.locator('#wsa-floatbar-host').isVisible(), kind === 'application');
+      assert.equal(await page.evaluate(() => __presenceValueReads), 0);
+      assert.equal((await options.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'wsa:getState' }), tabId)).state.authorized, false);
+    });
+    await t.test('动态表单显示和隐藏会自动更新提示', async () => {
+      assert.equal((await render('用户中心', '<form id="presence-form" hidden><input aria-label="毕业院校"><input aria-label="专业"><input aria-label="联系电话"></form>')).kind, 'other');
+      await page.locator('#presence-form').evaluate((form) => { form.hidden = false; });
+      await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
+      await page.screenshot({ path: path.join(testRoot, 'presence-detected-application.png') });
+      await page.locator('#presence-form').evaluate((form) => { form.hidden = true; });
+      await page.locator('#wsa-floatbar-host').waitFor({ state: 'hidden' });
+      assert.equal(await page.evaluate(() => __presenceValueReads), 0);
+      assert.equal(api.calls.length, 0);
+    });
+    await t.test('飞书结构的React经历表单保留自动检测', async () => {
+      await page.goto(api.base + '/test-pages/feishu-atsx-controls.html'); await page.locator('.resumeEditForm-item').first().waitFor();
+      await page.locator('#wsa-floatbar-host').waitFor({ state: 'visible' });
+      assert.equal((await options.evaluate((tabId) => chrome.tabs.sendMessage(tabId, { type: 'wsa:floatingProbe' }), tabId)).presence.kind, 'application');
+      assert.equal(api.calls.length, 0);
+    });
+  } finally {
+    if (context) await context.close(); await new Promise((resolve) => api.server.close(resolve));
+    await fs.rm(profile, { recursive: true, force: true, maxRetries: 3 });
+  }
+});
+
 // 真实网页中的扩展 iframe：自动类型检测不授予字段读取权限，所有资料仍由确认流程控制。
 test('悬浮卡片：自动检测、填写、预览、日志与安全边界', { timeout: 90000 }, async (t) => {
   const testRoot = path.join(ROOT, '.browser-tests'); await fs.mkdir(testRoot, { recursive: true });
