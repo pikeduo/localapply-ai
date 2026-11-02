@@ -138,6 +138,33 @@ test('飞书 Schema 专项：真实扩展、多版配置、唯一关联、回退
       await page.screenshot({ path: path.join(artifacts, 'feishu-schema-poizon-v11.png') });
     });
 
+    // 仅改变合成配置版号；仍须经真实DOM关联、原计划及适配器回读，未知类型和代码不得猜填。
+    await t.test('结构兼容的新版本继续填写，未知字段类型和代码仍拒绝自动关联', async () => {
+      for (const [company, version] of [['moonton', 99], ['modelbest', 1001]]) {
+        await open(company, 'visible');
+        await page.evaluate((version) => { const el = document.getElementById('js-websiteInfo'); const raw = JSON.parse(el.textContent); raw.website_info.resume_form_schema.version = version; el.textContent = JSON.stringify(raw); }, version);
+        const result = await action('#smartFillAll'); assert.equal(result.schemaDiagnostic.status, 'ready'); assert.equal(result.schemaDiagnostic.version, version);
+        assert.equal(result.schemaDiagnostic.associated, 5); assert.equal(result.rows.filter((row) => row.status === 'success').length, 5);
+        assert.equal(await page.locator('#person').inputValue(), '合成Schema姓名'); assert.equal(await page.locator('#birth').inputValue(), '2000-02');
+        assert.equal(await page.locator('#custom').inputValue(), ''); assert.equal(await page.evaluate(() => submits + saves), 0);
+        statistics.push({ scenario: 'compatible-new-version', company, ...result.schemaDiagnostic, success: 5 });
+      }
+      await page.screenshot({ path: path.join(artifacts, 'feishu-schema-structure-compatible.png') });
+      await page.evaluate(() => {
+        const el = document.getElementById('js-websiteInfo'); const raw = JSON.parse(el.textContent);
+        const fields = raw.website_info.resume_form_schema.object_list.find((group) => group.attributes.field_type.name === 'basic_info').children;
+        fields.find((field) => field.attributes.field_type.name === 'name').attributes.field_type.type = 'future_text';
+        fields.find((field) => field.attributes.field_type.name === 'gender').attributes.field_type.name = 'future_gender';
+        el.textContent = JSON.stringify(raw);
+      });
+      await page.locator('#person').fill(''); await page.locator('#gender').selectOption('');
+      const blocked = await action('#smartFillAll');
+      for (const [label, state] of [['姓名', 'control_conflict'], ['性别', 'unsupported']]) {
+        const row = blocked.rows.find((row) => row.field.label === label); assert.equal(row.field.feishu.state, state); assert.equal(row.target, null); assert.notEqual(row.status, 'success');
+      }
+      assert.equal(await page.locator('#person').inputValue(), ''); assert.equal(await page.locator('#gender').inputValue(), ''); assert.equal(await page.evaluate(() => submits + saves), 0);
+    });
+
     await t.test('原配置隐藏项不填，重复标签选项和类型冲突有明确失败且不猜选', async () => {
       await open(); let view = await action('#smartFillAll');
       assert.equal(view.rows.filter((row) => row.field.feishu?.state === 'hidden').length, 4); assert.equal(await page.locator('#birth').inputValue(), '');
@@ -152,11 +179,11 @@ test('飞书 Schema 专项：真实扩展、多版配置、唯一关联、回退
       assert.equal(await page.evaluate(() => submits + saves), 0);
     });
 
-    await t.test('重复同名字段不猜目标，Schema缺失/损坏/未知版本/站点变化安全回退', async () => {
+    await t.test('重复同名字段不猜目标，Schema缺失/损坏/非法版号/结构或站点变化安全回退', async () => {
       await open('moonton', 'duplicate'); let view = await action(); const duplicates = view.rows.filter((row) => row.field.label === '姓名');
       assert.equal(duplicates.length, 2); assert.ok(duplicates.every((row) => row.field.feishu.state === 'ambiguous' && !row.target));
-      for (const [mode, expected] of [['missing', 'missing_schema'], ['broken', 'invalid_json'], ['version', 'unsupported_version'], ['scope', 'scope_mismatch']]) {
-        await page.evaluate((mode) => { const el = document.getElementById('js-websiteInfo'); if (mode === 'missing') { el.remove(); return; } if (mode === 'broken') { el.textContent = '{'; return; } const raw = JSON.parse(el.textContent); if (mode === 'version') raw.website_info.resume_form_schema.version = 99; else raw.website_info.path = 'social'; el.textContent = JSON.stringify(raw); }, mode);
+      for (const [mode, expected] of [['missing', 'missing_schema'], ['broken', 'invalid_json'], ['version', 'unsupported_version'], ['structure', 'invalid_structure'], ['scope', 'scope_mismatch']]) {
+        await page.evaluate((mode) => { const el = document.getElementById('js-websiteInfo'); if (mode === 'missing') { el.remove(); return; } if (mode === 'broken') { el.textContent = '{'; return; } const raw = JSON.parse(el.textContent); if (mode === 'version') raw.website_info.resume_form_schema.version = '99'; else if (mode === 'structure') raw.website_info.resume_form_schema.object_list = {}; else raw.website_info.path = 'social'; el.textContent = JSON.stringify(raw); }, mode);
         view = await action(); assert.equal(view.schemaDiagnostic.status, expected); assert.ok(view.rows.every((row) => !row.field.feishu));
         statistics.push({ scenario: 'fallback-' + mode, scanned: view.rows.length, ...view.schemaDiagnostic });
         await page.evaluate((raw) => { document.getElementById('js-websiteInfo')?.remove(); const el = document.createElement('script'); el.id = 'js-websiteInfo'; el.type = 'text/json'; el.textContent = JSON.stringify(raw); document.head.append(el); }, fixtures.moonton);

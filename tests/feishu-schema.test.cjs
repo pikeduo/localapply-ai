@@ -14,7 +14,7 @@ function runtime() {
   return ctx;
 }
 
-// 两份配置仅含企业表单元数据，随测试保留；临时交接目录不参与测试依赖。
+// 三份配置仅含企业表单元数据，随测试保留；临时交接目录不参与测试依赖。
 function sample(name) { return JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/feishu-schema', name + '.website-info.json'), 'utf8')); }
 
 // 合成扫描封套保留旧指纹；飞书证据只在本次消息内附加。
@@ -77,7 +77,7 @@ test('飞书 Schema：精确域名/申请路由和网站路径门控，不硬编
 });
 
 // 得物下载源码只有配置，无已渲染表单；使用公共元数据副本验证v11，不包含个人资料。
-test('飞书 Schema：数字站点v11保留可见性和自定义边界，仍拒绝坏结构和未知版本', () => {
+test('飞书 Schema：数字站点v11保留可见性和自定义边界，仍拒绝坏结构和非法版本', () => {
   const S = runtime().LocalApplyFeishuSchema; const raw = sample('poizon');
   const page = S.pageScope('https://poizon.jobs.feishu.cn/578078/resume/123456/apply');
   const result = S.parse(JSON.stringify(raw), page); assert.equal(result.status, 'ready');
@@ -88,11 +88,29 @@ test('飞书 Schema：数字站点v11保留可见性和自定义边界，仍拒�
   const custom = schema.fields.find((row) => row.label === '家庭现居住地'); assert.equal(custom.is_predefined, false); assert.equal(custom.code, ''); assert.equal(S.target(custom.groupCode, custom.code), null);
   const role = schema.fields.find((row) => row.groupCode === 'project_list' && row.code === 'role'); assert.equal(role.effectiveVisible, true); assert.equal(S.target(role.groupCode, role.code), 'builtin.projectRole');
   assert.equal(S.parse(JSON.stringify(raw), { path: '578079' }).status, 'scope_mismatch');
-  for (const version of [6, 10, 12, '11']) { const bad = structuredClone(raw); bad.website_info.resume_form_schema.version = version; assert.equal(S.parse(JSON.stringify(bad), page).status, 'unsupported_version'); }
+  // 版号只是标记；缺失、非整数或不安全数字仍不能作为合法配置接入。
+  for (const version of [undefined, null, 0, -1, 11.5, '11', Number.MAX_SAFE_INTEGER + 1]) { const bad = structuredClone(raw); bad.website_info.resume_form_schema.version = version; assert.equal(S.parse(JSON.stringify(bad), page).status, 'unsupported_version'); }
   const bad = structuredClone(raw); bad.website_info.resume_form_schema.object_list[0].children[0].attributes.parent = 'wrong'; assert.equal(S.parse(JSON.stringify(bad), page).status, 'invalid_structure');
 });
 
-test('飞书 Schema：空白、损坏、未知版本、错误父子和超限数据安全回退', () => {
+// 不依赖版本枚举，三份结构兼容配置的字段语义和企业边界必须保持原样。
+test('飞书 Schema：结构兼容的新版本可解析，无关新增元数据不进入投影', () => {
+  const S = runtime().LocalApplyFeishuSchema;
+  for (const company of ['modelbest', 'moonton', 'poizon']) {
+    const raw = sample(company); const original = S.parse(JSON.stringify(raw)).schema;
+    for (const version of [1, 6, 10, 12, 99, 1001, Number.MAX_SAFE_INTEGER]) {
+      raw.website_info.resume_form_schema.version = version;
+      raw.website_info.resume_form_schema.future_metadata = { hint: '无关新增元数据' };
+      raw.website_info.resume_form_schema.object_list[0].attributes.future_hint = '无关节点属性';
+      const parsed = S.parse(JSON.stringify(raw)); assert.equal(parsed.status, 'ready', company + ':' + version);
+      assert.equal(parsed.schema.version, version);
+      assert.equal(JSON.stringify({ ...parsed.schema, version: original.version }), JSON.stringify(original));
+      assert.ok(!JSON.stringify(parsed.schema).includes('future_'));
+    }
+  }
+});
+
+test('飞书 Schema：空白、损坏、不兼容结构、错误父子和超限数据安全回退', () => {
   const S = runtime().LocalApplyFeishuSchema;
   for (const [input, status] of [['', 'empty_schema'], ['{', 'invalid_json'], ['x'.repeat(S.LIMIT + 1), 'size_limit'], ['{}', 'invalid_structure']]) assert.equal(S.parse(input).status, status);
   for (const mutate of [
@@ -100,9 +118,12 @@ test('飞书 Schema：空白、损坏、未知版本、错误父子和超限数�
     (raw) => { raw.website_info.resume_form_schema.object_list[1].children[0].attributes.parent = 'wrong'; },
     (raw) => { raw.website_info.resume_form_schema.object_list[1].children[0].attributes.visible = 'true'; },
     (raw) => { raw.website_info.resume_form_schema.object_list[1].children[0].attributes.name.zh_cn = '<script>'; },
-    (raw) => { raw.website_info.resume_form_schema.object_list.push(raw.website_info.resume_form_schema.object_list[0]); }
+    (raw) => { raw.website_info.resume_form_schema.object_list.push(raw.website_info.resume_form_schema.object_list[0]); },
+    (raw) => { raw.website_info.resume_form_schema.scenario_list = {}; },
+    (raw) => { raw.website_info.resume_form_schema.object_list = { groups: raw.website_info.resume_form_schema.object_list }; },
+    (raw) => { raw.website_info.resume_form_schema.object_list[0].children[0].attributes.field_type = 'text'; }
   ]) { const raw = sample('moonton'); mutate(raw); assert.equal(S.parse(JSON.stringify(raw)).status, 'invalid_structure'); }
-  const raw = sample('moonton'); raw.website_info.resume_form_schema.version = 99; assert.equal(S.parse(JSON.stringify(raw)).status, 'unsupported_version');
+  const raw = sample('moonton'); raw.website_info.resume_form_schema.version = 99; delete raw.website_info.resume_form_schema.object_list; assert.equal(S.parse(JSON.stringify(raw)).status, 'invalid_structure');
   assert.equal(S.parse('{"__proto__":{}}').status, 'invalid_structure');
   let deep = {}; for (let i = 0; i < 30; i++) deep = { child: deep }; assert.equal(S.parse(JSON.stringify(deep)).status, 'size_limit');
 });
@@ -128,6 +149,9 @@ test('飞书 Schema：诊断只保留固定原因和有界数量，不保留原�
   const result = S.diagnostic({ ...counts, status: 'invalid_json', value: '禁止个人内容', tenant_id_md5: '禁止企业ID', html: '禁止HTML' });
   assert.equal(result.status, 'invalid_json'); assert.equal(result.value, undefined); assert.equal(result.tenant_id_md5, undefined);
   assert.equal(S.diagnostic({ ...counts, status: '任意异常正文' }), null); assert.equal(S.diagnostic({ ...counts, status: 'ready', fields: 1000000 }), null);
+  // 版号不是字段数量，大版号须保留，但计数仍受原有上限约束。
+  for (const version of [1001, Number.MAX_SAFE_INTEGER]) assert.equal(S.diagnostic({ ...counts, status: 'ready', version })?.version, version);
+  for (const version of [-1, 1.5, '11', Number.MAX_SAFE_INTEGER + 1]) assert.equal(S.diagnostic({ ...counts, status: 'ready', version }), null);
 });
 
 test('飞书 Schema：扫描证据严格白名单且不改变历史 features/semanticId', () => {

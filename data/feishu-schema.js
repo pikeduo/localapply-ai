@@ -64,13 +64,13 @@
     return out;
   }
 
-  // 已核对v2/v5/v11共用层级结构；继续完整校验，未知版本回退，必填冲突仅作诊断。
+  // 版号只作作用域标记；按完整层级结构判定兼容性，不能因新增版号跳过后续校验。
   function normalizeFeishuSchema(raw, page) {
     bounded(raw); const website = raw?.website_info; const schema = website?.resume_form_schema;
     check(raw?.tenant_info && /^[a-f0-9]{32}$/i.test(raw.tenant_info.tenant_id_md5));
     const tenantId = raw.tenant_info.tenant_id_md5.toLowerCase(); const websiteId = identifier(website?.id); const path = text(website?.path, true, 64);
     check(/^[a-z0-9_-]*$/.test(path)); check(!page || path === page.path, 'scope_mismatch');
-    check(schema && [2, 5, 11].includes(schema.version), 'unsupported_version'); const schemaId = identifier(schema.id);
+    check(schema && Number.isSafeInteger(schema.version) && schema.version > 0, 'unsupported_version'); const schemaId = identifier(schema.id);
     check(Array.isArray(schema.scenario_list) && schema.scenario_list.length <= 30 && schema.scenario_list.every(Number.isSafeInteger));
     check(Array.isArray(schema.object_list) && schema.object_list.length <= 100);
     const groups = []; const fields = []; const ids = new Set();
@@ -142,13 +142,13 @@
     return evidence;
   }
 
-  // 诊断只投影固定状态与数量；配置 ID、标签、选项和个人值都不能进入日志。
+  // 诊断只投影固定状态、合法版号与有界数量；配置 ID、标签、选项和个人值不能进入日志。
   function diagnostic(value) {
     const statuses = ['ready', 'missing_schema', 'empty_schema', 'invalid_script', 'invalid_json', 'size_limit', 'invalid_structure', 'unsupported_version', 'scope_mismatch'];
     if (!value || !statuses.includes(value.status)) return null;
     const out = { status: value.status };
     for (const key of ['version', 'groups', 'fields', 'visible', 'requiredConflicts', 'associated', 'custom', 'hidden', 'ambiguous', 'unsupported', 'control_conflict', 'unassociated']) {
-      if (!Number.isInteger(value[key]) || value[key] < 0 || value[key] > 1000) return null;
+      if (!Number.isSafeInteger(value[key]) || value[key] < 0 || key !== 'version' && value[key] > 1000) return null;
       out[key] = value[key];
     }
     return out;
