@@ -69,8 +69,27 @@ test('飞书 Schema：两企业共有46条标准路径，受控表只映射30条
 test('飞书 Schema：精确域名/申请路由和网站路径门控，不硬编码企业和职位', () => {
   const S = runtime().LocalApplyFeishuSchema;
   assert.ok(S.pageScope('https://new-company.jobs.feishu.cn/index/resume/987654/apply?from=x'));
-  for (const url of ['http://moonton.jobs.feishu.cn/campus/resume/1/apply', 'https://jobs.feishu.cn/campus/resume/1/apply', 'https://moonton.jobs.feishu.cn.evil.test/campus/resume/1/apply', 'https://moonton.jobs.feishu.cn/campus/position/1/detail', 'https://moonton.jobs.feishu.cn:8080/campus/resume/1/apply']) assert.equal(S.pageScope(url), null);
+  // 数字站点路径由企业配置声明，不能因首字符为数字漏掉申请页；其他域名和路由边界保持严格。
+  assert.equal(S.pageScope('https://poizon.jobs.feishu.cn/578078/resume/7670391208300775699/apply?from=test')?.path, '578078');
+  assert.equal(S.pageScope('https://new-company.jobs.feishu.cn/123abc/resume/987654/apply')?.path, '123abc');
+  for (const url of ['http://moonton.jobs.feishu.cn/campus/resume/1/apply', 'https://jobs.feishu.cn/campus/resume/1/apply', 'https://moonton.jobs.feishu.cn.evil.test/campus/resume/1/apply', 'https://moonton.jobs.feishu.cn/campus/position/1/detail', 'https://moonton.jobs.feishu.cn:8080/campus/resume/1/apply', 'https://poizon.jobs.feishu.cn/578078/extra/resume/1/apply', 'https://poizon.jobs.feishu.cn/' + '1'.repeat(42) + '/resume/1/apply']) assert.equal(S.pageScope(url), null);
   assert.equal(S.parse(JSON.stringify(sample('moonton')), { path: 'social' }).status, 'scope_mismatch');
+});
+
+// 得物下载源码只有配置，无已渲染表单；使用公共元数据副本验证v11，不包含个人资料。
+test('飞书 Schema：数字站点v11保留可见性和自定义边界，仍拒绝坏结构和未知版本', () => {
+  const S = runtime().LocalApplyFeishuSchema; const raw = sample('poizon');
+  const page = S.pageScope('https://poizon.jobs.feishu.cn/578078/resume/123456/apply');
+  const result = S.parse(JSON.stringify(raw), page); assert.equal(result.status, 'ready');
+  const schema = result.schema; assert.equal(schema.version, 11); assert.equal(schema.path, '578078');
+  assert.equal(schema.groups.length, 22); assert.equal(schema.fields.length, 174); assert.equal(schema.fields.filter((row) => row.effectiveVisible).length, 34);
+  assert.equal(schema.requiredConflicts.length, 4);
+  for (const code of ['career_list', 'language_list']) assert.ok(schema.fields.filter((row) => row.groupCode === code).every((row) => !row.effectiveVisible));
+  const custom = schema.fields.find((row) => row.label === '家庭现居住地'); assert.equal(custom.is_predefined, false); assert.equal(custom.code, ''); assert.equal(S.target(custom.groupCode, custom.code), null);
+  const role = schema.fields.find((row) => row.groupCode === 'project_list' && row.code === 'role'); assert.equal(role.effectiveVisible, true); assert.equal(S.target(role.groupCode, role.code), 'builtin.projectRole');
+  assert.equal(S.parse(JSON.stringify(raw), { path: '578079' }).status, 'scope_mismatch');
+  for (const version of [6, 10, 12, '11']) { const bad = structuredClone(raw); bad.website_info.resume_form_schema.version = version; assert.equal(S.parse(JSON.stringify(bad), page).status, 'unsupported_version'); }
+  const bad = structuredClone(raw); bad.website_info.resume_form_schema.object_list[0].children[0].attributes.parent = 'wrong'; assert.equal(S.parse(JSON.stringify(bad), page).status, 'invalid_structure');
 });
 
 test('飞书 Schema：空白、损坏、未知版本、错误父子和超限数据安全回退', () => {

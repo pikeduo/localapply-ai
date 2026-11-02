@@ -14,10 +14,10 @@
   };
   const states = ['linked', 'custom', 'hidden', 'ambiguous', 'control_conflict', 'unsupported'];
 
-  // 精确限定飞书企业申请路由；不把职位详情、相似后缀或任意 iframe 当作申请页。
+  // 精确限定飞书企业申请路由，兼容数字站点路径；不扩大域名、路径层级或iframe范围。
   function pageScope(input) {
     try {
-      const url = new URL(input); const route = /^\/(?:([a-z][a-z0-9_-]{0,40})\/)?resume\/\d+\/apply\/?$/.exec(url.pathname);
+      const url = new URL(input); const route = /^\/(?:([a-z0-9][a-z0-9_-]{0,40})\/)?resume\/\d+\/apply\/?$/.exec(url.pathname);
       return url.protocol === 'https:' && !url.port && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.jobs\.feishu\.cn$/.test(url.hostname) && route
         ? { origin: url.origin, pathname: url.pathname, path: route[1] || 'index' } : null;
     } catch { return null; }
@@ -64,13 +64,13 @@
     return out;
   }
 
-  // v2/v5 共用层级解析；只返回白名单投影，详细和简化配置的必填冲突仅作诊断。
+  // 已核对v2/v5/v11共用层级结构；继续完整校验，未知版本回退，必填冲突仅作诊断。
   function normalizeFeishuSchema(raw, page) {
     bounded(raw); const website = raw?.website_info; const schema = website?.resume_form_schema;
     check(raw?.tenant_info && /^[a-f0-9]{32}$/i.test(raw.tenant_info.tenant_id_md5));
     const tenantId = raw.tenant_info.tenant_id_md5.toLowerCase(); const websiteId = identifier(website?.id); const path = text(website?.path, true, 64);
     check(/^[a-z0-9_-]*$/.test(path)); check(!page || path === page.path, 'scope_mismatch');
-    check(schema && [2, 5].includes(schema.version), 'unsupported_version'); const schemaId = identifier(schema.id);
+    check(schema && [2, 5, 11].includes(schema.version), 'unsupported_version'); const schemaId = identifier(schema.id);
     check(Array.isArray(schema.scenario_list) && schema.scenario_list.length <= 30 && schema.scenario_list.every(Number.isSafeInteger));
     check(Array.isArray(schema.object_list) && schema.object_list.length <= 100);
     const groups = []; const fields = []; const ids = new Set();

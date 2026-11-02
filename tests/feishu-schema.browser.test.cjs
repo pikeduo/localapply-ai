@@ -28,9 +28,9 @@ async function rpc(options, type, payload = {}) {
   assert.equal(result.ok, true, result.error); return result;
 }
 
-test('飞书 Schema 专项：真实扩展、两版配置、唯一关联、回退与失效', { timeout: 180000 }, async (t) => {
+test('飞书 Schema 专项：真实扩展、多版配置、唯一关联、回退与失效', { timeout: 180000 }, async (t) => {
   const artifacts = path.join(ROOT, '.browser-tests'); await fs.mkdir(artifacts, { recursive: true }); const profile = await fs.mkdtemp(path.join(artifacts, 'feishu-schema-'));
-  const fixtures = {}; for (const company of ['moonton', 'modelbest']) fixtures[company] = JSON.parse(await fs.readFile(path.join(FIXTURES, company + '.website-info.json'), 'utf8'));
+  const fixtures = {}; for (const company of ['moonton', 'modelbest', 'poizon']) fixtures[company] = JSON.parse(await fs.readFile(path.join(FIXTURES, company + '.website-info.json'), 'utf8'));
   const bundle = (await require('esbuild').build({ entryPoints: [path.join(ROOT, 'test-pages/feishu-atsx-frameworks.js')], bundle: true, write: false, format: 'iife', platform: 'browser', define: { 'process.env.NODE_ENV': '"production"' } })).outputFiles[0].text;
   let context; let page; let frame; const outbound = []; const statistics = [];
   try {
@@ -69,9 +69,9 @@ test('飞书 Schema 专项：真实扩展、两版配置、唯一关联、回退
       ['projectName', '合成项目名称'], ['projectRole', '合成项目角色'], ['projectStartDate', '2022-01'], ['projectEndDate', '2022-08'], ['projectDescription', '合成项目内容']];
     for (const [key, value] of values) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId: 'builtin.' + key, value } } });
     let saved = (await rpc(options, 'localapply:read')).database;
-    // 每个模式使用独立文档/扫描授权，旧页面与旧卡片不会沿用。
+    // 每个模式使用配置声明的站点路径及独立文档，覆盖数字路径，旧页面与卡片不会沿用。
     async function open(company = 'moonton', mode = '') {
-      if (page && !page.isClosed()) await page.close(); page = await context.newPage(); await page.goto(`https://${company}.jobs.feishu.cn/campus/resume/123456/apply?mode=${mode}`);
+      if (page && !page.isClosed()) await page.close(); page = await context.newPage(); await page.goto(`https://${company}.jobs.feishu.cn/${fixtures[company].website_info.path}/resume/123456/apply?mode=${mode}`);
       const loaded = page.waitForEvent('framenavigated', { predicate: (next) => next.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
       await worker.evaluate(async (url) => floatingPanel.open((await chrome.tabs.query({})).find((tab) => tab.url === url).id), page.url()); frame = await loaded; await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
     }
@@ -115,6 +115,27 @@ test('飞书 Schema 专项：真实扩展、两版配置、唯一关联、回退
       assert.equal(await page.locator('#custom').inputValue(), ''); assert.equal(await page.evaluate(() => submits + saves), 0);
       statistics.push({ company, visibilityVariant: true, scanned: scan.rows.length, ...comparison, ...scan.schemaDiagnostic, success: result.rows.filter((row) => row.status === 'success').length, failed: result.rows.filter((row) => row.status === 'failed').length });
       await page.screenshot({ path: path.join(artifacts, `feishu-schema-${company}-filled.png`) });
+    });
+
+    await t.test('数字站点v11进入Schema链路，标准角色可填写且企业自定义内容不猜填', async () => {
+      await open('poizon', 'numeric-v11');
+      // 下载源码不含真实表单；控件全部为合成，明确区分标准项目角色和企业自定义字段。
+      await page.evaluate(() => {
+        const custom = document.getElementById('custom'); custom.closest('.atsx-form-item').querySelector('.customResumeForm-fieldName').textContent = '家庭现居住地';
+        const input = document.createElement('input'); input.id = 'custom'; input.value = '合成网页保留内容'; custom.replaceWith(input);
+        const group = document.createElement('div'); group.className = 'createFormSection-container';
+        group.innerHTML = '<div class="resumeEditForm-project"><div class="createFormSection-left"><div class="createFormSection-text">项目经历</div></div><div class="createFormSection-right"><div class="createFormSection-formList"><div class="resumeEditForm-item"><div class="atsx-form-item"><div class="atsx-form-item-label"><label><span class="customResumeForm-fieldName">项目角色</span></label></div><input id="numeric-project-role"></div></div></div></div></div>';
+        document.querySelector('form').append(group);
+      });
+      const scan = await action(); assert.equal(scan.schemaDiagnostic.status, 'ready'); assert.equal(scan.schemaDiagnostic.version, 11);
+      assert.equal(scan.schemaDiagnostic.groups, 22); assert.equal(scan.schemaDiagnostic.fields, 174); assert.equal(scan.schemaDiagnostic.visible, 34);
+      const role = scan.rows.find((row) => row.field.label === '项目角色'); assert.equal(role.field.feishu.state, 'linked'); assert.equal(role.target.fieldId, 'builtin.projectRole');
+      const custom = scan.rows.find((row) => row.field.label === '家庭现居住地'); assert.equal(custom.field.feishu.state, 'custom'); assert.equal(custom.target, null);
+      const result = await action('#smartFillAll'); assert.equal(result.rows.find((row) => row.field.scanId === role.field.scanId).status, 'success');
+      assert.equal(await page.locator('#numeric-project-role').inputValue(), '合成项目角色'); assert.equal(await page.locator('#person').inputValue(), '合成Schema姓名'); assert.equal(await page.locator('#gender').inputValue(), 'M');
+      assert.equal(await page.locator('#custom').inputValue(), '合成网页保留内容'); assert.equal(await page.evaluate(() => submits + saves), 0);
+      statistics.push({ company: 'poizon-v11-synthetic', scanned: result.rows.length, ...result.schemaDiagnostic, success: result.rows.filter((row) => row.status === 'success').length });
+      await page.screenshot({ path: path.join(artifacts, 'feishu-schema-poizon-v11.png') });
     });
 
     await t.test('原配置隐藏项不填，重复标签选项和类型冲突有明确失败且不猜选', async () => {
