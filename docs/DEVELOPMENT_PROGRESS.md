@@ -1,7 +1,13 @@
 # localapply-ai｜开发进度与阶段验收记录
 
-> **文档版本：** v2.66
-> **更新日期：** 2026-11-01
+> **文档版本：** v2.67
+> **更新日期：** 2026-11-02
+
+> **填写后仅提醒必填问题（2026-11-02）：** `field-scanner.js` 从原生required、ARIA和字段局部标签/星号识别必填，扫描白名单兼容可选布尔标记；不改变旧指纹、映射或Schema v5。悬浮卡片自动/单项填写后，仅展示未完成或失败的必填项，问题统计及AI范围同步筛选；选填字段仍按可靠来源执行，成功数量包含选填。单独扫描可查看全部，刷新保留当前筛选。必填取真实DOM，不将企业静态Schema直接当作必填依据；帮助区星号不传播到邻接字段。
+>
+> **真实测试：** `npm test` **406通过/0失败/取消/跳过**（17.16秒）；必填列表、悬浮AI和多段项目角色Playwright定向回归 **17/17**（19.00秒），既有飞书Schema合成页面回归 **10/10**（68.45秒）。未运行完整历史浏览器套件，不代表真实招聘网站验收。旧AI测试的四个待处理合成字段和AI模式项目角色明确标为必填，以保留填写后继续处理AI、取消、缺值和经历来源的原测试目的；选填隐藏/填写另有新增用例，未删除原断言。新增用例首轮暴露合成资料字段ID、提交结果选择器及测试服务器清理错误，已修正夹具后复跑通过，未放宽生产填写保护。
+>
+> **命令与产物：** `node --test --test-reporter=tap --test-timeout=240000 --test-name-pattern='必填处理列表|悬浮AI辅助填写|飞书AI建议填写' tests/browser.test.cjs`；`node --test --test-reporter=tap --test-timeout=240000 tests/feishu-schema.browser.test.cjs`。日志位于已忽略的`.browser-tests/required-fields-unit-full.log`、`required-fields-browser-regression.log`、`required-fields-feishu-regression.log`，截图`required-fields-pending.png`；调试失败日志保留。不新增依赖或权限，不推进其他阶段，不stage/commit/push。
 
 > **飞书内嵌Schema独立专项（2026-11-01）：** 已核对完整交接包八份资料，保留既有阶段0–6及分层成果，仅在原链路增加只读证据源。`data/feishu-schema.js` 安全解析飞书v2/v5；原始沐瞳配置13组/51字段、有效可见33、自定义5，面壁12组/46字段、有效可见21、自定义0，共有46条标准路径。30条含义明确的代码路径映射到现有字段；4条日期范围须由真实DOM区分起止端点，其他16条及企业自定义项不猜值。这里的飞书v5与LocalApply Schema v5不是同一版本概念。
 >

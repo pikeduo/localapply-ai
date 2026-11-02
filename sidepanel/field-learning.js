@@ -9,6 +9,7 @@
   let current = null; let aiPreview = null; let fillIds = []; let busy = false; let rulesView = null; let selectionInitialized = false;
   let generation = 0; let polling = false; let activity = 0; let pageActive = true;
   let needsSessionRefresh = false;
+  let requiredOnly = false; // 自动填写后仅提醒未完成的必填项；单独扫描仍可查看全部字段。
   let activeFill = null;
   const drafts = new Map(); const selected = new Set(); const aiSelected = new Set();
   // 点选或聚焦使已在途的轮询结果失效，避免重绘替换正在操作的复选框、吞掉用户点击。
@@ -27,8 +28,8 @@
     const labelOf = (item) => { const options = row.field.options.filter((option) => option.value === String(item)); return options.length === 1 ? options[0].text : item; };
     return display(Array.isArray(value) ? value.map(labelOf) : labelOf(value));
   }
-  // AI不能绕过明确的Schema关联冲突或经历配对；这些项保留网页手动操作入口。
-  function canAskAI(row) { return !row.target && !row.recordBindingRequired && !['hidden', 'ambiguous', 'control_conflict'].includes(row.field.feishu?.state) && !row.ignored && row.status !== 'unsupported'; }
+  // AI不能绕过关联冲突；填写后的批量范围与可见必填列表一致，不处理已隐藏的选填问题。
+  function canAskAI(row) { return (!directFill || !requiredOnly || row.field.required === true) && !row.target && !row.recordBindingRequired && !['hidden', 'ambiguous', 'control_conflict'].includes(row.field.feishu?.state) && !row.ignored && row.status !== 'unsupported'; }
   // 固定批量入口展示本次范围及数量，超过单次上限时明确说明，旧侧栏保持原界面。
   function syncAISelection() {
     if (!directFill) return;
@@ -80,8 +81,10 @@
   function display(value) { return value === null || value === undefined ? '（空）' : typeof value === 'string' ? value : JSON.stringify(value); }
   // 卡片只保留未完成项；未知但已手填的内容也不反复要求处理，冲突/失败仍可见。
   function unfinished(row) { return !row.ignored && row.status !== 'success' && (!row.webFilled || row.conflict || ['failed', 'unsupported'].includes(row.status)); }
-  // 用户正在手填或勾选待学习的行即使网页已填也保留，避免失去确认入口。
-  function pendingVisible(row) { return !row.ignored && (unfinished(row) || learningSelected.has(row.field.scanId) || manualFields.has(row.field.scanId)); }
+  // 提醒范围与执行范围分离：选填项仍参与完整填写队列，仅不进入填写后的问题统计。
+  function needsAttention(row) { return unfinished(row) && (!directFill || !requiredOnly || row.field.required === true); }
+  // 必填处理列表保留正在手填/学习的行；选填项的成功、失败或缺值均不再打扰。
+  function pendingVisible(row) { return (!requiredOnly || row.field.required === true) && !row.ignored && (unfinished(row) || learningSelected.has(row.field.scanId) || manualFields.has(row.field.scanId)); }
   // 已有内容与控件选中验证分开提示，不能把搜索词当成功，也不能把来源未配对说成网页为空。
   function pendingState(row) {
     if (!row.conflict && !['failed', 'unsupported'].includes(row.status)) {
@@ -93,7 +96,7 @@
   // 明确说明已有内容和来源配对的保护，避免将零写入误报为扫描失败或建议无谓调用AI。
   function fillGuidance() {
     if (!directFill || !current) return '';
-    const pairing = current.rows.filter((row) => unfinished(row) && row.recordBindingRequired).length;
+    const pairing = current.rows.filter((row) => needsAttention(row) && row.recordBindingRequired).length;
     return pairing ? ` ${pairing} 个字段尚不能确定对应哪段经历，请选择对应经历后填写。` : '';
   }
   // 仅卡片的会话缺失可主动恢复；导航、档案变化及其他业务错误仍按原保护拒绝。
@@ -252,7 +255,7 @@
   async function prepareFill(ids, includeDynamic = false) {
     fillIds = ids.filter((id) => current.rows.some((row) => row.field.scanId === id && row.target && row.value !== null && row.value !== ''));
     if (!fillIds.length) {
-      if (directFill) { $('smartStatus').textContent = `填写完成：本次成功填入 0 个字段，剩余 ${current.rows.filter(unfinished).length} 个待处理；请核对已有内容，或为缺值项选择来源及补充资料。`; return; }
+      if (directFill) { requiredOnly = true; render(); $('smartStatus').textContent = `填写完成：本次成功填入 0 个字段，剩余 ${current.rows.filter(needsAttention).length} 个必填字段待处理；请核对已有内容或补充资料。`; return; }
       throw new Error('没有可填写的已选字段，请先选择来源或补充资料');
     }
     if (directFill) { await fillSelected([...fillIds], $('smartRememberAfter').checked, includeDynamic, new Map(), { overwriteExisting: true }); return; }
@@ -268,18 +271,19 @@
     excluded.replaceChildren(); excluded.hidden = !current;
     if (!current) { if ($('smartMetrics')) $('smartMetrics').replaceChildren(); if (directFill) { $('smartMatchedHeading').hidden = true; $('smartUnknownHeading').hidden = true; } return; }
     if ($('smartMetrics')) {
-      const metrics = directFill ? [['成功填入', current.rows.filter((row) => row.status === 'success').length], ['网页已填', current.rows.filter((row) => row.webFilled && row.status !== 'success' && !row.conflict).length], ['待处理', current.rows.filter(unfinished).length], ['已有内容待核验', current.rows.filter((row) => unfinished(row) && row.webOccupied && !row.webFilled).length], ['缺资料', current.rows.filter((row) => unfinished(row) && !row.webOccupied && row.status === 'missing_value').length]] : [['可填写', current.rows.filter((row) => row.status === 'matched').length], ['待处理', current.rows.filter((row) => row.status === 'needs_confirmation').length], ['缺资料', current.rows.filter((row) => row.status === 'missing_value').length], ['已排除', current.excluded?.length || 0]];
+      const metrics = directFill ? [['成功填入', current.rows.filter((row) => row.status === 'success').length], ['网页已填', current.rows.filter((row) => row.webFilled && row.status !== 'success' && !row.conflict).length], [requiredOnly ? '必填待处理' : '待处理', current.rows.filter(needsAttention).length], ['已有内容待核验', current.rows.filter((row) => needsAttention(row) && row.webOccupied && !row.webFilled).length], ['缺资料', current.rows.filter((row) => needsAttention(row) && !row.webOccupied && row.status === 'missing_value').length]] : [['可填写', current.rows.filter((row) => row.status === 'matched').length], ['待处理', current.rows.filter((row) => row.status === 'needs_confirmation').length], ['缺资料', current.rows.filter((row) => row.status === 'missing_value').length], ['已排除', current.excluded?.length || 0]];
       $('smartMetrics').replaceChildren(...metrics.map(([label, count]) => node('span', `${label} ${count}`, 'metric')));
     }
     $('smartMatched').hidden = !!$('smartOnlyUnknown')?.checked;
     excluded.append(node('summary', `已排除控件 ${current.excluded?.length || 0} 项 / 本次忽略 ${current.rows.filter((row) => row.ignored).length} 项`));
     for (const item of current.excluded || []) excluded.append(node('p', `${item.label} · ${item.category} · ${item.reason}`));
-    $('smartStatus').textContent = directFill ? `扫描 ${current.rows.length} 个字段，成功填入 ${current.rows.filter((row) => row.status === 'success').length} 个，剩余 ${current.rows.filter(unfinished).length} 个待处理。${current.notice || ''}${fillGuidance()}` : `${current.origin} · 扫描 ${current.rows.length} 个字段；可填写 ${current.rows.filter((row) => row.status === 'matched').length}，待处理 ${current.rows.filter((row) => !row.target && !row.ignored).length}，缺资料 ${current.rows.filter((row) => row.status === 'missing_value').length}；资料版本 ${current.revision} ${current.notice || ''}`; $('smartStatus').className = 'muted';
+    $('smartStatus').textContent = directFill ? `扫描 ${current.rows.length} 个字段，成功填入 ${current.rows.filter((row) => row.status === 'success').length} 个，剩余 ${current.rows.filter(needsAttention).length} 个${requiredOnly ? '必填字段待处理' : '待处理'}。${current.notice || ''}${fillGuidance()}` : `${current.origin} · 扫描 ${current.rows.length} 个字段；可填写 ${current.rows.filter((row) => row.status === 'matched').length}，待处理 ${current.rows.filter((row) => !row.target && !row.ignored).length}，缺资料 ${current.rows.filter((row) => row.status === 'missing_value').length}；资料版本 ${current.revision} ${current.notice || ''}`; $('smartStatus').className = 'muted';
     if (directFill) {
       $('smartMatchedHeading').hidden = $('smartOnlyUnknown').checked || !current.rows.some((row) => pendingVisible(row) && row.source !== 'unknown');
       $('smartUnknownHeading').hidden = !current.rows.some((row) => pendingVisible(row) && row.source === 'unknown');
     }
     for (const row of current.rows) {
+      if (directFill && requiredOnly && row.field.required !== true) continue;
       if (directFill && !row.ignored && !pendingVisible(row)) continue;
       if (row.ignored) { const ignored = node('p', row.field.label + ' · 本次已忽略'); ignored.append(button('恢复此字段', async () => update(await request('ignore', { scanId: row.field.scanId, ignored: false })))); excluded.append(ignored); continue; }
       const card = node('article', '', 'card smart-row'); card.dataset.scanId = row.field.scanId; card.dataset.status = row.status;
@@ -362,7 +366,7 @@
     const tab = Number.isInteger(targetTabId)?{id:targetTabId}:globalThis.LocalApplyPanelContext || (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0];
     $('smartStatus').textContent = directFill ? '正在识别当前页面字段…' : '正在扫描已授权页面…';
     const view = await request('scanPage', { tabId: tab?.id, profileId: state.activeProfileId, confirmed: true });
-    current = null; selectionInitialized = false; selected.clear(); aiSelected.clear(); suggestionFailures.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); aiPreview = null; fillIds = []; cancelLearningPreview(); cancelOverwrite(); $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true;
+    current = null; requiredOnly = false; selectionInitialized = false; selected.clear(); aiSelected.clear(); suggestionFailures.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); aiPreview = null; fillIds = []; cancelLearningPreview(); cancelOverwrite(); $('smartAIReview').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true;
     update(view);
   }
   // 主动填写/刷新才重建缺失会话，不能因普通业务错误绕过导航或档案保护。
@@ -507,6 +511,7 @@
   }
   // 直接模式覆盖本次可靠匹配项；兼容旧入口仍按显式令牌执行，全部写入共用原回读验证。
   async function fillSelected(ids, remember, includeDynamic = false, overwriteTokens = new Map(), directOptions = {}) {
+    if (directFill) requiredOnly = true;
     const started=generation;let success=0;let failed=0;let pending=0;
     const outcome=await withFill(async(job)=>{
       const verifiedForMemory=[]; // 覆盖批次先完成全部写入，再记忆规则，避免中途递增资料版本使后续覆盖快照失效。
@@ -535,8 +540,9 @@
     });
     if(started!==generation)return;
     if(outcome?.cancelled&&current){try{update(await request('session'));}catch{}}
-    if (directFill) pending = current.rows.filter((row) => unfinished(row) && row.status === 'needs_confirmation').length;
-    $('smartStatus').textContent=`${outcome?.cancelled?'已停止填写':success||failed?'填写完成':'本次未写入字段'}：本次成功填入 ${success} 个字段，失败/不支持 ${failed}，需确认 ${pending}${directFill?`，剩余 ${current.rows.filter(unfinished).length} 个待处理`:''}。未提交申请。${current.notice||''}${fillGuidance()}`;
+    if (directFill) { pending = current.rows.filter((row) => needsAttention(row) && row.status === 'needs_confirmation').length; render(); }
+    const visibleFailed = directFill ? current.rows.filter((row) => needsAttention(row) && ['failed', 'unsupported'].includes(row.status)).length : failed;
+    $('smartStatus').textContent=`${outcome?.cancelled?'已停止填写':success||failed?'填写完成':'本次未写入字段'}：本次成功填入 ${success} 个字段，${directFill?'必填失败/不支持':'失败/不支持'} ${visibleFailed}，需确认 ${pending}${directFill?`，剩余 ${current.rows.filter(needsAttention).length} 个必填字段待处理`:''}。未提交申请。${current.notice||''}${fillGuidance()}`;
   }
   $('smartFillConfirm')?.addEventListener('click', () => task(async () => {
     if (!$('smartFillConsent').checked) throw new Error('请先核对填写预览并勾选确认');
@@ -546,7 +552,7 @@
   $('smartUndo').addEventListener('click', () => task(async () => { if (confirm('确认撤销最近一次规则操作？')) { await request('undoRule', { revision: rulesView.revision, confirmed: true }); await showRules(); } }));
   $('smartExportV3').addEventListener('click', () => task(async () => { const result = await request('exportV3'); const url = URL.createObjectURL(new Blob([JSON.stringify(result.backup, null, 2)], { type: 'application/json' })); const link = node('a'); link.href = url; link.download = 'localapply-compatible-v3.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }));
   // 悬浮卡片绑定原文档，切标签保留扫描与草稿；旧侧栏跟随活动标签，换档案仍须清空。
-  function clear() { void stopFill();generation++; aiRunVersion++; document.dispatchEvent(new Event('localapply:learning-reset')); current = null; needsSessionRefresh = false; aiPreview = null; fillIds = []; selectionInitialized = false; selected.clear(); aiSelected.clear(); suggestionFailures.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); cancelLearningPreview(); cancelOverwrite(); if ($('smartPageConsent')) $('smartPageConsent').checked = false; $('smartAIReview').hidden = true; if (directFill) $('smartAICancel').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '点击自动填写，使用当前档案匹配网页字段' : '请选择当前招聘页并主动授权扫描'; }
+  function clear() { void stopFill();generation++; aiRunVersion++; document.dispatchEvent(new Event('localapply:learning-reset')); current = null; requiredOnly = false; needsSessionRefresh = false; aiPreview = null; fillIds = []; selectionInitialized = false; selected.clear(); aiSelected.clear(); suggestionFailures.clear(); drafts.clear(); learningSelected.clear(); manualFields.clear(); webValues.clear(); cancelLearningPreview(); cancelOverwrite(); if ($('smartPageConsent')) $('smartPageConsent').checked = false; $('smartAIReview').hidden = true; if (directFill) $('smartAICancel').hidden = true; if ($('smartFillReview')) $('smartFillReview').hidden = true; render(); $('smartStatus').textContent = directFill ? '点击自动填写，使用当前档案匹配网页字段' : '请选择当前招聘页并主动授权扫描'; }
   window.addEventListener('pagehide',()=>{void stopFill();activeFill?.port?.disconnect();});
   // 旧侧栏只交字段标识和唯一网页标签；来源由最新规范绑定解析，绝不接受任意文本值或计划。
   globalThis.LocalApplyLearningUI=Object.freeze({

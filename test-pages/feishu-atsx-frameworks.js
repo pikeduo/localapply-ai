@@ -5,8 +5,8 @@ import { createPortal } from 'react-dom';
 const h = React.createElement; const mode = new URLSearchParams(location.search).get('mode');
 globalThis.__atsx = { adds: 0, choices: 0, saves: 0, submits: 0, dates: 0 };
 
-// 标签说明不进入字段名，故意保留外壳和输入重复 ID 的真实页面结构。
-function Field({ id, name, children }) { return h('div', { className: 'atsx-row atsx-form-item' }, h('div', { className: 'atsx-form-item-label' }, h('label', { htmlFor: id }, h('div', { className: 'customResumeForm-fieldName' }, name)), h('span', null, '合成说明不属于标签')), h('div', { className: 'atsx-form-item-control-wrapper' + (mode === 'invalid-date' && name === '起止时间' ? ' has-error' : '') }, children)); }
+// 标签说明不进入字段名；AI模式明确角色必填，继续验证填写后的多段建议处理。
+function Field({ id, name, children }) { return h('div', { className: 'atsx-row atsx-form-item' }, h('div', { className: 'atsx-form-item-label' }, h('label', { htmlFor: id, className: mode === 'ai-roles' && name === '项目角色' ? 'atsx-form-item-required' : undefined }, h('div', { className: 'customResumeForm-fieldName' }, name)), h('span', null, '合成说明不属于标签')), h('div', { className: 'atsx-form-item-control-wrapper' + (mode === 'invalid-date' && name === '起止时间' ? ' has-error' : '') }, children)); }
 // 查询与选中状态独立；解析模式同时提供正式选中证据，查询词不能冒充已选值。
 function Choice({ id, name, values, combo = false }) {
   const initial=mode==='parsed'?values[0]:'';

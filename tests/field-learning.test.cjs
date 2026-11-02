@@ -670,6 +670,21 @@ test('分层第一步：扫描封套与 AI 元数据白名单保持原样', asyn
   for (const extra of [{ semantic: view.rows[0].semantic }, { control: view.rows[0].control }, { value: '禁止传出值' }]) await assert.rejects(env.scan({ ...field, ...extra }), /扫描字段格式/);
 });
 
+// 必填性只是运行时提醒元数据，不能减少有本地内容的选填字段或污染历史指纹。
+test('必填提示：可选布尔标记不改变指纹、来源或选填字段的执行', async () => {
+  const env = await fixture(); const M = env.context.FieldMatchingEngine;
+  await env.setValue('builtin.name', '合成姓名'); await env.setValue('builtin.email', 'synthetic@example.test');
+  const required = env.field('姓名', { required: true }); const optional = env.field('邮箱', { required: false });
+  const plain = { ...optional }; delete plain.required;
+  assert.equal(M.validateField(optional), optional); assert.equal(M.validateField(plain), plain);
+  assert.deepEqual(M.features(optional), M.features(plain)); assert.equal(M.semanticId(optional), M.semanticId(plain));
+  for (const value of ['true', 1, null, {}]) assert.throws(() => M.validateField({ ...optional, required: value }), /必填标记/);
+  let view = await env.scan(required, optional); assert.ok(view.rows.every((row) => row.status === 'matched'));
+  for (const field of [required, optional]) { view = await env.send(view, 'fill', { scanId: field.scanId, confirmed: true }); assert.equal(view.rows.find((row) => row.field.scanId === field.scanId).status, 'success'); }
+  assert.equal(env.calls.filter((call) => call.type === 'learning:fill').length, 2); assert.equal(env.aiCalls.length, 0);
+  assert.ok((await env.repo.read()).mappingRules.every((rule) => !Object.hasOwn(rule.features || {}, 'required')));
+});
+
 // 企业配置证据只供本地匹配；主动 AI 的发送格式与个人备份仍维持既有边界。
 test('飞书 Schema：自定义候选不继承标准值，AI不发送企业作用域或Schema代码', async () => {
   const env = await fixture(); await env.setValue('builtin.name', '合成隐私姓名');

@@ -34,6 +34,25 @@
     return M.redact(explicit || labelled.trim() || nearby || el.getAttribute('aria-label') || wrap || el.getAttribute('name') || el.getAttribute('placeholder')).replace(/\s*[*＊]+\s*$/, '');
   }
 
+  // 必填性只取当前控件及其局部标签；不把模块标题、帮助文字或其他字段的星号套给本字段。
+  function required(el, members, compound) {
+    const parts = [...new Set([el, ...members, ...Object.values(compound?.parts || {})])];
+    if (parts.some((part) => part.hasAttribute('required') || part.getAttribute('aria-required') === 'true'
+      || part.closest('[role="combobox"][aria-required="true"],[role="radiogroup"][aria-required="true"]'))) return true;
+    const container = el.closest('.atsx-form-item,.el-form-item,.ant-form-item,.form-item,.form-group,.field,[class^="apply-field-"],[class*=" apply-field-"]');
+    if (container?.getAttribute('aria-required') === 'true' || container?.classList.contains('is-required')) return true;
+    const root = el.getRootNode();
+    const choices = ['radio', 'checkbox'].includes(el.getAttribute('type')) ? el.closest('fieldset,[role="radiogroup"],[role="group"]') : null;
+    if (choices?.getAttribute('aria-required') === 'true') return true;
+    const labels = [...(el.labels || []), el.closest('label'), choices?.querySelector(':scope > legend,:scope > label'),
+      ...(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map((key) => root.getElementById?.(key)),
+      container?.querySelector(':scope > .atsx-form-item-label,:scope > .ant-form-item-label,:scope > .el-form-item__label,:scope > label,:scope > .label,:scope > [class^="title-"]')].filter(Boolean);
+    const marker = '.atsx-form-item-required,.ant-form-item-required,.required,[class^="required-asterisk-"],[class*=" required-asterisk-"]';
+    return labels.some((node) => node.matches(marker) || !!node.querySelector(marker)
+      || /^[\s]*[*＊]|[*＊][\s]*$/.test(node.textContent)
+      || ['::before', '::after'].some((pseudo) => /^['"]?[*＊]['"]?$/.test(getComputedStyle(node, pseudo).content || '')));
+  }
+
   // 只读取分组标题，不读取经历内容；识别学历、经历种类及重复区块序号。
   function context(el) {
     const atsx = global.LocalApplyATSX?.context(el);
@@ -122,7 +141,7 @@
         : ['email','tel','number','url','date','month','datetime-local','radio','checkbox'].includes(rawType) ? rawType : 'text');
       let text = compound?.label || label(el);
       if (members.length > 1) text = M.redact(el.closest('fieldset,[role="group"],.form-item,.form-group')?.querySelector('legend,:scope > label,.label')?.textContent || text);
-      const field = { scanId: id(el), label: text, name: M.redact(el.getAttribute('name')), type,
+      const field = { scanId: id(el), label: text, name: M.redact(el.getAttribute('name')), type, required: required(el, members, compound),
         placeholder: compound ? '' : M.redact(el.getAttribute('placeholder')), options: compound ? [] : options(el, members, type), ...context(el), ...(compound ? { layout: compound.layout } : {}) };
       if (!field.label || M.restricted(field) || /搜索|站内检索|订阅邮件/.test(field.label)) continue;
       field.semanticId = M.semanticId(field);

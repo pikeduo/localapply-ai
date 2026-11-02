@@ -8,6 +8,82 @@ const http = require('node:http');
 const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '..');
 
+// 填写范围与提醒范围独立验收；使用虚构表单和资料，不访问真实招聘网站或模型。
+test('必填处理列表：选填照常填写，完成后仅显示必填问题', { timeout: 90000 }, async (t) => {
+  const artifacts = path.join(ROOT, '.browser-tests'); await fs.mkdir(artifacts, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(artifacts, 'required-fields-')); const api = await serve(); let context;
+  try {
+    context = await launch(profile); context.setDefaultTimeout(10000); const { worker, extensionId } = await extension(context);
+    const options = await context.newPage(); await options.goto(`chrome-extension://${extensionId}/options/options.html`); await options.waitForFunction(() => document.body.dataset.workspaceReady === 'true');
+    const profileId = (await rpc(options, 'localapply:read')).database.activeProfileId;
+    for (const [fieldId, value] of [['builtin.name', '合成必填姓名'], ['builtin.email', 'synthetic-optional@example.test'], ['builtin.selfIntroduction', '合成受控回退内容']]) await rpc(options, 'localapply:command', { request: { action: 'setValue', payload: { profileId, fieldId, value } } });
+    const before = (await rpc(options, 'localapply:read')).database;
+    const page = await context.newPage(); await page.goto(api.base + '/test-pages/phase5-job.html');
+    await page.evaluate(() => {
+      // 只改合成申请表，星号说明位于帮助区，不能把它误判为旁边输入框必填。
+      const form = document.getElementById('jobApplication'); form.innerHTML = `<style>.field{margin:12px 0}label{display:block}.ant-form-item-required::before{content:'*';color:red}</style>
+        <div class="field"><label for="requiredName">姓名</label><input id="requiredName" required></div>
+        <div class="field"><label for="optionalEmail">邮箱</label><input id="optionalEmail" type="email"></div>
+        <div class="field"><label for="optionalPhone">手机号</label><input id="optionalPhone" type="tel"></div>
+        <div class="field"><label for="optionalUnknown">合成选填补充</label><input id="optionalUnknown"><small>带 * 的其他字段必填</small></div>
+        <div class="field"><label for="requiredBirth">出生日期</label><input id="requiredBirth" type="month" required></div>
+        <div class="field"><label for="requiredUnknown">合成无障碍必填</label><input id="requiredUnknown" aria-required="true"></div>
+        <div class="atsx-form-item"><div class="atsx-form-item-label"><label class="atsx-form-item-required" for="feishuRequired"><span class="customResumeForm-fieldName">合成飞书必填</span></label></div><input id="feishuRequired"></div>
+        <div class="apply-field-synthetic"><div class="title-synthetic"><span class="required-asterisk-synthetic">*</span><label for="mokaRequired">合成Moka必填</label></div><input id="mokaRequired"></div>
+        <div class="field"><label for="starRequired">合成标签必填 *</label><input id="starRequired"></div>
+        <div class="field"><label class="ant-form-item-required" for="pseudoRequired">合成样式必填</label><input id="pseudoRequired"></div>
+        <fieldset><legend>合成必填单选 *</legend><label><input type="radio" name="syntheticRadio" value="A">甲</label><label><input type="radio" name="syntheticRadio" value="B">乙</label></fieldset>
+        <div class="field"><label for="optionalRejected">自我介绍</label><textarea id="optionalRejected"></textarea></div>
+        <div class="field"><label for="requiredRejected">自我描述</label><textarea id="requiredRejected" required></textarea></div>
+        <button type="submit">提交申请</button>`;
+      for (const id of ['optionalRejected', 'requiredRejected']) document.getElementById(id).addEventListener('input', (event) => { event.target.value = ''; });
+    });
+    const loaded = page.waitForEvent('framenavigated', { predicate: (frame) => frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`) });
+    await worker.evaluate(async (url) => floatingPanel.open((await chrome.tabs.query({})).find((tab) => tab.url === url).id), page.url()); const frame = await loaded; await frame.locator('#profileSel option').first().waitFor({ state: 'attached' });
+    // 所有按钮均走真实产品事件；等待忙碌屏障后读取后台当前会话，不用DOM文字冒充成功。
+    async function action(button) {
+      await page.bringToFront(); await frame.locator(button).click(); await frame.waitForFunction(() => document.getElementById('tab-smart').getAttribute('aria-busy') === 'false', null, { timeout: 60000 });
+      return rpc(options, 'learning:session', { sessionId: await frame.locator('#tab-smart').getAttribute('data-session-id') });
+    }
+    let view;
+    await t.test('扫描识别原生、ARIA、飞书、Moka、星号和单选组必填，不误读帮助区', async () => {
+      view = await action('#smartScan');
+      for (const label of ['姓名', '出生日期', '合成无障碍必填', '合成飞书必填', '合成Moka必填', '合成标签必填', '合成样式必填', '合成必填单选', '自我描述']) assert.equal(view.rows.find((row) => row.field.label.startsWith(label))?.field.required, true, label);
+      for (const label of ['邮箱', '手机号', '合成选填补充', '自我介绍']) assert.equal(view.rows.find((row) => row.field.label === label)?.field.required, false, label);
+      assert.ok(await frame.locator('.smart-row').filter({ hasText: '合成选填补充' }).count() > 0);
+    });
+    await t.test('一键填写同时写入有本地内容的必填和选填字段，保留失败实际状态', async () => {
+      view = await action('#smartFillAll');
+      assert.equal(await page.locator('#requiredName').inputValue(), '合成必填姓名'); assert.equal(await page.locator('#optionalEmail').inputValue(), 'synthetic-optional@example.test');
+      for (const label of ['姓名', '邮箱']) assert.equal(view.rows.find((row) => row.field.label === label).status, 'success');
+      for (const label of ['自我介绍', '自我描述']) assert.equal(view.rows.find((row) => row.field.label === label).status, 'failed');
+      assert.equal(await page.locator('#optionalPhone').inputValue(), ''); assert.equal(await page.locator('#optionalUnknown').inputValue(), '');
+    });
+    await t.test('列表与计数只保留必填问题，选填缺值、未知及失败不显示', async () => {
+      const shown = await frame.locator('.smart-row').evaluateAll((nodes) => nodes.map((node) => node.dataset.scanId));
+      const expected = view.rows.filter((row) => row.field.required && row.status !== 'success' && !row.webFilled);
+      assert.deepEqual(shown.sort(), expected.map((row) => row.field.scanId).sort());
+      assert.ok((await frame.locator('#smartStatus').textContent()).includes(`剩余 ${expected.length} 个必填字段待处理`));
+      assert.ok((await frame.locator('#smartStatus').textContent()).includes('成功填入 2 个字段'));
+      assert.ok((await frame.locator('#smartStatus').textContent()).includes('必填失败/不支持 1'));
+      assert.ok(await frame.locator('.smart-row[data-status="failed"]').count() === 1);
+      assert.equal(await frame.locator('#smartAI').textContent(), `AI 批量识别全部未知字段（${expected.filter((row) => !row.target && row.status !== 'unsupported').length}）`);
+      await page.screenshot({ path: path.join(artifacts, 'required-fields-pending.png') });
+    });
+    await t.test('刷新及动态必填变化同步列表，再次填写仍包含选填字段', async () => {
+      await page.locator('#requiredUnknown').evaluate((node) => node.setAttribute('aria-required', 'false')); await page.locator('#optionalUnknown').evaluate((node) => node.required = true);
+      view = await action('#smartRefresh');
+      assert.equal(await frame.locator('.smart-row').filter({ hasText: '合成无障碍必填' }).count(), 0); assert.equal(await frame.locator('.smart-row').filter({ hasText: '合成选填补充' }).count(), 1);
+      await page.locator('#optionalEmail').fill(''); await action('#smartFillAll'); assert.equal(await page.locator('#optionalEmail').inputValue(), 'synthetic-optional@example.test');
+      await action('#smartScan'); assert.equal(await frame.locator('.smart-row').filter({ hasText: '自我介绍' }).count(), 1);
+    });
+    await t.test('未改变个人库、指纹、模型调用及真实投递状态', async () => {
+      assert.deepEqual((await rpc(options, 'localapply:read')).database, before); assert.equal(api.modelRequests.length, 0);
+      assert.equal(await page.locator('#applicationResult').textContent(), '');
+    });
+  } finally { await context?.close(); await new Promise((resolve) => api.server.close(resolve)); }
+});
+
 // AI只返回合成字段引用；真实卡片点击即发送并采用可靠来源，不再要求二次确认。
 test('悬浮AI辅助填写：点击发送、直接填写、取消与缺值保护', { timeout: 90000 }, async (t) => {
   const root=path.join(ROOT,'.browser-tests');await fs.mkdir(root,{recursive:true});const profile=await fs.mkdtemp(path.join(root,'ai-assist-'));const api=await serve();let context;
@@ -20,7 +96,8 @@ test('悬浮AI辅助填写：点击发送、直接填写、取消与缺值保护
     await options.locator('#apiKey').fill('synthetic-ai-assist-key');await options.locator('#saveKey').click();await options.evaluate(()=>flushCredentials());
     await options.locator('#manualModel').check();await options.locator('#model').fill('synthetic-ai-assist');await options.locator('#model').press('Tab');await options.evaluate(()=>flushSaves());
     const page=await context.newPage();await page.goto(api.base+'/test-pages/phase5-job.html');
-    await page.evaluate(()=>{const block=document.createElement('section');block.innerHTML='<label>便捷联系号码<input id="assist-phone"></label><div><label for="assist-select">合成选项偏好</label><select id="assist-select"><option value="">请选择</option><option value="M">男</option><option value="F">女</option></select></div><label>合成缺资料代号<input id="assist-missing"></label><label>合成新字段代号<input id="assist-new"></label>';document.getElementById('jobApplication').prepend(block);});
+    // 后续AI用例处理必填未知项；选填问题的隐藏及照常填写由独立必填列表用例覆盖。
+    await page.evaluate(()=>{const block=document.createElement('section');block.innerHTML='<label>便捷联系号码<input id="assist-phone" required></label><div><label for="assist-select">合成选项偏好</label><select id="assist-select" required><option value="">请选择</option><option value="M">男</option><option value="F">女</option></select></div><label>合成缺资料代号<input id="assist-missing" required></label><label>合成新字段代号<input id="assist-new" required></label>';document.getElementById('jobApplication').prepend(block);});
     api.modelApi.fieldReply=(payload)=>JSON.stringify({suggestions:payload.fields.map((field)=>{const fieldId=field.label==='便捷联系号码'?'builtin.phone':field.label==='合成选项偏好'?'builtin.gender':field.label==='合成缺资料代号'?'builtin.birthplace':null;return {scanId:field.scanId,existingFieldId:fieldId,definition:fieldId?null:{label:'合成新增定义',type:'text',group:'其他',aliases:[],options:[]},sourceRef:payload.sources.find((source)=>source.fieldId===fieldId&&source.hasValue)?.ref||null,confidence:0.99};})});
     const loaded=page.waitForEvent('framenavigated',{predicate:(frame)=>frame.url().startsWith(`chrome-extension://${extensionId}/panel/panel.html`)});
     await worker.evaluate(async(url)=>floatingPanel.open((await chrome.tabs.query({})).find((tab)=>tab.url===url).id),page.url());const frame=await loaded;await frame.locator('#profileSel option').first().waitFor({state:'attached'});

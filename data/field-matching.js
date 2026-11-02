@@ -50,13 +50,15 @@
 
   // 仅允许经过白名单和脱敏的扫描元数据跨消息边界，绝不接受 value/html 属性。
   function validateField(field) {
-    const allowed = ['scanId', 'semanticId', 'label', 'name', 'type', 'placeholder', 'options', 'group', 'kind', 'degree', 'index', 'layout', 'feishu'];
+    const allowed = ['scanId', 'semanticId', 'label', 'name', 'type', 'placeholder', 'options', 'group', 'kind', 'degree', 'index', 'layout', 'feishu', 'required'];
     if (!field || Object.keys(field).some((key) => !allowed.includes(key)) || typeof field.scanId !== 'string'
       || !/^scan\.[\w.-]{1,100}$/.test(field.scanId) || !types.includes(field.type)) throw new Error('扫描字段格式错误');
     for (const key of ['label', 'name', 'placeholder', 'group']) {
       if (typeof field[key] !== 'string' || field[key] !== redact(field[key])) throw new Error('扫描元数据未脱敏或超限');
     }
     if (field.layout !== undefined && !layouts.includes(field.layout)) throw new Error('扫描复合结构格式错误');
+    // 必填仅作本次界面筛选，兼容旧扫描缺省值，不进入持久化指纹或改变自动填写范围。
+    if (field.required !== undefined && typeof field.required !== 'boolean') throw new Error('扫描字段必填标记格式错误');
     // 飞书证据只在本次扫描使用，不能携带任意目标、HTML、个人值或改变旧指纹。
     if (field.feishu !== undefined) {
       if (!global.LocalApplyFeishuSchema) throw new Error('飞书扫描契约未加载，请刷新页面');
